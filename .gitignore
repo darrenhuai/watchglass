@@ -1,0 +1,23 @@
+# Internal scratch directory
+.internal/
+
+# Database files
+*.db
+
+# Built binaries
+/watchglass
+watchglass.exe
+
+# Go build artifacts
+dist/
+build/
+*.o
+*.a
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
