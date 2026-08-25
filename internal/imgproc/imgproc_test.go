@@ -33,3 +33,49 @@ func TestCropFullFrame(t *testing.T) {
 		t.Fatalf("bounds = %v, want 33x17", got.Bounds())
 	}
 }
+
+func gray(w, h int, v uint8) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{R: v, G: v, B: v, A: 255})
+		}
+	}
+	return img
+}
+
+func TestPercentChangedIdentical(t *testing.T) {
+	if got := PercentChanged(gray(10, 10, 200), gray(10, 10, 200), 32); got != 0 {
+		t.Errorf("identical frames: got %v, want 0", got)
+	}
+}
+
+func TestPercentChangedFull(t *testing.T) {
+	if got := PercentChanged(gray(10, 10, 0), gray(10, 10, 255), 32); got != 100 {
+		t.Errorf("black vs white: got %v, want 100", got)
+	}
+}
+
+func TestPercentChangedHalf(t *testing.T) {
+	b := gray(10, 10, 0)
+	for y := 0; y < 5; y++ {
+		for x := 0; x < 10; x++ {
+			b.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	if got := PercentChanged(gray(10, 10, 0), b, 32); got != 50 {
+		t.Errorf("half changed: got %v, want 50", got)
+	}
+}
+
+func TestPercentChangedSizeMismatch(t *testing.T) {
+	if got := PercentChanged(gray(10, 10, 0), gray(9, 10, 0), 32); got != 100 {
+		t.Errorf("size mismatch: got %v, want 100", got)
+	}
+}
+
+func TestPercentChangedBelowTolerance(t *testing.T) {
+	if got := PercentChanged(gray(10, 10, 100), gray(10, 10, 110), 32); got != 0 {
+		t.Errorf("delta below tol: got %v, want 0", got)
+	}
+}
