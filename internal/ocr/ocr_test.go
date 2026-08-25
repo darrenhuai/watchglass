@@ -6,6 +6,7 @@ import (
 	"image"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -60,5 +61,22 @@ func TestRecognizeRealBinary(t *testing.T) {
 	}
 	if got != "" {
 		t.Logf("blank image read as %q (acceptable)", got)
+	}
+}
+
+// TestExecRunIncludesStderr verifies that execRun enriches errors with stderr output.
+func TestExecRunIncludesStderr(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go binary not found")
+	}
+	// Run go with an invalid subcommand to trigger stderr output.
+	_, err := execRun(context.Background(), "go", nil, "invalid-subcommand-xyz")
+	if err == nil {
+		t.Fatal("expected error from invalid go subcommand")
+	}
+	// The error message should include text that appears in stderr.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "unknown") && !strings.Contains(errMsg, "invalid") {
+		t.Errorf("error message missing stderr context: %v", errMsg)
 	}
 }

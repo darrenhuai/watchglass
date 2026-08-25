@@ -46,5 +46,13 @@ func (t *Tesseract) Recognize(ctx context.Context, img image.Image) (string, err
 func execRun(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(stdin)
-	return cmd.Output()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok && stderr.Len() > 0 {
+			return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return out, err
 }
