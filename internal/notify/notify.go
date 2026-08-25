@@ -14,6 +14,8 @@ import (
 // Notifier sends a titled notification to whatever targets an
 // implementation is configured with.
 type Notifier interface {
+	// Send delivers title/body. ctx is accepted for interface
+	// compatibility but is not currently honored for cancellation.
 	Send(ctx context.Context, title, body string) error
 }
 
@@ -34,7 +36,9 @@ func NewShoutrrr(urls []string) (*Shoutrrr, error) {
 }
 
 // Send delivers title/body to every configured service URL, joining any
-// per-target failures into a single error.
+// per-target failures into a single error. ctx is not honored for
+// cancellation: the underlying shoutrrr ServiceRouter has no context
+// support, so a hanging webhook POST will not abort early.
 func (s *Shoutrrr) Send(ctx context.Context, title, body string) error {
 	params := &types.Params{"title": title}
 	errs := s.sender.Send(body, params)
