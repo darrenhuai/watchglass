@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"testing"
+	"time"
 
 	"watchglass/internal/config"
 )
@@ -105,5 +106,31 @@ func TestPixelWatchBaselinesThenFires(t *testing.T) {
 	}
 	if len(notifier.sent) != 1 {
 		t.Fatalf("expected exactly 1 notification, got %d: %v", len(notifier.sent), notifier.sent)
+	}
+}
+
+func TestRunToleratesZeroIntervalAndCancels(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 0)}}
+	r, err := New(
+		watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10}),
+		src, nil, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// watchCfg leaves Interval at its zero value; Run must default it
+	// instead of panicking in time.NewTicker.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
 	}
 }

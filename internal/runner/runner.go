@@ -47,6 +47,10 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 // a watcher that dies on one bad frame is worse than no watcher.
 func (r *Runner) Run(ctx context.Context) {
 	interval := time.Duration(r.watch.Interval)
+	if interval <= 0 {
+		r.logf("watch %s: invalid interval %v, defaulting to %v", r.watch.Name, interval, 5*time.Second)
+		interval = 5 * time.Second
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
