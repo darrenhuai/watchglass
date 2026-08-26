@@ -1,0 +1,28 @@
+# watchglass example: watch a 3D printer's LCD via an HTTP snapshot camera.
+watches:
+  - name: printer-lcd
+    # Any URL that returns a JPEG/PNG. Most IP cameras expose one
+    # (e.g. http://CAMERA-IP/snapshot.jpg). For RTSP-only cameras, see the
+    # go2rtc pattern in the README.
+    source: http://192.168.1.50/snapshot.jpg
+    interval: 5s
+    # Normalized coordinates (0.0-1.0): this watches the middle strip.
+    region: {x: 0.25, y: 0.45, w: 0.5, h: 0.1}
+    trigger:
+      type: ocr_match
+      pattern: "(?i)print complete"
+      confirm: 3       # require 3 consecutive identical readings (glare protection)
+      cooldown: 30m    # don't re-fire within 30 minutes
+    notify:
+      - ntfy://ntfy.sh/my-printer-topic
+
+  - name: printer-motion
+    source: http://192.168.1.50/snapshot.jpg
+    interval: 10s
+    region: {x: 0, y: 0, w: 1, h: 1}
+    trigger:
+      type: pixel_change
+      threshold: 25    # fire when >25% of pixels change
+      cooldown: 5m
+    notify:
+      - ntfy://ntfy.sh/my-printer-topic
