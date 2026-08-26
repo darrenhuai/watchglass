@@ -3,6 +3,7 @@ package imgproc
 
 import (
 	"image"
+	"image/color"
 	"image/draw"
 	"math"
 
@@ -57,4 +58,74 @@ func grayAt(img image.Image, x, y int) uint8 {
 	r, g, b, _ := img.At(x, y).RGBA()
 	// standard luma weights on 16-bit channel values, scaled to 8-bit
 	return uint8((299*r + 587*g + 114*b) / 1000 >> 8)
+}
+
+// Apply runs the watch's preprocessing chain for OCR legibility:
+// upscale -> grayscale -> invert -> binarize. A zero-value Preprocess
+// returns img unchanged. Threshold implies grayscale.
+func Apply(img *image.RGBA, p config.Preprocess) *image.RGBA {
+	out := img
+	if p.Upscale > 1 {
+		out = upscale(out, p.Upscale)
+	}
+	if p.Grayscale || p.Threshold > 0 {
+		out = grayscale(out)
+	}
+	if p.Invert {
+		out = invert(out)
+	}
+	if p.Threshold > 0 {
+		out = binarize(out, uint8(p.Threshold))
+	}
+	return out
+}
+
+func upscale(img *image.RGBA, n int) *image.RGBA {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx()*n, b.Dy()*n))
+	for y := 0; y < b.Dy()*n; y++ {
+		for x := 0; x < b.Dx()*n; x++ {
+			out.SetRGBA(x, y, img.RGBAAt(b.Min.X+x/n, b.Min.Y+y/n))
+		}
+	}
+	return out
+}
+
+func grayscale(img *image.RGBA) *image.RGBA {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			g := grayAt(img, b.Min.X+x, b.Min.Y+y)
+			out.SetRGBA(x, y, color.RGBA{R: g, G: g, B: g, A: 255})
+		}
+	}
+	return out
+}
+
+func invert(img *image.RGBA) *image.RGBA {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			c := img.RGBAAt(b.Min.X+x, b.Min.Y+y)
+			out.SetRGBA(x, y, color.RGBA{R: 255 - c.R, G: 255 - c.G, B: 255 - c.B, A: c.A})
+		}
+	}
+	return out
+}
+
+func binarize(img *image.RGBA, level uint8) *image.RGBA {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			v := uint8(0)
+			if grayAt(img, b.Min.X+x, b.Min.Y+y) >= level {
+				v = 255
+			}
+			out.SetRGBA(x, y, color.RGBA{R: v, G: v, B: v, A: 255})
+		}
+	}
+	return out
 }

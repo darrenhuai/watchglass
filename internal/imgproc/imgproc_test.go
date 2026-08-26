@@ -79,3 +79,65 @@ func TestPercentChangedBelowTolerance(t *testing.T) {
 		t.Errorf("delta below tol: got %v, want 0", got)
 	}
 }
+
+func px(img *image.RGBA, x, y int) (r, g, b uint8) {
+	c := img.RGBAAt(x, y)
+	return c.R, c.G, c.B
+}
+
+func TestApplyZeroValueIsNoOp(t *testing.T) {
+	src := gray(4, 4, 100)
+	if got := Apply(src, config.Preprocess{}); got != src {
+		t.Error("zero-value preprocess should return the input image unchanged")
+	}
+}
+
+func TestApplyUpscale(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	src.Set(0, 0, color.RGBA{R: 10, G: 10, B: 10, A: 255})
+	src.Set(1, 0, color.RGBA{R: 200, G: 200, B: 200, A: 255})
+	got := Apply(src, config.Preprocess{Upscale: 2})
+	if got.Bounds().Dx() != 4 || got.Bounds().Dy() != 2 {
+		t.Fatalf("bounds = %v, want 4x2", got.Bounds())
+	}
+	if r, _, _ := px(got, 1, 1); r != 10 {
+		t.Errorf("replicated pixel (1,1) r = %d, want 10", r)
+	}
+	if r, _, _ := px(got, 2, 0); r != 200 {
+		t.Errorf("replicated pixel (2,0) r = %d, want 200", r)
+	}
+}
+
+func TestApplyInvert(t *testing.T) {
+	src := gray(2, 2, 100)
+	got := Apply(src, config.Preprocess{Invert: true})
+	if r, _, _ := px(got, 0, 0); r != 155 {
+		t.Errorf("inverted 100 -> r = %d, want 155", r)
+	}
+}
+
+func TestApplyThresholdBinarizes(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	src.Set(0, 0, color.RGBA{R: 40, G: 40, B: 40, A: 255})
+	src.Set(1, 0, color.RGBA{R: 200, G: 200, B: 200, A: 255})
+	got := Apply(src, config.Preprocess{Threshold: 128})
+	if r, _, _ := px(got, 0, 0); r != 0 {
+		t.Errorf("below threshold -> r = %d, want 0", r)
+	}
+	if r, _, _ := px(got, 1, 0); r != 255 {
+		t.Errorf("at/above threshold -> r = %d, want 255", r)
+	}
+}
+
+func TestApplyGrayscaleAveragesColor(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	src.Set(0, 0, color.RGBA{R: 255, G: 0, B: 0, A: 255}) // pure red
+	got := Apply(src, config.Preprocess{Grayscale: true})
+	r, g, b := px(got, 0, 0)
+	if r != g || g != b {
+		t.Errorf("grayscale pixel not gray: %d %d %d", r, g, b)
+	}
+	if r == 0 || r == 255 {
+		t.Errorf("red luma should be mid-range, got %d", r)
+	}
+}
