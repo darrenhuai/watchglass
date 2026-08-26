@@ -9,6 +9,11 @@ import (
 )
 
 // Sample is one observed reading with its rendered crop.
+//
+// The PNG field holds a shared backing array: do not modify the returned bytes.
+// Returned by Recent and Latest, the Sample struct itself is copied, but PNG's
+// backing array remains shared with the registry. Callers must treat PNG as
+// read-only to avoid corrupting shared state.
 type Sample struct {
 	TS      time.Time
 	Reading string
@@ -37,12 +42,17 @@ func (r *Registry) Add(watch string, s Sample) {
 }
 
 // Recent returns a copy of the newest-first samples for watch.
+// The returned Sample structs are copied, but their PNG backing arrays are
+// shared with the registry; treat PNG as read-only to avoid data corruption.
 func (r *Registry) Recent(watch string) []Sample {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]Sample(nil), r.buf[watch]...)
 }
 
+// Latest returns the most recent sample for watch, or false if none exist.
+// The returned Sample struct is copied, but its PNG backing array is shared
+// with the registry; treat PNG as read-only to avoid data corruption.
 func (r *Registry) Latest(watch string) (Sample, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
