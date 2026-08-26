@@ -4,10 +4,12 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"reflect"
 	"testing"
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/trigger"
 )
 
 // --- fakes ---
@@ -133,4 +135,65 @@ func TestRunToleratesZeroIntervalAndCancels(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after ctx cancellation")
 	}
+}
+
+func TestOnReadingHookObservesTicks(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	ocrEngine := &fakeOCR{texts: []string{"A", "B"}}
+	r, err := New(
+		watchCfg(config.Trigger{Type: "ocr_changed", Confirm: 1}),
+		src, ocrEngine, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type call struct {
+		reading string
+		fired   bool
+	}
+	var calls []call
+	r.OnReading = func(ev trigger.Event, crop image.Image) {
+		if crop == nil {
+			t.Error("hook received nil crop")
+		}
+		calls = append(calls, call{ev.Reading, ev.Fired})
+	}
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []call{{"A", false}, {"B", true}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestPreprocessAppliedBeforeOCR(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 200)}}
+	var seen image.Image
+	capture := &captureOCR{onImg: func(img image.Image) { seen = img }}
+	w := watchCfg(config.Trigger{Type: "ocr_changed", Confirm: 1})
+	w.Preprocess = config.Preprocess{Invert: true}
+	r, err := New(w, src, capture, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if seen == nil {
+		t.Fatal("OCR engine never called")
+	}
+	rr, _, _, _ := seen.At(0, 0).RGBA()
+	if got := uint8(rr >> 8); got != 55 {
+		t.Errorf("OCR saw pixel %d, want 55 (inverted 200)", got)
+	}
+}
+
+type captureOCR struct{ onImg func(image.Image) }
+
+func (c *captureOCR) Recognize(ctx context.Context, img image.Image) (string, error) {
+	c.onImg(img)
+	return "x", nil
 }

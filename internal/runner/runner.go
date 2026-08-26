@@ -28,6 +28,11 @@ type Runner struct {
 	eval     *trigger.Evaluator
 	prev     *image.RGBA
 	logf     func(string, ...any)
+
+	// OnReading, when set, is called once per completed Tick with the trigger
+	// outcome and the RAW crop (before preprocessing). The web UI uses it to
+	// feed the live readout; keep it fast — it runs on the poll goroutine.
+	OnReading func(ev trigger.Event, crop image.Image)
 }
 
 func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.Notifier,
@@ -83,7 +88,8 @@ func (r *Runner) Tick(ctx context.Context) error {
 		r.prev = crop
 		ev = r.eval.ObservePixel(pct)
 	} else {
-		text, err := r.engine.Recognize(ctx, crop)
+		prepped := imgproc.Apply(crop, r.watch.Preprocess)
+		text, err := r.engine.Recognize(ctx, prepped)
 		if err != nil {
 			return fmt.Errorf("ocr: %w", err)
 		}
@@ -94,6 +100,9 @@ func (r *Runner) Tick(ctx context.Context) error {
 		if err := r.store.Record(r.watch.Name, time.Now(), ev.Reading, ev.Fired); err != nil {
 			r.logf("watch %s: history: %v", r.watch.Name, err)
 		}
+	}
+	if r.OnReading != nil {
+		r.OnReading(ev, crop)
 	}
 	if ev.Fired && r.notifier != nil {
 		title := fmt.Sprintf("watchglass: %s", r.watch.Name)
