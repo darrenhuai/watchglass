@@ -4,11 +4,13 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/history"
 	"watchglass/internal/trigger"
 )
 
@@ -196,4 +198,62 @@ type captureOCR struct{ onImg func(image.Image) }
 func (c *captureOCR) Recognize(ctx context.Context, img image.Image) (string, error) {
 	c.onImg(img)
 	return "x", nil
+}
+
+func TestTickOrdersStoreThenHookThenNotify(t *testing.T) {
+	// Create a real store
+	store, err := history.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Set up sources and engine
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	ocrEngine := &fakeOCR{texts: []string{"GO"}}
+	notifier := &fakeNotifier{}
+
+	// Create runner with watch that fires on first tick
+	r, err := New(
+		watchCfg(config.Trigger{Type: "ocr_match", Pattern: "GO", Confirm: 1}),
+		src, ocrEngine, notifier, store, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hookRan bool
+	const watchName = "test-watch"
+	r.OnReading = func(ev trigger.Event, crop image.Image) {
+		// Assert: store already holds exactly 1 reading (record-before-hook)
+		readings, err := store.LastN(watchName, 5)
+		if err != nil {
+			t.Errorf("hook: store.LastN failed: %v", err)
+			return
+		}
+		if len(readings) != 1 {
+			t.Errorf("hook: store has %d readings, want 1", len(readings))
+			return
+		}
+
+		// Assert: notifier sent is still empty (hook-before-notify)
+		if len(notifier.sent) != 0 {
+			t.Errorf("hook: notifier already sent %d messages, want 0", len(notifier.sent))
+			return
+		}
+
+		hookRan = true
+	}
+
+	ctx := context.Background()
+	if err := r.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// After tick: assert hook ran once and notifier sent 1 notification
+	if !hookRan {
+		t.Error("hook did not run")
+	}
+	if len(notifier.sent) != 1 {
+		t.Errorf("notifier sent %d messages, want 1", len(notifier.sent))
+	}
 }
