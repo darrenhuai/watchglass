@@ -9,6 +9,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Preprocess holds per-watch image adjustments applied before OCR so text on
+// LCDs/consoles becomes legible to the engine. The zero value is a no-op.
+// Pixel-diff triggers always compare raw crops; preprocessing is OCR-only.
+type Preprocess struct {
+	Grayscale bool `yaml:"grayscale,omitempty"`
+	Invert    bool `yaml:"invert,omitempty"`
+	Threshold int  `yaml:"threshold,omitempty"` // 0 = off; 1-255 binarize at this gray level
+	Upscale   int  `yaml:"upscale,omitempty"`   // 0/1 = off; 2-4 integer nearest-neighbor
+}
+
 // Duration is a time.Duration that unmarshals from YAML strings like "5s".
 type Duration time.Duration
 
@@ -23,6 +33,12 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	}
 	*d = Duration(dur)
 	return nil
+}
+
+// MarshalYAML writes durations in human-readable form ("5s", "10m") so the
+// config file the web UI saves stays hand-editable.
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
 }
 
 // Region is a normalized rectangle; all fields are 0.0–1.0.
@@ -43,12 +59,13 @@ type Trigger struct {
 }
 
 type Watch struct {
-	Name     string   `yaml:"name"`
-	Source   string   `yaml:"source"`
-	Interval Duration `yaml:"interval"`
-	Region   Region   `yaml:"region"`
-	Trigger  Trigger  `yaml:"trigger"`
-	Notify   []string `yaml:"notify"`
+	Name       string     `yaml:"name"`
+	Source     string     `yaml:"source"`
+	Interval   Duration   `yaml:"interval"`
+	Region     Region     `yaml:"region"`
+	Preprocess Preprocess `yaml:"preprocess,omitempty"`
+	Trigger    Trigger    `yaml:"trigger"`
+	Notify     []string   `yaml:"notify"`
 }
 
 type Config struct {
@@ -57,6 +74,48 @@ type Config struct {
 
 var validTypes = map[string]bool{
 	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true,
+}
+
+// Validate applies defaults (interval 5s, confirm 3) and validates every
+// watch. Load calls it after parsing; the web UI calls it before Save.
+func (c *Config) Validate() error {
+	seen := map[string]bool{}
+	for i := range c.Watches {
+		w := &c.Watches[i]
+		if w.Name == "" {
+			return fmt.Errorf("watch %d: name is required", i)
+		}
+		if seen[w.Name] {
+			return fmt.Errorf("duplicate watch name %q", w.Name)
+		}
+		seen[w.Name] = true
+		if w.Source == "" {
+			return fmt.Errorf("watch %q: source is required", w.Name)
+		}
+		if w.Interval == 0 {
+			w.Interval = Duration(5 * time.Second)
+		}
+		if time.Duration(w.Interval) < time.Second {
+			return fmt.Errorf("watch %q: interval must be >= 1s", w.Name)
+		}
+		r := w.Region
+		if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 1 || r.Y+r.H > 1 {
+			return fmt.Errorf("watch %q: region must be normalized 0-1 with positive size", w.Name)
+		}
+		if !validTypes[w.Trigger.Type] {
+			return fmt.Errorf("watch %q: unknown trigger type %q", w.Name, w.Trigger.Type)
+		}
+		if w.Trigger.Confirm == 0 {
+			w.Trigger.Confirm = 3
+		}
+		if w.Preprocess.Threshold < 0 || w.Preprocess.Threshold > 255 {
+			return fmt.Errorf("watch %q: preprocess threshold must be 0-255", w.Name)
+		}
+		if w.Preprocess.Upscale < 0 || w.Preprocess.Upscale > 4 {
+			return fmt.Errorf("watch %q: preprocess upscale must be 0-4", w.Name)
+		}
+	}
+	return nil
 }
 
 func Load(path string) (*Config, error) {
@@ -68,35 +127,22 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	seen := map[string]bool{}
-	for i := range cfg.Watches {
-		w := &cfg.Watches[i]
-		if w.Name == "" {
-			return nil, fmt.Errorf("watch %d: name is required", i)
-		}
-		if seen[w.Name] {
-			return nil, fmt.Errorf("duplicate watch name %q", w.Name)
-		}
-		seen[w.Name] = true
-		if w.Source == "" {
-			return nil, fmt.Errorf("watch %q: source is required", w.Name)
-		}
-		if w.Interval == 0 {
-			w.Interval = Duration(5 * time.Second)
-		}
-		if time.Duration(w.Interval) < time.Second {
-			return nil, fmt.Errorf("watch %q: interval must be >= 1s", w.Name)
-		}
-		r := w.Region
-		if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 1 || r.Y+r.H > 1 {
-			return nil, fmt.Errorf("watch %q: region must be normalized 0-1 with positive size", w.Name)
-		}
-		if !validTypes[w.Trigger.Type] {
-			return nil, fmt.Errorf("watch %q: unknown trigger type %q", w.Name, w.Trigger.Type)
-		}
-		if w.Trigger.Confirm == 0 {
-			w.Trigger.Confirm = 3
-		}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
+}
+
+// Save writes cfg to path atomically (tmp file + rename) so a crash mid-write
+// never truncates the user's config.
+func Save(path string, cfg *Config) error {
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

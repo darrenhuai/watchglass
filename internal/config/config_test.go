@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,77 @@ func TestLoadRejects(t *testing.T) {
 		if _, err := Load(writeTemp(t, yml)); err == nil {
 			t.Errorf("%s: expected error, got nil", label)
 		}
+	}
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	cfg := &Config{Watches: []Watch{{
+		Name:     "rt",
+		Source:   "http://cam/snap.jpg",
+		Interval: Duration(7 * time.Second),
+		Region:   Region{X: 0.1, Y: 0.2, W: 0.3, H: 0.4},
+		Preprocess: Preprocess{Grayscale: true, Invert: true, Threshold: 128, Upscale: 2},
+		Trigger:  Trigger{Type: "ocr_match", Pattern: "(?i)done", Confirm: 2, Cooldown: Duration(10 * time.Minute)},
+		Notify:   []string{"ntfy://ntfy.sh/t"},
+	}}}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(p, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	w := got.Watches[0]
+	if time.Duration(w.Interval) != 7*time.Second {
+		t.Errorf("interval = %v", time.Duration(w.Interval))
+	}
+	if time.Duration(w.Trigger.Cooldown) != 10*time.Minute {
+		t.Errorf("cooldown = %v", time.Duration(w.Trigger.Cooldown))
+	}
+	if w.Preprocess != (Preprocess{Grayscale: true, Invert: true, Threshold: 128, Upscale: 2}) {
+		t.Errorf("preprocess = %+v", w.Preprocess)
+	}
+	if w.Region.W != 0.3 {
+		t.Errorf("region = %+v", w.Region)
+	}
+}
+
+func TestValidateRejectsBadPreprocess(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	tooHot := base()
+	tooHot.Watches[0].Preprocess.Threshold = 300
+	if err := tooHot.Validate(); err == nil {
+		t.Error("threshold 300: expected error")
+	}
+	tooBig := base()
+	tooBig.Watches[0].Preprocess.Upscale = 9
+	if err := tooBig.Validate(); err == nil {
+		t.Error("upscale 9: expected error")
+	}
+	ok := base()
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid config rejected: %v", err)
+	}
+}
+
+func TestSaveWritesHumanReadableDurations(t *testing.T) {
+	cfg := &Config{Watches: []Watch{{
+		Name: "a", Source: "http://x", Interval: Duration(5 * time.Second),
+		Region: Region{X: 0, Y: 0, W: 1, H: 1}, Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+	}}}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), "interval: 5s") {
+		t.Errorf("expected human-readable duration, got:\n%s", raw)
 	}
 }
