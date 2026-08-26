@@ -25,6 +25,11 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite is single-writer, and the binary runs one goroutine per watch
+	// against this shared store; the modernc driver applies no default busy
+	// timeout, so a second concurrent writer fails with SQLITE_BUSY instead
+	// of waiting. Capping the pool at one connection serializes all access.
+	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS readings (
 		id      INTEGER PRIMARY KEY AUTOINCREMENT,
 		watch   TEXT    NOT NULL,
