@@ -13,6 +13,7 @@ import (
 	"image/png"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,7 +160,31 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", 501)
+	name := strings.TrimSpace(r.FormValue("name"))
+	src := strings.TrimSpace(r.FormValue("source"))
+	if name == "" || src == "" {
+		http.Error(w, "name and source are required", http.StatusBadRequest)
+		return
+	}
+	nw := config.Watch{
+		Name:     name,
+		Source:   src,
+		Interval: config.Duration(5 * time.Second),
+		Region:   config.Region{X: 0, Y: 0, W: 1, H: 1},
+		Trigger:  config.Trigger{Type: "pixel_change", Threshold: 25, Cooldown: config.Duration(5 * time.Minute)},
+	}
+	err := s.mutateConfig(func(c *config.Config) error {
+		c.Watches = append(c.Watches, nw)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.sup.Start(s.RunCtx, nw); err != nil {
+		s.logf("start new watch %s: %v", name, err)
+	}
+	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
 }
 
 type detailData struct {
@@ -286,7 +311,132 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "testresult.html", res)
 }
 
-func (s *Server) save(w http.ResponseWriter, r *http.Request) { http.Error(w, "not implemented", 501) }
+// parseWatchForm builds an updated copy of base from the detail form.
+func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
+	region, err := parseRegion(r)
+	if err != nil {
+		return base, err
+	}
+	prep, err := parsePreprocess(r)
+	if err != nil {
+		return base, err
+	}
+	interval, err := time.ParseDuration(r.FormValue("interval"))
+	if err != nil {
+		return base, fmt.Errorf("interval: %w", err)
+	}
+	cooldown := time.Duration(0)
+	if v := r.FormValue("cooldown"); v != "" {
+		if cooldown, err = time.ParseDuration(v); err != nil {
+			return base, fmt.Errorf("cooldown: %w", err)
+		}
+	}
+	confirm := 0
+	if v := r.FormValue("confirm"); v != "" {
+		if confirm, err = strconv.Atoi(v); err != nil {
+			return base, fmt.Errorf("confirm: %w", err)
+		}
+	}
+	threshold := 0.0
+	if v := r.FormValue("tthreshold"); v != "" {
+		if threshold, err = strconv.ParseFloat(v, 64); err != nil {
+			return base, fmt.Errorf("threshold: %w", err)
+		}
+	}
+	var notifyURLs []string
+	for _, line := range strings.Split(r.FormValue("notify"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			notifyURLs = append(notifyURLs, line)
+		}
+	}
+	w := base
+	w.Region = region
+	w.Preprocess = prep
+	w.Interval = config.Duration(interval)
+	w.Notify = notifyURLs
+	w.Trigger = config.Trigger{
+		Type:      r.FormValue("ttype"),
+		Pattern:   r.FormValue("pattern"),
+		Op:        r.FormValue("op"),
+		Threshold: threshold,
+		Confirm:   confirm,
+		Cooldown:  config.Duration(cooldown),
+	}
+	return w, nil
+}
+
+// mutateConfig applies fn to a deep-enough copy of the config, validates it,
+// saves it to disk, and installs it as current — all under the config lock.
+func (s *Server) mutateConfig(fn func(*config.Config) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := &config.Config{Watches: append([]config.Watch(nil), s.cfg.Watches...)}
+	if err := fn(next); err != nil {
+		return err
+	}
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	if err := config.Save(s.cfgPath, next); err != nil {
+		return err
+	}
+	s.cfg = next
+	return nil
+}
+
+func (s *Server) save(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	base, ok := s.findWatch(name)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	updated, err := parseWatchForm(base, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = s.mutateConfig(func(c *config.Config) error {
+		for i := range c.Watches {
+			if c.Watches[i].Name == name {
+				c.Watches[i] = updated
+				return nil
+			}
+		}
+		return fmt.Errorf("watch %q vanished", name)
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.sup.Restart(s.RunCtx, updated); err != nil {
+		http.Error(w, fmt.Sprintf("saved, but restart failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
+}
+
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", 501)
+	name := r.PathValue("name")
+	if _, ok := s.findWatch(name); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.sup.Stop(name)
+	s.reg.Drop(name)
+	err := s.mutateConfig(func(c *config.Config) error {
+		out := c.Watches[:0]
+		for _, wc := range c.Watches {
+			if wc.Name != name {
+				out = append(out, wc)
+			}
+		}
+		c.Watches = out
+		return nil
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

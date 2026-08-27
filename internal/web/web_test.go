@@ -212,3 +212,96 @@ func TestTestRegionWithoutEngineShowsCropOnly(t *testing.T) {
 		t.Errorf("engine-less fragment should show crop + tesseract hint; body:\n%s", body)
 	}
 }
+
+func TestSavePersistsAndRestarts(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	form := url.Values{
+		"x": {"0.25"}, "y": {"0.25"}, "w": {"0.5"}, "h": {"0.25"},
+		"ttype": {"ocr_match"}, "pattern": {"(?i)done"}, "op": {""},
+		"tthreshold": {"0"}, "confirm": {"2"}, "cooldown": {"10m"}, "interval": {"5s"},
+		"pp_grayscale": {"on"}, "pp_threshold": {"128"}, "pp_upscale": {"2"},
+		"notify": {"ntfy://ntfy.sh/topic\n"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	w := got.Watches[0]
+	if w.Region.X != 0.25 || w.Region.H != 0.25 {
+		t.Errorf("region not saved: %+v", w.Region)
+	}
+	if w.Trigger.Type != "ocr_match" || w.Trigger.Pattern != "(?i)done" || w.Trigger.Confirm != 2 {
+		t.Errorf("trigger not saved: %+v", w.Trigger)
+	}
+	if time.Duration(w.Trigger.Cooldown) != 10*time.Minute {
+		t.Errorf("cooldown = %v", time.Duration(w.Trigger.Cooldown))
+	}
+	if !w.Preprocess.Grayscale || w.Preprocess.Threshold != 128 || w.Preprocess.Upscale != 2 {
+		t.Errorf("preprocess not saved: %+v", w.Preprocess)
+	}
+	if len(w.Notify) != 1 || w.Notify[0] != "ntfy://ntfy.sh/topic" {
+		t.Errorf("notify not saved: %v", w.Notify)
+	}
+	if running := s.sup.Running(); len(running) != 1 || running[0] != "printer" {
+		t.Errorf("watch not running after save: %v", running)
+	}
+}
+
+func TestSaveInvalidRejected(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"ocr_match"}, "pattern": {""}, // ocr_match without pattern is invalid at runner level...
+		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"0.5s"},
+	}
+	resp, _ := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 400 {
+		t.Errorf("sub-second interval: status = %d, want 400", resp.StatusCode)
+	}
+	got, _ := config.Load(cfgPath)
+	if got.Watches[0].Trigger.Type != "pixel_change" {
+		t.Error("invalid save must not modify the config file")
+	}
+}
+
+func TestCreateAndDelete(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	resp, body := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"oven"}, "source": {"http://cam2/snap.jpg"},
+	})
+	if resp.StatusCode != 303 {
+		t.Fatalf("create status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, _ := config.Load(cfgPath)
+	if len(got.Watches) != 2 {
+		t.Fatalf("watches = %d, want 2", len(got.Watches))
+	}
+	if running := s.sup.Running(); len(running) != 1 || running[0] != "oven" {
+		t.Errorf("new watch not started: %v", running)
+	}
+	resp, _ = postForm(t, s.Handler(), "/watch/oven/delete", url.Values{})
+	if resp.StatusCode != 303 {
+		t.Fatalf("delete status = %d", resp.StatusCode)
+	}
+	got, _ = config.Load(cfgPath)
+	if len(got.Watches) != 1 {
+		t.Errorf("watches after delete = %d, want 1", len(got.Watches))
+	}
+	if running := s.sup.Running(); len(running) != 0 {
+		t.Errorf("deleted watch still running: %v", running)
+	}
+}
+
+func TestCreateDuplicateNameRejected(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, _ := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"printer"}, "source": {"http://x/snap.jpg"},
+	})
+	if resp.StatusCode != 400 {
+		t.Errorf("duplicate create: status = %d, want 400", resp.StatusCode)
+	}
+}
