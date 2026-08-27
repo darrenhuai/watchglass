@@ -109,3 +109,41 @@ func TestStartInvalidTriggerErrors(t *testing.T) {
 		t.Error("invalid trigger should error at Start")
 	}
 }
+
+// TestExternalCancelRemovesFromRunning guards against Running() lying: when
+// the parent ctx passed to Start is cancelled by something other than
+// Stop/StopAll, the watch goroutine must still self-remove from the
+// running set. It also checks that a subsequent Stop of the now-dead watch
+// is a harmless, prompt no-op rather than blocking forever on a done
+// channel nobody will ever close again.
+func TestExternalCancelRemovesFromRunning(t *testing.T) {
+	reg := state.New(5)
+	s := newSup(reg)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Start(ctx, testWatch("a")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	cancel()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(s.Running()) == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := s.Running(); len(got) != 0 {
+		t.Fatalf("Running after external cancel = %v, want empty within deadline", got)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.Stop("a")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Stop on an already-dead watch did not return promptly")
+	}
+}

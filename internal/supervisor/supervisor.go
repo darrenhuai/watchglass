@@ -34,7 +34,6 @@ type Supervisor struct {
 
 	mu      sync.Mutex
 	running map[string]*handle
-	wg      sync.WaitGroup
 	store   *history.Store
 	reg     *state.Registry
 	engine  ocr.Engine
@@ -84,11 +83,19 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	wctx, cancel := context.WithCancel(ctx)
 	h := &handle{cancel: cancel, done: make(chan struct{})}
 	s.running[name] = h
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
-		defer close(h.done)
 		r.Run(wctx)
+		// Self-remove so Running() reflects reality even when the parent
+		// ctx was cancelled externally (not via Stop). The identity check
+		// (cur == h) guards against removing a different watch that was
+		// later started under the same name (Stop->Start, or a StopAll
+		// map swap followed by a fresh Start).
+		s.mu.Lock()
+		if cur, ok := s.running[name]; ok && cur == h {
+			delete(s.running, name)
+		}
+		s.mu.Unlock()
+		close(h.done)
 	}()
 	return nil
 }
@@ -126,7 +133,10 @@ func (s *Supervisor) Running() []string {
 	return names
 }
 
-// StopAll cancels every watch and waits for all goroutines to exit.
+// StopAll cancels every watch and waits for all goroutines to exit. It
+// joins only the handles it snapshots, so a Start that races in during
+// shutdown (landing in the fresh map left behind for it) can never make
+// StopAll block: StopAll depends solely on its own snapshot.
 func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	hs := s.running
@@ -135,5 +145,7 @@ func (s *Supervisor) StopAll() {
 	for _, h := range hs {
 		h.cancel()
 	}
-	s.wg.Wait()
+	for _, h := range hs {
+		<-h.done
+	}
 }
