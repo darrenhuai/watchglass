@@ -1,0 +1,46 @@
+{{define "head"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>watchglass</title>
+<style>
+:root { color-scheme: dark; }
+body { font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6; margin: 0; }
+header { padding: 0.8rem 1.2rem; border-bottom: 1px solid #2a2e35; display: flex; gap: 1rem; align-items: baseline; }
+header a { color: #7fd4a8; text-decoration: none; font-weight: 600; font-size: 1.1rem; }
+main { padding: 1.2rem; max-width: 980px; margin: 0 auto; }
+table { border-collapse: collapse; width: 100%; }
+td, th { padding: 0.5rem 0.7rem; border-bottom: 1px solid #2a2e35; text-align: left; }
+a { color: #8ab8ff; }
+.fired { color: #ffb454; font-weight: 600; }
+.muted { color: #9aa0aa; }
+button, input[type=submit] { background: #2b6cb0; color: white; border: 0; border-radius: 6px; padding: 0.45rem 0.9rem; cursor: pointer; }
+button.danger { background: #b03030; }
+input, select, textarea { background: #1d2026; color: #e6e6e6; border: 1px solid #3a3f47; border-radius: 4px; padding: 0.35rem; }
+fieldset { border: 1px solid #2a2e35; border-radius: 8px; margin: 0 0 1rem; }
+legend { color: #9aa0aa; padding: 0 0.4rem; }
+.strip { display: flex; gap: 0.5rem; overflow-x: auto; padding: 0.4rem 0; }
+.strip figure { margin: 0; text-align: center; }
+.strip img { max-height: 70px; border: 1px solid #2a2e35; border-radius: 4px; }
+.strip figcaption { font-size: 0.72rem; color: #9aa0aa; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#stage { position: relative; display: inline-block; }
+#stage img { display: block; max-width: 100%; }
+#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
+.conf-low { color: #ff6b6b; }
+.conf-ok { color: #7fd4a8; }
+.row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.row > div { flex: 1 1 320px; }
+</style>
+</head>
+<body>
+<header><a href="/">watchglass</a><span class="muted">local dashboard</span></header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}

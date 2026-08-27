@@ -1,0 +1,15 @@
+{{if .Recent}}
+{{$latest := index .Recent 0}}
+<p>Latest: <strong {{if $latest.Fired}}class="fired"{{end}}>{{$latest.Reading}}</strong>
+<span class="muted">{{$latest.TS.Format "15:04:05"}}</span></p>
+<div class="strip">
+{{range .Recent}}
+  <figure>
+    <img src="{{b64png .PNG}}" alt="crop">
+    <figcaption {{if .Fired}}class="fired"{{end}}>{{.Reading}}</figcaption>
+  </figure>
+{{end}}
+</div>
+{{else}}
+<p class="muted">No readings yet.</p>
+{{end}}
