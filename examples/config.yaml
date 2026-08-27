@@ -8,6 +8,12 @@ watches:
     interval: 5s
     # Normalized coordinates (0.0-1.0): this watches the middle strip.
     region: {x: 0.25, y: 0.45, w: 0.5, h: 0.1}
+    # Optional OCR preprocessing — tune these in the web UI's live preview:
+    # preprocess:
+    #   grayscale: true
+    #   invert: false      # white-on-black LCDs read better inverted
+    #   threshold: 128     # 0 = off; 1-255 binarize at this gray level
+    #   upscale: 2         # 0/1 = off; 2-4 for small text
     trigger:
       type: ocr_match
       pattern: "(?i)print complete"

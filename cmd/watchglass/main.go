@@ -2,42 +2,41 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
 	"watchglass/internal/config"
 	"watchglass/internal/history"
-	"watchglass/internal/notify"
 	"watchglass/internal/ocr"
-	"watchglass/internal/runner"
-	"watchglass/internal/source"
+	"watchglass/internal/state"
+	"watchglass/internal/supervisor"
+	"watchglass/internal/web"
 )
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dbPath := flag.String("db", "watchglass.db", "path to sqlite history database")
+	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; no auth yet)")
 	flag.Parse()
 
-	if err := run(*configPath, *dbPath); err != nil {
+	if err := run(*configPath, *dbPath, *listen); err != nil {
 		fmt.Fprintln(os.Stderr, "watchglass:", err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath, dbPath string) error {
+func run(configPath, dbPath, listen string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
-	}
-	if len(cfg.Watches) == 0 {
-		return fmt.Errorf("no watches configured in %s", configPath)
 	}
 
 	store, err := history.Open(dbPath)
@@ -46,45 +45,46 @@ func run(configPath, dbPath string) error {
 	}
 	defer store.Close()
 
-	needsOCR := false
-	for _, w := range cfg.Watches {
-		if w.Trigger.Type != "pixel_change" {
-			needsOCR = true
-		}
-	}
 	var engine ocr.Engine
-	if needsOCR {
-		if _, err := exec.LookPath("tesseract"); err != nil {
-			return fmt.Errorf("OCR watches configured but tesseract is not on PATH; " +
-				"install it (e.g. apt install tesseract-ocr / choco install tesseract)")
-		}
+	if _, err := exec.LookPath("tesseract"); err == nil {
 		engine = ocr.NewTesseract()
+	}
+	for _, w := range cfg.Watches {
+		if w.Trigger.Type != "pixel_change" && engine == nil {
+			return fmt.Errorf("watch %q needs OCR but tesseract is not on PATH; "+
+				"install it (e.g. apt install tesseract-ocr / choco install tesseract)", w.Name)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var wg sync.WaitGroup
+	reg := state.New(10)
+	sup := supervisor.New(store, reg, engine, log.Printf)
+	defer sup.StopAll()
 	for _, w := range cfg.Watches {
-		var notifier notify.Notifier
-		if len(w.Notify) > 0 {
-			n, err := notify.NewShoutrrr(w.Notify)
-			if err != nil {
-				return fmt.Errorf("watch %q: notify: %w", w.Name, err)
-			}
-			notifier = n
-		}
-		r, err := runner.New(w, source.NewHTTPSnapshot(w.Source), engine, notifier, store, log.Printf)
-		if err != nil {
+		if err := sup.Start(ctx, w); err != nil {
 			return err
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.Run(ctx)
-		}()
 		log.Printf("watching %q (%s every %v)", w.Name, w.Trigger.Type, time.Duration(w.Interval))
 	}
-	wg.Wait()
+
+	ws, err := web.New(configPath, cfg, sup, reg, engine, log.Printf)
+	if err != nil {
+		return err
+	}
+	ws.RunCtx = ctx
+
+	srv := &http.Server{Addr: listen, Handler: ws.Handler()}
+	go func() {
+		<-ctx.Done()
+		shCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		srv.Shutdown(shCtx)
+	}()
+	log.Printf("web UI on http://%s", listen)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	return nil
 }

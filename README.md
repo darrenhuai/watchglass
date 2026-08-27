@@ -25,6 +25,19 @@ binary, nothing leaves your network.
    database at `-db` (default `watchglass.db`), which is created
    automatically on first run.
 
+## Web UI
+
+watchglass serves a local dashboard while it runs — open http://127.0.0.1:8080.
+Add a watch, open it, drag a rectangle over the part of the screen you care
+about, and hit **Test this region** to see exactly what the OCR engine reads —
+tune the preprocessing sliders (grayscale, invert, binarize, upscale) until
+the text comes back clean, then **Save**. The page shows a live strip of
+recent readings so you can verify triggers before trusting them.
+
+The UI binds to localhost only by default. `-listen 0.0.0.0:8080` exposes it
+on your network — there is no authentication yet, so put it behind a reverse
+proxy if you do that.
+
 ## Trigger types
 
 | type | fires when |
