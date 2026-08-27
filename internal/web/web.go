@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html/template"
 	"image/png"
@@ -178,7 +179,11 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveFailed) {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if err := s.sup.Start(s.RunCtx, nw); err != nil {
@@ -365,8 +370,20 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 	return w, nil
 }
 
-// mutateConfig applies fn to a deep-enough copy of the config, validates it,
-// saves it to disk, and installs it as current — all under the config lock.
+// errSaveFailed marks a mutateConfig failure that happened at the
+// config.Save (disk I/O) step rather than in fn or Validate — callers use
+// errors.Is to tell a server-side failure (retrying won't help the client)
+// apart from a client-shaped validation failure (it will).
+var errSaveFailed = errors.New("config save failed")
+
+// mutateConfig applies fn to a shallow copy of the config — only the
+// Watches slice header is copied, so each config.Watch's inner slices
+// (e.g. Notify) still share their backing arrays with the current config.
+// fn must replace whole Watch structs wholesale rather than editing their
+// inner slices in place. mutateConfig then validates the result, saves it
+// to disk, and installs it as current — all under the config lock. An
+// error from fn or Validate leaves both the in-memory config and the file
+// untouched; an error from config.Save is wrapped in errSaveFailed.
 func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -378,7 +395,7 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 		return err
 	}
 	if err := config.Save(s.cfgPath, next); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errSaveFailed, err)
 	}
 	s.cfg = next
 	return nil
@@ -406,7 +423,11 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return fmt.Errorf("watch %q vanished", name)
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveFailed) {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if err := s.sup.Restart(s.RunCtx, updated); err != nil {
@@ -435,7 +456,11 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveFailed) {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)

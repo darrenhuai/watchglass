@@ -305,3 +305,19 @@ func TestCreateDuplicateNameRejected(t *testing.T) {
 		t.Errorf("duplicate create: status = %d, want 400", resp.StatusCode)
 	}
 }
+
+func TestSaveIOErrorReturns500(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.cfgPath = filepath.Join(t.TempDir(), "missing", "config.yaml")
+	form := url.Values{
+		"x": {"0.25"}, "y": {"0.25"}, "w": {"0.5"}, "h": {"0.25"},
+		"ttype": {"ocr_match"}, "pattern": {"(?i)done"}, "op": {""},
+		"tthreshold": {"0"}, "confirm": {"2"}, "cooldown": {"10m"}, "interval": {"5s"},
+		"pp_grayscale": {"on"}, "pp_threshold": {"128"}, "pp_upscale": {"2"},
+		"notify": {"ntfy://ntfy.sh/topic\n"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 500 {
+		t.Errorf("status = %d, want 500; body: %s", resp.StatusCode, body)
+	}
+}
