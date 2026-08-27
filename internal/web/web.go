@@ -12,10 +12,12 @@ import (
 	"html/template"
 	"image/png"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/imgproc"
 	"watchglass/internal/ocr"
 	"watchglass/internal/source"
 	"watchglass/internal/state"
@@ -46,6 +48,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"b64png": func(b []byte) template.URL {
 			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
 		},
+		"dur": func(d config.Duration) string { return time.Duration(d).String() },
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -158,12 +161,131 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", 501)
 }
+
+type detailData struct {
+	Watch   config.Watch
+	Running bool
+}
+
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", 501)
+	wc, ok := s.findWatch(r.PathValue("name"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	running := false
+	for _, n := range s.sup.Running() {
+		if n == wc.Name {
+			running = true
+		}
+	}
+	s.render(w, "detail.html", detailData{Watch: wc, Running: running})
 }
+
+// parseRegion reads and validates a normalized region (0.0-1.0) from form
+// fields x, y, w, h.
+func parseRegion(r *http.Request) (config.Region, error) {
+	f := func(name string) (float64, error) {
+		v, err := strconv.ParseFloat(r.FormValue(name), 64)
+		if err != nil {
+			return 0, fmt.Errorf("region %s: %w", name, err)
+		}
+		return v, nil
+	}
+	var reg config.Region
+	var err error
+	if reg.X, err = f("x"); err != nil {
+		return reg, err
+	}
+	if reg.Y, err = f("y"); err != nil {
+		return reg, err
+	}
+	if reg.W, err = f("w"); err != nil {
+		return reg, err
+	}
+	if reg.H, err = f("h"); err != nil {
+		return reg, err
+	}
+	if reg.W <= 0 || reg.H <= 0 || reg.X < 0 || reg.Y < 0 || reg.X+reg.W > 1 || reg.Y+reg.H > 1 {
+		return reg, fmt.Errorf("region out of bounds: %+v", reg)
+	}
+	return reg, nil
+}
+
+// parsePreprocess reads preprocess options from form fields pp_grayscale,
+// pp_invert, pp_threshold, pp_upscale. All fields are optional.
+func parsePreprocess(r *http.Request) (config.Preprocess, error) {
+	var p config.Preprocess
+	p.Grayscale = r.FormValue("pp_grayscale") == "on"
+	p.Invert = r.FormValue("pp_invert") == "on"
+	if v := r.FormValue("pp_threshold"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 255 {
+			return p, fmt.Errorf("preprocess threshold must be 0-255")
+		}
+		p.Threshold = n
+	}
+	if v := r.FormValue("pp_upscale"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 4 {
+			return p, fmt.Errorf("preprocess upscale must be 0-4")
+		}
+		p.Upscale = n
+	}
+	return p, nil
+}
+
+type testResult struct {
+	Crop  template.URL
+	Text  string
+	Words []ocr.Word
+	Note  string
+}
+
 func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", 501)
+	wc, ok := s.findWatch(r.PathValue("name"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	region, err := parseRegion(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	prep, err := parsePreprocess(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	img, err := s.NewSource(wc).Grab(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	prepped := imgproc.Apply(imgproc.Crop(img, region), prep)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, prepped); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res := testResult{Crop: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()))}
+	switch e := s.engine.(type) {
+	case nil:
+		res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only."
+	case ocr.DetailedEngine:
+		res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
+	default:
+		res.Text, err = e.Recognize(ctx, prepped)
+	}
+	if err != nil {
+		res.Note = fmt.Sprintf("OCR failed: %v", err)
+	}
+	s.render(w, "testresult.html", res)
 }
+
 func (s *Server) save(w http.ResponseWriter, r *http.Request) { http.Error(w, "not implemented", 501) }
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", 501)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,3 +141,74 @@ func pngBytes(t *testing.T) []byte {
 }
 
 var _ = os.ReadFile // silence unused import until Task 9 uses os
+
+func postForm(t *testing.T, h http.Handler, path string, form url.Values) (*http.Response, string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+func TestDetailRendersEditor(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, body := get(t, s.Handler(), "/watch/printer")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	for _, want := range []string{"id=\"stage\"", "id=\"overlay\"", "name=\"ttype\"", "name=\"pp_threshold\"", "/static/app.js"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page missing %s", want)
+		}
+	}
+}
+
+func TestDetailUnknown404(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, _ := get(t, s.Handler(), "/watch/nope")
+	if resp.StatusCode != 404 {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestTestRegionReturnsWordsFragment(t *testing.T) {
+	s, _ := newTestServer(t)
+	form := url.Values{
+		"x": {"0.1"}, "y": {"0.1"}, "w": {"0.5"}, "h": {"0.3"},
+		"pp_grayscale": {"on"}, "pp_threshold": {"128"}, "pp_upscale": {"2"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"PRINT COMPLETE", "91.5", "data:image/png;base64,"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("fragment missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+func TestTestRegionRejectsBadRegion(t *testing.T) {
+	s, _ := newTestServer(t)
+	form := url.Values{"x": {"0.8"}, "y": {"0"}, "w": {"0.5"}, "h": {"1"}}
+	resp, _ := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 400 {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestTestRegionWithoutEngineShowsCropOnly(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engine = nil
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "data:image/png;base64,") || !strings.Contains(body, "tesseract") {
+		t.Errorf("engine-less fragment should show crop + tesseract hint; body:\n%s", body)
+	}
+}
