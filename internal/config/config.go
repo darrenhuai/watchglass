@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -62,6 +63,8 @@ type Watch struct {
 	Name       string     `yaml:"name"`
 	Source     string     `yaml:"source"`
 	Interval   Duration   `yaml:"interval"`
+	MaxInterval Duration `yaml:"max_interval,omitempty"`
+	HealthAfter int `yaml:"health_after,omitempty"`
 	Region     Region     `yaml:"region"`
 	Preprocess Preprocess `yaml:"preprocess,omitempty"`
 	Trigger    Trigger    `yaml:"trigger"`
@@ -74,6 +77,24 @@ type Config struct {
 
 var validTypes = map[string]bool{
 	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true,
+}
+
+// SourceKind classifies a watch's source URL into the source tier that can
+// read it: "http" for plain snapshot URLs (pure Go, no dependencies) or
+// "ffmpeg" for anything needing a decoder subprocess.
+func SourceKind(source string) (string, error) {
+	switch {
+	case strings.HasPrefix(source, "rtsp://"), strings.HasPrefix(source, "rtsps://"):
+		return "ffmpeg", nil
+	case strings.HasPrefix(source, "http://"), strings.HasPrefix(source, "https://"):
+		return "http", nil
+	case strings.HasPrefix(source, "ffmpeg:"),
+		strings.HasPrefix(source, "v4l2:"),
+		strings.HasPrefix(source, "dshow:"):
+		return "ffmpeg", nil
+	}
+	return "", fmt.Errorf("unsupported source %q: expected one of "+
+		"http:// https:// rtsp:// rtsps:// v4l2: dshow: ffmpeg:", source)
 }
 
 // Validate applies defaults (interval 5s, confirm 3) and validates every
@@ -92,11 +113,23 @@ func (c *Config) Validate() error {
 		if w.Source == "" {
 			return fmt.Errorf("watch %q: source is required", w.Name)
 		}
+		if _, err := SourceKind(w.Source); err != nil {
+			return fmt.Errorf("watch %q: %w", w.Name, err)
+		}
 		if w.Interval == 0 {
 			w.Interval = Duration(5 * time.Second)
 		}
 		if time.Duration(w.Interval) < time.Second {
 			return fmt.Errorf("watch %q: interval must be >= 1s", w.Name)
+		}
+		if w.MaxInterval != 0 && time.Duration(w.MaxInterval) < time.Duration(w.Interval) {
+			return fmt.Errorf("watch %q: max_interval must be >= interval", w.Name)
+		}
+		if w.HealthAfter < 0 {
+			return fmt.Errorf("watch %q: health_after must be >= 0", w.Name)
+		}
+		if w.HealthAfter == 0 {
+			w.HealthAfter = 3
 		}
 		r := w.Region
 		if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 1 || r.Y+r.H > 1 {

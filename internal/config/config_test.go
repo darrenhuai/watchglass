@@ -165,3 +165,82 @@ func TestSaveWritesHumanReadableDurations(t *testing.T) {
 		t.Errorf("expected human-readable duration, got:\n%s", raw)
 	}
 }
+
+func TestSourceKind(t *testing.T) {
+	cases := map[string]string{
+		"rtsp://cam/stream":            "ffmpeg",
+		"rtsps://cam/stream":           "ffmpeg",
+		"http://cam/snapshot.jpg":      "http",
+		"https://cam/snapshot.jpg":     "http",
+		"ffmpeg:-f lavfi -i testsrc":   "ffmpeg",
+		"v4l2:/dev/video0":             "ffmpeg",
+		"dshow:video=Integrated Cam":   "ffmpeg",
+	}
+	for src, want := range cases {
+		got, err := SourceKind(src)
+		if err != nil {
+			t.Errorf("SourceKind(%q): unexpected error %v", src, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("SourceKind(%q) = %q, want %q", src, got, want)
+		}
+	}
+	for _, bad := range []string{"", "cam.local/snap.jpg", "ftp://cam/x", "rtsp", "file:///tmp/x.png"} {
+		if _, err := SourceKind(bad); err == nil {
+			t.Errorf("SourceKind(%q): expected error", bad)
+		}
+	}
+}
+
+func TestValidateRejectsBadSourceAndIntervals(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Interval: Duration(5 * time.Second),
+			Region:   Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger:  Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	badScheme := base()
+	badScheme.Watches[0].Source = "ftp://cam/x"
+	if err := badScheme.Validate(); err == nil {
+		t.Error("unknown scheme: expected error")
+	}
+	shortMax := base()
+	shortMax.Watches[0].MaxInterval = Duration(time.Second)
+	if err := shortMax.Validate(); err == nil {
+		t.Error("max_interval below interval: expected error")
+	}
+	negHealth := base()
+	negHealth.Watches[0].HealthAfter = -1
+	if err := negHealth.Validate(); err == nil {
+		t.Error("negative health_after: expected error")
+	}
+	ok := base()
+	ok.Watches[0].MaxInterval = Duration(time.Minute)
+	ok.Watches[0].HealthAfter = 3
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid config rejected: %v", err)
+	}
+	// max_interval equal to interval is allowed (adaptive polling simply off)
+	eq := base()
+	eq.Watches[0].MaxInterval = eq.Watches[0].Interval
+	if err := eq.Validate(); err != nil {
+		t.Errorf("max_interval == interval rejected: %v", err)
+	}
+}
+
+func TestValidateDefaultsHealthAfter(t *testing.T) {
+	cfg := &Config{Watches: []Watch{{
+		Name: "a", Source: "http://x/s.jpg",
+		Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+		Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+	}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Watches[0].HealthAfter != 3 {
+		t.Errorf("default health_after = %d, want 3", cfg.Watches[0].HealthAfter)
+	}
+}
