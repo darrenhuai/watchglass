@@ -38,6 +38,18 @@ type Server struct {
 	cfgPath string
 	mu      sync.Mutex // guards cfg
 	cfg     *config.Config
+	// applyMu serializes each watch mutation's persist-then-apply sequence
+	// (mutateConfig followed by the matching sup.Start/Restart/Stop+Drop
+	// call) across create, save, and remove. Without it, two concurrent
+	// requests touching the same watch could persist in one order but apply
+	// to the supervisor in the other, leaving it running a stale config
+	// while the file shows the latest one.
+	//
+	// Lock ordering: applyMu is always acquired before mu, never the
+	// reverse. mu is only ever held briefly inside mutateConfig/findWatch
+	// and never across a blocking supervisor call (sup.Stop blocks until
+	// the watch's goroutine exits), so this ordering cannot deadlock.
+	applyMu sync.Mutex
 	sup     *supervisor.Supervisor
 	reg     *state.Registry
 	engine  ocr.Engine
@@ -174,6 +186,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		Region:   config.Region{X: 0, Y: 0, W: 1, H: 1},
 		Trigger:  config.Trigger{Type: "pixel_change", Threshold: 25, Cooldown: config.Duration(5 * time.Minute)},
 	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	err := s.mutateConfig(func(c *config.Config) error {
 		c.Watches = append(c.Watches, nw)
 		return nil
@@ -186,8 +200,25 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	if err := s.sup.Start(s.RunCtx, nw); err != nil {
-		s.logf("start new watch %s: %v", name, err)
+	// Start from the canonical, post-Validate watch rather than nw:
+	// Validate defaults Trigger.Confirm (0 -> 3) on the copy mutateConfig
+	// persisted, but nw itself is untouched by that — starting the
+	// supervisor with nw would run trigger.New's own default (1) while
+	// config.yaml (and the UI) say 3.
+	canonical, ok := s.findWatch(name)
+	if !ok {
+		// Should be unreachable: mutateConfig just appended and persisted
+		// this watch under applyMu, and nothing else can remove it while
+		// applyMu is held. Fall back to nw so the watch still starts.
+		s.logf("ERROR: create %s: watch vanished immediately after persisting; starting with pre-validation config", name)
+		canonical = nw
+	}
+	if err := s.sup.Start(s.RunCtx, canonical); err != nil {
+		// The watch is already persisted to config.yaml (the redirect below
+		// reflects that), but it did not start. The detail page's
+		// running/stopped badge will show the true state to the user; log
+		// loudly here too so it doesn't slip by unnoticed in server logs.
+		s.logf("ERROR: create %s: watch saved to config.yaml but failed to start: %v", name, err)
 	}
 	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
 }
@@ -413,6 +444,8 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	err = s.mutateConfig(func(c *config.Config) error {
 		for i := range c.Watches {
 			if c.Watches[i].Name == name {
@@ -443,8 +476,13 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.sup.Stop(name)
-	s.reg.Drop(name)
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	// Persist first, then act on the supervisor/registry: if config.Save
+	// fails (e.g. disk I/O error), the watch must still be running with its
+	// history intact, matching config.yaml which still lists it. Stopping
+	// and dropping it first would orphan a "removed" watch that the file
+	// still says is present.
 	err := s.mutateConfig(func(c *config.Config) error {
 		out := c.Watches[:0]
 		for _, wc := range c.Watches {
@@ -463,5 +501,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
+	s.sup.Stop(name)
+	s.reg.Drop(name)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

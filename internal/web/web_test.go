@@ -321,3 +321,22 @@ func TestSaveIOErrorReturns500(t *testing.T) {
 		t.Errorf("status = %d, want 500; body: %s", resp.StatusCode, body)
 	}
 }
+
+func TestRemoveIOErrorLeavesWatchRunning(t *testing.T) {
+	s, _ := newTestServer(t)
+	wc, ok := s.findWatch("printer")
+	if !ok {
+		t.Fatal("printer watch missing from test config")
+	}
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatalf("start printer: %v", err)
+	}
+	s.cfgPath = filepath.Join(t.TempDir(), "missing", "config.yaml")
+	resp, body := postForm(t, s.Handler(), "/watch/printer/delete", url.Values{})
+	if resp.StatusCode != 500 {
+		t.Errorf("status = %d, want 500; body: %s", resp.StatusCode, body)
+	}
+	if running := s.sup.Running(); len(running) != 1 || running[0] != "printer" {
+		t.Errorf("watch orphan-stopped after failed delete: running = %v, want [printer]", running)
+	}
+}
