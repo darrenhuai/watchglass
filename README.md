@@ -56,7 +56,9 @@ watcher that silently stopped watching is worse than no watcher.
 Set `max_interval` above `interval` and a watch doubles its poll gap while
 nothing changes, snapping back to `interval` the moment something does. It is
 off unless you set it. Note that backing off also stretches how long
-`confirm` takes in wall-clock time.
+`confirm` takes in wall-clock time. A failed poll immediately returns the
+watch to its base interval, so stream-death detection (`health_after`) is
+never delayed by backoff.
 
 ## Web UI
 

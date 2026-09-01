@@ -71,8 +71,7 @@ func (r *Runner) Run(ctx context.Context) {
 		if err != nil {
 			r.logf("watch %s: %v", r.watch.Name, err)
 		}
-		changed := ev.Fired ||
-			(r.watch.Trigger.Type != "pixel_change" && ev.Reading != lastReading)
+		changed := tickChanged(r.watch.Trigger.Type, ev, err, lastReading)
 		lastReading = ev.Reading
 		interval = NextInterval(r.baseIvl, r.maxIvl, interval, changed)
 
@@ -176,4 +175,28 @@ func NextInterval(base, max, current time.Duration, changed bool) time.Duration 
 		next = max
 	}
 	return next
+}
+
+// tickChanged decides whether a completed Tick should reset polling to its
+// base interval: any grab/OCR error, a fired trigger, or (for non-pixel
+// triggers) a reading that differs from the previous one.
+//
+// A failed tick always counts as "changed" regardless of trigger type. This
+// is deliberate: for pixel_change watches, ev is the zero Event on error (no
+// Reading to compare), so without this an ffmpeg/HTTP grab failure would
+// never interrupt the backoff and a dying camera backed off at max_interval
+// would only be health-detected at multiples of max_interval instead of
+// health_after×interval. Resetting to base on every failure keeps both
+// detection and recovery prompt. This is cheap: a grab against a dead
+// endpoint fails fast (ffmpeg's own timeout, or an HTTP dial/read error) and
+// spawns nothing persistent, so base-rate polling while a stream is down
+// costs no more than base-rate polling while it's healthy.
+func tickChanged(triggerType string, ev trigger.Event, err error, lastReading string) bool {
+	if err != nil {
+		return true
+	}
+	if ev.Fired {
+		return true
+	}
+	return triggerType != "pixel_change" && ev.Reading != lastReading
 }

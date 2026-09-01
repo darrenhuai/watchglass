@@ -299,6 +299,73 @@ func TestNextIntervalFloorsAtBase(t *testing.T) {
 	}
 }
 
+func TestTickChanged(t *testing.T) {
+	cases := []struct {
+		name        string
+		triggerType string
+		ev          trigger.Event
+		err         error
+		lastReading string
+		want        bool
+	}{
+		{
+			name:        "pixel with grab error resets",
+			triggerType: "pixel_change",
+			ev:          trigger.Event{},
+			err:         errors.New("grab failed"),
+			lastReading: "",
+			want:        true,
+		},
+		{
+			name:        "pixel with no change does not reset",
+			triggerType: "pixel_change",
+			ev:          trigger.Event{},
+			err:         nil,
+			lastReading: "",
+			want:        false,
+		},
+		{
+			name:        "pixel fired resets",
+			triggerType: "pixel_change",
+			ev:          trigger.Event{Fired: true},
+			err:         nil,
+			lastReading: "",
+			want:        true,
+		},
+		{
+			name:        "ocr reading changed resets",
+			triggerType: "ocr_changed",
+			ev:          trigger.Event{Reading: "B"},
+			err:         nil,
+			lastReading: "A",
+			want:        true,
+		},
+		{
+			name:        "ocr same reading does not reset",
+			triggerType: "ocr_changed",
+			ev:          trigger.Event{Reading: "A"},
+			err:         nil,
+			lastReading: "A",
+			want:        false,
+		},
+		{
+			name:        "ocr error resets regardless of reading",
+			triggerType: "ocr_changed",
+			ev:          trigger.Event{Reading: ""},
+			err:         errors.New("ocr failed"),
+			lastReading: "A",
+			want:        true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tickChanged(tc.triggerType, tc.ev, tc.err, tc.lastReading); got != tc.want {
+				t.Errorf("tickChanged() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHealthNotifiesOnDownAndRecovery(t *testing.T) {
 	failing := &flakySource{fail: true}
 	notifier := &fakeNotifier{}
