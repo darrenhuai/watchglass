@@ -59,6 +59,8 @@ func ffmpegInputArgs(input string) ([]string, error) {
 	case strings.HasPrefix(input, "dshow:"):
 		return []string{"-f", "dshow", "-i", strings.TrimPrefix(input, "dshow:")}, nil
 	case strings.HasPrefix(input, "ffmpeg:"):
+		// Duplicated in config.SourceKind (config cannot import source
+		// without an import cycle) — keep both checks in sync.
 		raw := strings.TrimSpace(strings.TrimPrefix(input, "ffmpeg:"))
 		if raw == "" {
 			return nil, fmt.Errorf("ffmpeg: source has no arguments")

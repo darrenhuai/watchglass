@@ -93,8 +93,14 @@ func SourceKind(source string) (string, error) {
 		return "ffmpeg", nil
 	case strings.HasPrefix(source, "http://"), strings.HasPrefix(source, "https://"):
 		return "http", nil
-	case strings.HasPrefix(source, "ffmpeg:"),
-		strings.HasPrefix(source, "v4l2:"),
+	case strings.HasPrefix(source, "ffmpeg:"):
+		// Duplicated in source.ffmpegInputArgs (config cannot import source
+		// without an import cycle) — keep both checks in sync.
+		if strings.TrimSpace(strings.TrimPrefix(source, "ffmpeg:")) == "" {
+			return "", fmt.Errorf("ffmpeg: source has no arguments")
+		}
+		return "ffmpeg", nil
+	case strings.HasPrefix(source, "v4l2:"),
 		strings.HasPrefix(source, "dshow:"):
 		return "ffmpeg", nil
 	}

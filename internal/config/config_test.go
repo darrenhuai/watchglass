@@ -186,7 +186,7 @@ func TestSourceKind(t *testing.T) {
 			t.Errorf("SourceKind(%q) = %q, want %q", src, got, want)
 		}
 	}
-	for _, bad := range []string{"", "cam.local/snap.jpg", "ftp://cam/x", "rtsp", "file:///tmp/x.png"} {
+	for _, bad := range []string{"", "cam.local/snap.jpg", "ftp://cam/x", "rtsp", "file:///tmp/x.png", "ffmpeg:", "ffmpeg:   "} {
 		if _, err := SourceKind(bad); err == nil {
 			t.Errorf("SourceKind(%q): expected error", bad)
 		}

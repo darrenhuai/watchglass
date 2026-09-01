@@ -297,6 +297,20 @@ func TestCreateAndDelete(t *testing.T) {
 	}
 }
 
+func TestCreateEmptyFFmpegArgsRejected(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	resp, _ := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"badcam"}, "source": {"ffmpeg:"},
+	})
+	if resp.StatusCode != 400 {
+		t.Errorf("empty ffmpeg args create: status = %d, want 400", resp.StatusCode)
+	}
+	got, _ := config.Load(cfgPath)
+	if len(got.Watches) != 1 {
+		t.Errorf("watches after rejected create = %d, want 1 (unchanged)", len(got.Watches))
+	}
+}
+
 func TestCreateDuplicateNameRejected(t *testing.T) {
 	s, _ := newTestServer(t)
 	resp, _ := postForm(t, s.Handler(), "/watch/new", url.Values{
