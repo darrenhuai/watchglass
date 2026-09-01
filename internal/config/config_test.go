@@ -96,13 +96,13 @@ func TestLoadRejects(t *testing.T) {
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	cfg := &Config{Watches: []Watch{{
-		Name:     "rt",
-		Source:   "http://cam/snap.jpg",
-		Interval: Duration(7 * time.Second),
-		Region:   Region{X: 0.1, Y: 0.2, W: 0.3, H: 0.4},
+		Name:       "rt",
+		Source:     "http://cam/snap.jpg",
+		Interval:   Duration(7 * time.Second),
+		Region:     Region{X: 0.1, Y: 0.2, W: 0.3, H: 0.4},
 		Preprocess: Preprocess{Grayscale: true, Invert: true, Threshold: 128, Upscale: 2},
-		Trigger:  Trigger{Type: "ocr_match", Pattern: "(?i)done", Confirm: 2, Cooldown: Duration(10 * time.Minute)},
-		Notify:   []string{"ntfy://ntfy.sh/t"},
+		Trigger:    Trigger{Type: "ocr_match", Pattern: "(?i)done", Confirm: 2, Cooldown: Duration(10 * time.Minute)},
+		Notify:     []string{"ntfy://ntfy.sh/t"},
 	}}}
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	if err := Save(p, cfg); err != nil {
@@ -168,13 +168,13 @@ func TestSaveWritesHumanReadableDurations(t *testing.T) {
 
 func TestSourceKind(t *testing.T) {
 	cases := map[string]string{
-		"rtsp://cam/stream":            "ffmpeg",
-		"rtsps://cam/stream":           "ffmpeg",
-		"http://cam/snapshot.jpg":      "http",
-		"https://cam/snapshot.jpg":     "http",
-		"ffmpeg:-f lavfi -i testsrc":   "ffmpeg",
-		"v4l2:/dev/video0":             "ffmpeg",
-		"dshow:video=Integrated Cam":   "ffmpeg",
+		"rtsp://cam/stream":          "ffmpeg",
+		"rtsps://cam/stream":         "ffmpeg",
+		"http://cam/snapshot.jpg":    "http",
+		"https://cam/snapshot.jpg":   "http",
+		"ffmpeg:-f lavfi -i testsrc": "ffmpeg",
+		"v4l2:/dev/video0":           "ffmpeg",
+		"dshow:video=Integrated Cam": "ffmpeg",
 	}
 	for src, want := range cases {
 		got, err := SourceKind(src)

@@ -60,20 +60,20 @@ type Trigger struct {
 }
 
 type Watch struct {
-	Name       string     `yaml:"name"`
-	Source     string     `yaml:"source"`
-	Interval   Duration   `yaml:"interval"`
+	Name     string   `yaml:"name"`
+	Source   string   `yaml:"source"`
+	Interval Duration `yaml:"interval"`
 	// MaxInterval enables adaptive polling: when set above Interval, the poll
 	// gap doubles (capped here) while nothing changes and snaps back to
 	// Interval on any change. Zero or == Interval disables it.
 	MaxInterval Duration `yaml:"max_interval,omitempty"`
 	// HealthAfter is how many consecutive grab failures mark a stream down
 	// (and send one notification). Defaults to 3.
-	HealthAfter int `yaml:"health_after,omitempty"`
-	Region     Region     `yaml:"region"`
-	Preprocess Preprocess `yaml:"preprocess,omitempty"`
-	Trigger    Trigger    `yaml:"trigger"`
-	Notify     []string   `yaml:"notify"`
+	HealthAfter int        `yaml:"health_after,omitempty"`
+	Region      Region     `yaml:"region"`
+	Preprocess  Preprocess `yaml:"preprocess,omitempty"`
+	Trigger     Trigger    `yaml:"trigger"`
+	Notify      []string   `yaml:"notify"`
 }
 
 type Config struct {
