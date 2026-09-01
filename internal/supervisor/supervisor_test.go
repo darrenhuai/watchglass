@@ -38,7 +38,7 @@ func flat() image.Image {
 
 func newSup(reg *state.Registry) *Supervisor {
 	s := New(nil, reg, nil, func(string, ...any) {})
-	s.NewSource = func(w config.Watch) source.Source { return &fakeSource{img: flat()} }
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
 	return s
 }
 
@@ -145,5 +145,18 @@ func TestExternalCancelRemovesFromRunning(t *testing.T) {
 	case <-done:
 	case <-time.After(1 * time.Second):
 		t.Fatal("Stop on an already-dead watch did not return promptly")
+	}
+}
+
+func TestStartFailsOnBadSource(t *testing.T) {
+	s := New(nil, state.New(5), nil, func(string, ...any) {})
+	// Default factory: an unsupported scheme must fail at Start.
+	w := testWatch("bad")
+	w.Source = "ftp://cam/x"
+	if err := s.Start(context.Background(), w); err == nil {
+		t.Error("expected Start to reject an unsupported source scheme")
+	}
+	if got := s.Running(); len(got) != 0 {
+		t.Errorf("failed Start must not register a watch, got %v", got)
 	}
 }

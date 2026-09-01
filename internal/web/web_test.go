@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -62,13 +63,13 @@ func newTestServer(t *testing.T) (*Server, string) {
 	}
 	reg := state.New(5)
 	sup := supervisor.New(nil, reg, fakeDetailed{}, func(string, ...any) {})
-	sup.NewSource = func(w config.Watch) source.Source { return &fakeSource{img: testImage()} }
+	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
 	t.Cleanup(sup.StopAll)
 	s, err := New(cfgPath, cfg, sup, reg, fakeDetailed{}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.NewSource = func(w config.Watch) source.Source { return &fakeSource{img: testImage()} }
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
 	return s, cfgPath
 }
 
@@ -338,5 +339,16 @@ func TestRemoveIOErrorLeavesWatchRunning(t *testing.T) {
 	}
 	if running := s.sup.Running(); len(running) != 1 || running[0] != "printer" {
 		t.Errorf("watch orphan-stopped after failed delete: running = %v, want [printer]", running)
+	}
+}
+
+func TestSnapshotBadSourceReturns400(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.NewSource = func(w config.Watch) (source.Source, error) {
+		return nil, errors.New("unsupported source")
+	}
+	resp, _ := get(t, s.Handler(), "/watch/printer/snapshot")
+	if resp.StatusCode != 400 {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }

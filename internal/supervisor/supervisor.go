@@ -28,9 +28,10 @@ type handle struct {
 }
 
 type Supervisor struct {
-	// NewSource builds a frame source for a watch. Tests inject fakes;
-	// Plan 3 swaps in ffmpeg-tier sources here.
-	NewSource func(w config.Watch) source.Source
+	// NewSource builds a frame source for a watch. An unsupported source
+	// scheme is a configuration error that must surface at Start rather
+	// than silently failing on the first tick. Tests inject fakes.
+	NewSource func(w config.Watch) (source.Source, error)
 
 	mu      sync.Mutex
 	running map[string]*handle
@@ -42,7 +43,7 @@ type Supervisor struct {
 
 func New(store *history.Store, reg *state.Registry, engine ocr.Engine, logf func(string, ...any)) *Supervisor {
 	return &Supervisor{
-		NewSource: func(w config.Watch) source.Source { return source.NewHTTPSnapshot(w.Source) },
+		NewSource: source.For,
 		running:   map[string]*handle{},
 		store:     store,
 		reg:       reg,
@@ -67,7 +68,11 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		}
 		notifier = n
 	}
-	r, err := runner.New(w, s.NewSource(w), s.engine, notifier, s.store, s.logf)
+	src, err := s.NewSource(w)
+	if err != nil {
+		return fmt.Errorf("watch %q: source: %w", w.Name, err)
+	}
+	r, err := runner.New(w, src, s.engine, notifier, s.store, s.logf)
 	if err != nil {
 		return err
 	}

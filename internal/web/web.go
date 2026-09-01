@@ -30,8 +30,10 @@ import (
 var assets embed.FS
 
 type Server struct {
-	// NewSource builds the frame source for snapshot/test grabs; tests inject.
-	NewSource func(w config.Watch) source.Source
+	// NewSource builds the frame source for snapshot/test grabs. An
+	// unsupported source scheme is a configuration error that must surface
+	// at the HTTP request rather than silently failing. Tests inject fakes.
+	NewSource func(w config.Watch) (source.Source, error)
 	// RunCtx is the parent context for watches the UI starts or restarts.
 	RunCtx context.Context
 
@@ -68,7 +70,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
 	return &Server{
-		NewSource: func(w config.Watch) source.Source { return source.NewHTTPSnapshot(w.Source) },
+		NewSource: source.For,
 		RunCtx:    context.Background(),
 		cfgPath:   cfgPath,
 		cfg:       cfg,
@@ -132,7 +134,12 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	img, err := s.NewSource(wc).Grab(ctx)
+	src, err := s.NewSource(wc)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("source: %v", err), http.StatusBadRequest)
+		return
+	}
+	img, err := src.Grab(ctx)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusBadGateway)
 		return
@@ -321,7 +328,12 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	img, err := s.NewSource(wc).Grab(ctx)
+	src, err := s.NewSource(wc)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("source: %v", err), http.StatusBadRequest)
+		return
+	}
+	img, err := src.Grab(ctx)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusBadGateway)
 		return
