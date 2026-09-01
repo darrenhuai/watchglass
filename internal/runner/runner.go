@@ -113,3 +113,25 @@ func (r *Runner) Tick(ctx context.Context) error {
 	}
 	return nil
 }
+
+// NextInterval computes the next poll gap. With max unset (or not above
+// base) polling is fixed at base. Otherwise the gap doubles while nothing
+// changes, capped at max, and snaps back to base the moment something does.
+//
+// Note that backing off stretches confirm-N semantics in wall-clock time: a
+// watch needing 3 consecutive readings takes proportionally longer to
+// confirm while backed off. That is the intended trade and it is why
+// adaptive polling is opt-in per watch.
+func NextInterval(base, max, current time.Duration, changed bool) time.Duration {
+	if changed || max <= base {
+		return base
+	}
+	if current < base {
+		current = base
+	}
+	next := current * 2
+	if next > max {
+		next = max
+	}
+	return next
+}

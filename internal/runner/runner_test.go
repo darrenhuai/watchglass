@@ -257,3 +257,42 @@ func TestTickOrdersStoreThenHookThenNotify(t *testing.T) {
 		t.Errorf("notifier sent %d messages, want 1", len(notifier.sent))
 	}
 }
+
+func TestNextIntervalDisabledWithoutMax(t *testing.T) {
+	base := 5 * time.Second
+	for _, max := range []time.Duration{0, base, -time.Second} {
+		if got := NextInterval(base, max, base, false); got != base {
+			t.Errorf("max=%v: got %v, want %v (adaptive off)", max, got, base)
+		}
+	}
+}
+
+func TestNextIntervalBacksOffAndCaps(t *testing.T) {
+	base, max := 5*time.Second, 20*time.Second
+	got := NextInterval(base, max, base, false)
+	if got != 10*time.Second {
+		t.Errorf("first backoff = %v, want 10s", got)
+	}
+	got = NextInterval(base, max, got, false)
+	if got != 20*time.Second {
+		t.Errorf("second backoff = %v, want 20s", got)
+	}
+	got = NextInterval(base, max, got, false)
+	if got != 20*time.Second {
+		t.Errorf("capped backoff = %v, want 20s", got)
+	}
+}
+
+func TestNextIntervalResetsOnChange(t *testing.T) {
+	base, max := 5*time.Second, 60*time.Second
+	if got := NextInterval(base, max, 40*time.Second, true); got != base {
+		t.Errorf("changed: got %v, want %v", got, base)
+	}
+}
+
+func TestNextIntervalFloorsAtBase(t *testing.T) {
+	base, max := 5*time.Second, 60*time.Second
+	if got := NextInterval(base, max, time.Second, false); got != 10*time.Second {
+		t.Errorf("current below base: got %v, want 10s", got)
+	}
+}
