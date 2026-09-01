@@ -5,8 +5,8 @@ printer's LCD, a lab instrument, a server console — draw a region, and get a
 push notification when that region's text or pixels change. Self-hosted, one
 binary, nothing leaves your network.
 
-> Early development. Core engine and web UI both work; RTSP/ffmpeg sources,
-> MQTT/Home Assistant discovery, and Docker packaging are next.
+> Early development. Core engine, web UI, and RTSP/ffmpeg sources all work;
+> MQTT/Home Assistant discovery and Docker packaging are next.
 
 ## Quick start
 
@@ -24,6 +24,39 @@ binary, nothing leaves your network.
    used that name you can omit the flag. Readings are logged to a SQLite
    database at `-db` (default `watchglass.db`), which is created
    automatically on first run.
+
+## Sources
+
+| Source string | What it reads | Needs |
+|---|---|---|
+| `http://…` / `https://…` | a snapshot/MJPEG URL (most IP cameras expose one) | nothing |
+| `rtsp://…` / `rtsps://…` | an RTSP stream, over TCP | ffmpeg on PATH |
+| `v4l2:/dev/video0` | a Linux webcam or capture card | ffmpeg on PATH |
+| `dshow:video=Camera Name` | a Windows webcam or capture card | ffmpeg on PATH |
+| `ffmpeg:<args>` | anything else — the args go to ffmpeg verbatim | ffmpeg on PATH |
+
+For RTSP and device sources watchglass spawns ffmpeg once per poll, grabs a
+single frame, and lets it exit. There is no persistent decoder, so a watch
+costs nothing between checks. ffmpeg is never bundled — install your
+distribution's package.
+
+If a camera speaks something exotic (HomeKit, Nest, WebRTC-only), run
+[go2rtc](https://github.com/AlexxIT/go2rtc) alongside and point watchglass at
+its snapshot endpoint: `http://go2rtc-host:1984/api/frame.jpeg?src=cam1`.
+
+### When a stream dies
+
+After `health_after` consecutive failed grabs (default 3) a watch sends one
+"stream unreachable" notification, and one more when it recovers. It never
+repeats while a camera stays down, and it keeps polling throughout — a
+watcher that silently stopped watching is worse than no watcher.
+
+### Adaptive polling
+
+Set `max_interval` above `interval` and a watch doubles its poll gap while
+nothing changes, snapping back to `interval` the moment something does. It is
+off unless you set it. Note that backing off also stretches how long
+`confirm` takes in wall-clock time.
 
 ## Web UI
 
@@ -59,13 +92,6 @@ crosses `threshold`. By default it parses the first number found in the OCR
 text; set `pattern` to a regex to extract a specific value instead — if the
 regex has a capture group, that group's text is parsed rather than the whole
 match.
-
-## RTSP cameras
-
-v1 only consumes HTTP snapshot URLs directly — it doesn't speak RTSP. For an
-RTSP-only camera, run [go2rtc](https://github.com/AlexxIT/go2rtc) alongside
-watchglass and point `source` at its snapshot endpoint instead, e.g.
-`http://<go2rtc-host>:1984/api/frame.jpeg?src=<stream-name>`.
 
 ## License
 

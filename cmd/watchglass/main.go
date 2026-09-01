@@ -56,6 +56,23 @@ func run(configPath, dbPath, listen string) error {
 		}
 	}
 
+	needsFFmpeg := false
+	for _, w := range cfg.Watches {
+		kind, err := config.SourceKind(w.Source)
+		if err != nil {
+			return err
+		}
+		if kind == "ffmpeg" {
+			needsFFmpeg = true
+		}
+	}
+	if needsFFmpeg {
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			return fmt.Errorf("a watch uses an rtsp/device source but ffmpeg is not on PATH; " +
+				"install it (e.g. apt install ffmpeg / choco install ffmpeg)")
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

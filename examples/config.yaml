@@ -2,8 +2,8 @@
 watches:
   - name: printer-lcd
     # Any URL that returns a JPEG/PNG. Most IP cameras expose one
-    # (e.g. http://CAMERA-IP/snapshot.jpg). For RTSP-only cameras, see the
-    # go2rtc pattern in the README.
+    # (e.g. http://CAMERA-IP/snapshot.jpg). For RTSP cameras, use an
+    # rtsp:// source directly — see the instrument-readout watch below.
     source: http://192.168.1.50/snapshot.jpg
     interval: 5s
     # Normalized coordinates (0.0-1.0): this watches the middle strip.
@@ -32,3 +32,26 @@ watches:
       cooldown: 5m
     notify:
       - ntfy://ntfy.sh/my-printer-topic
+
+  # An RTSP camera pointed at a lab instrument. Needs ffmpeg on PATH.
+  # watchglass grabs ONE frame per poll and lets ffmpeg exit — there is no
+  # persistent decoder, so idle cost stays near zero.
+  - name: instrument-readout
+    source: rtsp://192.168.1.60:554/stream1
+    interval: 10s
+    # Adaptive polling: back off to one check a minute while the readout is
+    # unchanging, snap back to 10s the moment it moves. Omit to poll evenly.
+    max_interval: 60s
+    # Notify after this many consecutive failed grabs (default 3), then once
+    # more when the stream recovers.
+    health_after: 3
+    region: {x: 0.3, y: 0.4, w: 0.4, h: 0.15}
+    trigger:
+      type: numeric
+      pattern: "([0-9]+\\.[0-9])"
+      op: gt
+      threshold: 80.0
+      confirm: 3
+      cooldown: 15m
+    notify:
+      - ntfy://ntfy.sh/my-lab-topic
