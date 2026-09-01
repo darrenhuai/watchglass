@@ -244,3 +244,55 @@ func TestValidateDefaultsHealthAfter(t *testing.T) {
 		t.Errorf("default health_after = %d, want 3", cfg.Watches[0].HealthAfter)
 	}
 }
+
+func TestMQTTBlockRoundTripAndDefaults(t *testing.T) {
+	cfg := &Config{
+		MQTT: &MQTT{Broker: "tcp://192.168.1.5:1883", Username: "u", Password: "p"},
+		Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.MQTT.ClientID != "watchglass" || cfg.MQTT.BaseTopic != "watchglass" || cfg.MQTT.DiscoveryPrefix != "homeassistant" {
+		t.Errorf("defaults not applied: %+v", cfg.MQTT)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MQTT == nil || got.MQTT.Broker != "tcp://192.168.1.5:1883" || got.MQTT.Username != "u" {
+		t.Errorf("mqtt block did not round-trip: %+v", got.MQTT)
+	}
+}
+
+func TestMQTTValidation(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	noBroker := base()
+	noBroker.MQTT = &MQTT{}
+	if err := noBroker.Validate(); err == nil {
+		t.Error("mqtt block without broker: expected error")
+	}
+	badScheme := base()
+	badScheme.MQTT = &MQTT{Broker: "http://broker:1883"}
+	if err := badScheme.Validate(); err == nil {
+		t.Error("http broker scheme: expected error")
+	}
+	nilBlock := base()
+	if err := nilBlock.Validate(); err != nil {
+		t.Errorf("nil mqtt block should validate: %v", err)
+	}
+}

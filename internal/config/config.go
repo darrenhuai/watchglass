@@ -20,6 +20,24 @@ type Preprocess struct {
 	Upscale   int  `yaml:"upscale,omitempty"`   // 0/1 = off; 2-4 integer nearest-neighbor
 }
 
+// MQTT configures the optional Home Assistant integration: one broker
+// connection, retained auto-discovery configs, and per-watch state topics.
+// Omit the block entirely to disable MQTT.
+type MQTT struct {
+	// Broker is the connection URL: tcp://host:1883, ssl://host:8883,
+	// mqtt://, mqtts://, or ws://.
+	Broker   string `yaml:"broker"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	// ClientID defaults to "watchglass".
+	ClientID string `yaml:"client_id,omitempty"`
+	// BaseTopic prefixes every state topic; defaults to "watchglass".
+	BaseTopic string `yaml:"base_topic,omitempty"`
+	// DiscoveryPrefix is Home Assistant's discovery prefix; defaults to
+	// "homeassistant".
+	DiscoveryPrefix string `yaml:"discovery_prefix,omitempty"`
+}
+
 // Duration is a time.Duration that unmarshals from YAML strings like "5s".
 type Duration time.Duration
 
@@ -77,6 +95,7 @@ type Watch struct {
 }
 
 type Config struct {
+	MQTT    *MQTT   `yaml:"mqtt,omitempty"`
 	Watches []Watch `yaml:"watches"`
 }
 
@@ -111,6 +130,30 @@ func SourceKind(source string) (string, error) {
 // Validate applies defaults (interval 5s, confirm 3) and validates every
 // watch. Load calls it after parsing; the web UI calls it before Save.
 func (c *Config) Validate() error {
+	if c.MQTT != nil {
+		m := c.MQTT
+		if m.Broker == "" {
+			return fmt.Errorf("mqtt: broker is required")
+		}
+		validBroker := false
+		for _, p := range []string{"tcp://", "ssl://", "mqtt://", "mqtts://", "ws://"} {
+			if strings.HasPrefix(m.Broker, p) {
+				validBroker = true
+			}
+		}
+		if !validBroker {
+			return fmt.Errorf("mqtt: broker %q must start with tcp:// ssl:// mqtt:// mqtts:// or ws://", m.Broker)
+		}
+		if m.ClientID == "" {
+			m.ClientID = "watchglass"
+		}
+		if m.BaseTopic == "" {
+			m.BaseTopic = "watchglass"
+		}
+		if m.DiscoveryPrefix == "" {
+			m.DiscoveryPrefix = "homeassistant"
+		}
+	}
 	seen := map[string]bool{}
 	for i := range c.Watches {
 		w := &c.Watches[i]
