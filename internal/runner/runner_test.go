@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,13 +77,13 @@ func TestOCRWatchFiresAndNotifies(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	ctx := context.Background()
-	if err := r.Tick(ctx); err != nil {
+	if _, err := r.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(notifier.sent) != 0 {
 		t.Fatalf("no fire expected yet, got %v", notifier.sent)
 	}
-	if err := r.Tick(ctx); err != nil {
+	if _, err := r.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(notifier.sent) != 1 {
@@ -104,7 +106,7 @@ func TestPixelWatchBaselinesThenFires(t *testing.T) {
 	}
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		if err := r.Tick(ctx); err != nil {
+		if _, err := r.Tick(ctx); err != nil {
 			t.Fatalf("tick %d: %v", i+1, err)
 		}
 	}
@@ -161,7 +163,7 @@ func TestOnReadingHookObservesTicks(t *testing.T) {
 	}
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		if err := r.Tick(ctx); err != nil {
+		if _, err := r.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -181,7 +183,7 @@ func TestPreprocessAppliedBeforeOCR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Tick(context.Background()); err != nil {
+	if _, err := r.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if seen == nil {
@@ -245,7 +247,7 @@ func TestTickOrdersStoreThenHookThenNotify(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := r.Tick(ctx); err != nil {
+	if _, err := r.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,4 +297,84 @@ func TestNextIntervalFloorsAtBase(t *testing.T) {
 	if got := NextInterval(base, max, time.Second, false); got != 10*time.Second {
 		t.Errorf("current below base: got %v, want 10s", got)
 	}
+}
+
+func TestHealthNotifiesOnDownAndRecovery(t *testing.T) {
+	failing := &flakySource{fail: true}
+	notifier := &fakeNotifier{}
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})
+	w.HealthAfter = 2
+	r, err := New(w, failing, nil, notifier, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := r.Tick(ctx); err == nil {
+		t.Fatal("expected grab error")
+	}
+	if len(notifier.sent) != 0 {
+		t.Fatalf("one failure must not notify, got %v", notifier.sent)
+	}
+	if _, err := r.Tick(ctx); err == nil {
+		t.Fatal("expected grab error")
+	}
+	if len(notifier.sent) != 1 {
+		t.Fatalf("threshold reached: want 1 notification, got %v", notifier.sent)
+	}
+	if !strings.Contains(notifier.sent[0], "unreachable") {
+		t.Errorf("down notification = %q", notifier.sent[0])
+	}
+	if _, err := r.Tick(ctx); err == nil {
+		t.Fatal("expected grab error")
+	}
+	if len(notifier.sent) != 1 {
+		t.Errorf("already-down must not re-notify, got %v", notifier.sent)
+	}
+	failing.fail = false
+	if _, err := r.Tick(ctx); err != nil {
+		t.Fatalf("recovered grab: %v", err)
+	}
+	if len(notifier.sent) != 2 {
+		t.Fatalf("recovery should notify, got %v", notifier.sent)
+	}
+	if !strings.Contains(notifier.sent[1], "recovered") {
+		t.Errorf("recovery notification = %q", notifier.sent[1])
+	}
+}
+
+func TestTickReturnsEvaluatedEvent(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	engine := &fakeOCR{texts: []string{"Printing", "PRINT COMPLETE"}}
+	r, err := New(
+		watchCfg(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 1}),
+		src, engine, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := r.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Reading != "Printing" || ev.Fired {
+		t.Errorf("first tick event = %+v", ev)
+	}
+	ev, err = r.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ev.Fired || ev.Reading != "PRINT COMPLETE" {
+		t.Errorf("second tick event = %+v, want fired", ev)
+	}
+}
+
+// flakySource fails on demand so health transitions can be driven.
+type flakySource struct {
+	fail bool
+}
+
+func (f *flakySource) Grab(ctx context.Context) (image.Image, error) {
+	if f.fail {
+		return nil, errors.New("connection refused")
+	}
+	return flat(10, 10, 128), nil
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/health"
 	"watchglass/internal/history"
 	"watchglass/internal/imgproc"
 	"watchglass/internal/notify"
@@ -29,6 +30,10 @@ type Runner struct {
 	prev     *image.RGBA
 	logf     func(string, ...any)
 
+	health  *health.Tracker
+	baseIvl time.Duration
+	maxIvl  time.Duration
+
 	// OnReading, when set, is called once per completed Tick with the trigger
 	// outcome and the RAW crop (before preprocessing). The web UI uses it to
 	// feed the live readout; keep it fast — it runs on the poll goroutine.
@@ -44,37 +49,61 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 	if w.Trigger.Type != "pixel_change" && engine == nil {
 		return nil, fmt.Errorf("watch %q: trigger %q requires an OCR engine", w.Name, w.Trigger.Type)
 	}
+	base := time.Duration(w.Interval)
+	if base <= 0 {
+		logf("watch %s: invalid interval %v, defaulting to %v", w.Name, base, 5*time.Second)
+		base = 5 * time.Second
+	}
 	return &Runner{watch: w, src: src, engine: engine, notifier: notifier,
-		store: store, eval: eval, logf: logf}, nil
+		store: store, eval: eval, logf: logf,
+		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}, nil
 }
 
-// Run polls until ctx is cancelled. Errors are logged, never fatal:
-// a watcher that dies on one bad frame is worse than no watcher.
+// Run polls until ctx is cancelled. Errors are logged, never fatal: a
+// watcher that dies on one bad frame is worse than no watcher.
 func (r *Runner) Run(ctx context.Context) {
-	interval := time.Duration(r.watch.Interval)
-	if interval <= 0 {
-		r.logf("watch %s: invalid interval %v, defaulting to %v", r.watch.Name, interval, 5*time.Second)
-		interval = 5 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	interval := r.baseIvl
+	var lastReading string
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
-		if err := r.Tick(ctx); err != nil {
+		ev, err := r.Tick(ctx)
+		if err != nil {
 			r.logf("watch %s: %v", r.watch.Name, err)
 		}
+		changed := ev.Fired ||
+			(r.watch.Trigger.Type != "pixel_change" && ev.Reading != lastReading)
+		lastReading = ev.Reading
+		interval = NextInterval(r.baseIvl, r.maxIvl, interval, changed)
+
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }
 
-// Tick performs one poll cycle. Exported so tests can drive it deterministically.
-func (r *Runner) Tick(ctx context.Context) error {
+// Tick performs one poll cycle and returns the trigger event it produced
+// (the zero Event when the poll produced no evaluation, e.g. the pixel
+// baseline frame). Exported so tests can drive it deterministically.
+func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 	img, err := r.src.Grab(ctx)
 	if err != nil {
-		return fmt.Errorf("grab: %w", err)
+		if hev, changed := r.health.Failure(err); changed {
+			r.notifyHealth(ctx, hev)
+		}
+		return trigger.Event{}, fmt.Errorf("grab: %w", err)
+	}
+	if hev, changed := r.health.Success(); changed {
+		r.notifyHealth(ctx, hev)
 	}
 	crop := imgproc.Crop(img, r.watch.Region)
 
@@ -82,7 +111,7 @@ func (r *Runner) Tick(ctx context.Context) error {
 	if r.watch.Trigger.Type == "pixel_change" {
 		if r.prev == nil {
 			r.prev = crop
-			return nil // first frame is the baseline
+			return trigger.Event{}, nil // first frame is the baseline
 		}
 		pct := imgproc.PercentChanged(r.prev, crop, diffTolerance)
 		r.prev = crop
@@ -91,7 +120,7 @@ func (r *Runner) Tick(ctx context.Context) error {
 		prepped := imgproc.Apply(crop, r.watch.Preprocess)
 		text, err := r.engine.Recognize(ctx, prepped)
 		if err != nil {
-			return fmt.Errorf("ocr: %w", err)
+			return trigger.Event{}, fmt.Errorf("ocr: %w", err)
 		}
 		ev = r.eval.ObserveText(text)
 	}
@@ -108,10 +137,23 @@ func (r *Runner) Tick(ctx context.Context) error {
 		title := fmt.Sprintf("watchglass: %s", r.watch.Name)
 		body := fmt.Sprintf("%s — %s", ev.Reason, ev.Reading)
 		if err := r.notifier.Send(ctx, title, body); err != nil {
-			return fmt.Errorf("notify: %w", err)
+			return ev, fmt.Errorf("notify: %w", err)
 		}
 	}
-	return nil
+	return ev, nil
+}
+
+// notifyHealth reports a stream up/down transition. Failures to notify are
+// logged, never fatal — the watch keeps polling regardless.
+func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
+	r.logf("watch %s: %s", r.watch.Name, hev.Message)
+	if r.notifier == nil {
+		return
+	}
+	title := fmt.Sprintf("watchglass: %s (%s)", r.watch.Name, hev.State)
+	if err := r.notifier.Send(ctx, title, hev.Message); err != nil {
+		r.logf("watch %s: notify health: %v", r.watch.Name, err)
+	}
 }
 
 // NextInterval computes the next poll gap. With max unset (or not above
