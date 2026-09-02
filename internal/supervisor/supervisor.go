@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/health"
 	"watchglass/internal/history"
 	"watchglass/internal/notify"
 	"watchglass/internal/ocr"
@@ -32,6 +33,12 @@ type Supervisor struct {
 	// scheme is a configuration error that must surface at Start rather
 	// than silently failing on the first tick. Tests inject fakes.
 	NewSource func(w config.Watch) (source.Source, error)
+
+	// OnEvent, when set, receives every tick's outcome for every watch,
+	// with the crop already PNG-encoded. Nil-safe; read at Start time.
+	OnEvent func(watch string, ev trigger.Event, png []byte)
+	// OnHealth, when set, receives every stream health transition.
+	OnHealth func(watch string, hev health.Event)
 
 	mu      sync.Mutex
 	running map[string]*handle
@@ -77,6 +84,10 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		return err
 	}
 	name := w.Name
+	// Captured under s.mu so a data race with a later field write is the
+	// caller's misuse, matching NewSource's semantics.
+	onEvent := s.OnEvent
+	onHealth := s.OnHealth
 	r.OnReading = func(ev trigger.Event, crop image.Image) {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, crop); err != nil {
@@ -84,6 +95,14 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			return
 		}
 		s.reg.Add(name, state.Sample{TS: time.Now(), Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes()})
+		// Reuse the same encoding for the hook; buf.Bytes() is read-only from
+		// here on, matching the registry's PNG read-only convention.
+		if onEvent != nil {
+			onEvent(name, ev, buf.Bytes())
+		}
+	}
+	if onHealth != nil {
+		r.OnHealth = func(hev health.Event) { onHealth(name, hev) }
 	}
 	wctx, cancel := context.WithCancel(ctx)
 	h := &handle{cancel: cancel, done: make(chan struct{})}

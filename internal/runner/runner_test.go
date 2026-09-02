@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/health"
 	"watchglass/internal/history"
 	"watchglass/internal/trigger"
 )
@@ -444,4 +445,23 @@ func (f *flakySource) Grab(ctx context.Context) (image.Image, error) {
 		return nil, errors.New("connection refused")
 	}
 	return flat(10, 10, 128), nil
+}
+
+func TestOnHealthHookFires(t *testing.T) {
+	failing := &flakySource{fail: true}
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})
+	w.HealthAfter = 1
+	r, err := New(w, failing, nil, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []health.Event
+	r.OnHealth = func(hev health.Event) { events = append(events, hev) }
+	ctx := context.Background()
+	r.Tick(ctx) // failure 1 -> down
+	failing.fail = false
+	r.Tick(ctx) // success -> healthy
+	if len(events) != 2 || events[0].State != "down" || events[1].State != "healthy" {
+		t.Errorf("health hook events = %+v", events)
+	}
 }

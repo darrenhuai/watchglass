@@ -10,6 +10,7 @@ import (
 	"watchglass/internal/config"
 	"watchglass/internal/source"
 	"watchglass/internal/state"
+	"watchglass/internal/trigger"
 )
 
 type fakeSource struct{ img image.Image }
@@ -158,5 +159,30 @@ func TestStartFailsOnBadSource(t *testing.T) {
 	}
 	if got := s.Running(); len(got) != 0 {
 		t.Errorf("failed Start must not register a watch, got %v", got)
+	}
+}
+
+func TestSupervisorThreadsEventHook(t *testing.T) {
+	reg := state.New(5)
+	s := newSup(reg)
+	type got struct {
+		watch string
+		png   bool
+	}
+	ch := make(chan got, 10)
+	s.OnEvent = func(watch string, ev trigger.Event, png []byte) {
+		ch <- got{watch: watch, png: len(png) > 0}
+	}
+	if err := s.Start(context.Background(), testWatch("a")); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	select {
+	case g := <-ch:
+		if g.watch != "a" || !g.png {
+			t.Errorf("event hook got %+v, want watch a with png", g)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("event hook never fired")
 	}
 }

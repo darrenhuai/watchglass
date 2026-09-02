@@ -36,6 +36,10 @@ type Server struct {
 	NewSource func(w config.Watch) (source.Source, error)
 	// RunCtx is the parent context for watches the UI starts or restarts.
 	RunCtx context.Context
+	// OnConfigChanged, when set, is called with the new watch list after
+	// every successful config mutation (save, create, delete), outside all
+	// locks. The MQTT publisher uses it to resync discovery.
+	OnConfigChanged func(watches []config.Watch)
 
 	cfgPath string
 	mu      sync.Mutex // guards cfg
@@ -227,6 +231,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		// loudly here too so it doesn't slip by unnoticed in server logs.
 		s.logf("ERROR: create %s: watch saved to config.yaml but failed to start: %v", name, err)
 	}
+	s.notifyConfigChanged()
 	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
 }
 
@@ -430,7 +435,11 @@ var errSaveFailed = errors.New("config save failed")
 func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := &config.Config{Watches: append([]config.Watch(nil), s.cfg.Watches...)}
+	// Shallow-copy the whole config so top-level fields (MQTT, and anything
+	// added later) survive UI saves, then give Watches its own slice.
+	nextVal := *s.cfg
+	nextVal.Watches = append([]config.Watch(nil), s.cfg.Watches...)
+	next := &nextVal
 	if err := fn(next); err != nil {
 		return err
 	}
@@ -442,6 +451,18 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 	}
 	s.cfg = next
 	return nil
+}
+
+// notifyConfigChanged hands the current watch list to the OnConfigChanged
+// hook, if set. Called outside s.mu/applyMu.
+func (s *Server) notifyConfigChanged() {
+	if s.OnConfigChanged == nil {
+		return
+	}
+	s.mu.Lock()
+	watches := append([]config.Watch(nil), s.cfg.Watches...)
+	s.mu.Unlock()
+	s.OnConfigChanged(watches)
 }
 
 func (s *Server) save(w http.ResponseWriter, r *http.Request) {
@@ -479,6 +500,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("saved, but restart failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	s.notifyConfigChanged()
 	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
 }
 
@@ -515,5 +537,6 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sup.Stop(name)
 	s.reg.Drop(name)
+	s.notifyConfigChanged()
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

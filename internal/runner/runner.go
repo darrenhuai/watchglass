@@ -38,6 +38,11 @@ type Runner struct {
 	// outcome and the RAW crop (before preprocessing). The web UI uses it to
 	// feed the live readout; keep it fast — it runs on the poll goroutine.
 	OnReading func(ev trigger.Event, crop image.Image)
+
+	// OnHealth, when set, is called on every stream health transition, after
+	// it is logged and before the notifier is attempted. Keep it fast — it
+	// runs on the poll goroutine.
+	OnHealth func(hev health.Event)
 }
 
 func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.Notifier,
@@ -146,6 +151,9 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 // logged, never fatal — the watch keeps polling regardless.
 func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
 	r.logf("watch %s: %s", r.watch.Name, hev.Message)
+	if r.OnHealth != nil {
+		r.OnHealth(hev)
+	}
 	if r.notifier == nil {
 		return
 	}

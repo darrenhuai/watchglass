@@ -366,3 +366,54 @@ func TestSnapshotBadSourceReturns400(t *testing.T) {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+func TestMutateConfigPreservesMQTTBlock(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	s.mu.Lock()
+	s.cfg.MQTT = &config.MQTT{Broker: "tcp://broker:1883"}
+	s.mu.Unlock()
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "tthreshold": {"10"},
+		"confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("save status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MQTT == nil || got.MQTT.Broker != "tcp://broker:1883" {
+		t.Errorf("mqtt block dropped by UI save: %+v", got.MQTT)
+	}
+}
+
+func TestOnConfigChangedFiresOnMutations(t *testing.T) {
+	s, _ := newTestServer(t)
+	var calls [][]string
+	s.OnConfigChanged = func(watches []config.Watch) {
+		var names []string
+		for _, w := range watches {
+			names = append(names, w.Name)
+		}
+		calls = append(calls, names)
+	}
+	resp, _ := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"oven"}, "source": {"http://cam2/snap.jpg"},
+	})
+	if resp.StatusCode != 303 {
+		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	resp, _ = postForm(t, s.Handler(), "/watch/oven/delete", url.Values{})
+	if resp.StatusCode != 303 {
+		t.Fatalf("delete status = %d", resp.StatusCode)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("OnConfigChanged calls = %d, want 2 (create, delete)", len(calls))
+	}
+	if len(calls[0]) != 2 || len(calls[1]) != 1 {
+		t.Errorf("watch lists = %v", calls)
+	}
+}
