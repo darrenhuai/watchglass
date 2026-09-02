@@ -109,13 +109,25 @@ func (p *Publisher) Sync(watches []config.Watch) {
 			p.publish(p.discoveryTopic(e.component, slug, e.object), true, raw)
 		}
 	}
-	// Clear configs for watches that vanished (or lost their slug).
+	// Clear configs for watches that vanished (or lost their slug). A slug
+	// still claimed by any current watch must never be cleared, even if the
+	// watch *name* that claims it changed (e.g. a same-slug rename, or a
+	// collision winner changing identity between syncs) — otherwise the
+	// clear loop would wipe out the fresh configs just published above for
+	// whichever watch now owns that slug.
+	claimed := map[string]bool{}
+	for _, slug := range nextSlugs {
+		claimed[slug] = true
+	}
 	components := []struct{ component, object string }{
 		{"sensor", "reading"}, {"binary_sensor", "health"},
 		{"binary_sensor", "motion"}, {"camera", "snapshot"},
 	}
 	for name, slug := range p.slugs {
 		if still, ok := nextSlugs[name]; ok && still == slug {
+			continue
+		}
+		if claimed[slug] {
 			continue
 		}
 		for _, c := range components {

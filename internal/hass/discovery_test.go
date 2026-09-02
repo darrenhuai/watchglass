@@ -143,3 +143,21 @@ func TestSyncSkipsSlugCollisions(t *testing.T) {
 		t.Error("collided watch must be tracked as skipped for event publishing")
 	}
 }
+
+func TestSyncSameSlugRenamePreservesConfigs(t *testing.T) {
+	fc := &fakeClient{}
+	p := NewPublisher(fc, mqttCfg(), func(string, ...any) {})
+	p.Sync([]config.Watch{testWatch("x")})
+	fc.pubs = nil
+	p.Sync([]config.Watch{testWatch("X")})
+
+	cfgPub := fc.find(t, "homeassistant/sensor/watchglass-x/reading/config")
+	if cfgPub.payload == "" {
+		t.Errorf("renamed watch (same slug) must get a fresh config, got %+v", cfgPub)
+	}
+	for _, pb := range fc.pubs {
+		if strings.Contains(pb.topic, "watchglass-x") && pb.payload == "" {
+			t.Errorf("slug still claimed after rename must not be cleared: %+v", pb)
+		}
+	}
+}
