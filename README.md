@@ -5,8 +5,8 @@ printer's LCD, a lab instrument, a server console — draw a region, and get a
 push notification when that region's text or pixels change. Self-hosted, one
 binary, nothing leaves your network.
 
-> Early development. Core engine, web UI, and RTSP/ffmpeg sources all work;
-> MQTT/Home Assistant discovery and Docker packaging are next.
+> Early development. Core engine, web UI, RTSP/ffmpeg sources, and
+> MQTT/Home Assistant discovery all work; Docker packaging is next.
 
 ## Quick start
 
@@ -60,6 +60,34 @@ off unless you set it. Note that backing off also stretches how long
 watch to its base interval, so stream-death detection (`health_after`) is
 never delayed by backoff.
 
+## Home Assistant
+
+Add an `mqtt:` block and every watch shows up in Home Assistant
+automatically — no YAML on the HA side:
+
+    mqtt:
+      broker: tcp://homeassistant.local:1883
+      username: watchglass
+      password: secret
+
+Each watch becomes a device with four entities via MQTT discovery: a
+**reading** sensor (the latest OCR text or pixel-change percentage), a
+**health** sensor (stream up/down), a **motion** sensor that pulses when the
+trigger fires, and a **camera** showing the crop from the last fire. State
+survives HA restarts (retained topics), and watchglass announces its own
+availability with a last-will message, so entities go unavailable if it
+stops.
+
+Broker down? watchglass keeps watching and reconnects in the background —
+MQTT is never allowed to take the watcher down with it.
+
+### Snapshot in your push notifications
+
+Notifications to [ntfy](https://ntfy.sh) topics include the cropped image of
+the region that fired — the actual pixels, in the push. Use `ntfy://host/topic`
+(TLS) or `ntfy+http://host:port/topic` (local server). Other services get
+the text.
+
 ## Web UI
 
 watchglass serves a local dashboard while it runs — open http://127.0.0.1:8080.
@@ -98,3 +126,5 @@ match.
 ## License
 
 MIT
+
+MQTT support uses the Eclipse Paho Go client (EPL-2.0/EDL-1.0).

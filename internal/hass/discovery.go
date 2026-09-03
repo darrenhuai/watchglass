@@ -19,13 +19,37 @@ type Publisher struct {
 	// skipped holds watch names dropped by slug collision; event methods
 	// must ignore them so two colliding watches never interleave state.
 	skipped map[string]bool
+
+	// syncCh feeds the background worker that runs Sync (see syncqueue.go);
+	// buffered to 1 so SyncAsync can hold exactly one pending, not-yet-run
+	// sync without ever blocking its caller.
+	syncCh chan []config.Watch
+	quit   chan struct{}
 }
 
 func NewPublisher(c Client, cfg config.MQTT, logf func(string, ...any)) *Publisher {
-	return &Publisher{c: c, cfg: cfg, logf: logf, slugs: map[string]string{}, skipped: map[string]bool{}}
+	p := &Publisher{
+		c: c, cfg: cfg, logf: logf,
+		slugs: map[string]string{}, skipped: map[string]bool{},
+		syncCh: make(chan []config.Watch, 1),
+		quit:   make(chan struct{}),
+	}
+	go p.syncWorker()
+	return p
 }
 
-func (p *Publisher) Close() { p.c.Close() }
+// Close stops the background sync worker and closes the MQTT client. It is
+// called once, at shutdown, so idempotence is not required. Closing quit
+// first stops the worker from picking up any *new* Sync after this point;
+// Close deliberately does not wait for a Sync already in flight to finish
+// (that could itself be stuck retrying publishes against a dead broker) —
+// it proceeds straight to closing the client, whose own last-will "offline"
+// send is bounded by its own short timeout regardless of what the worker is
+// still doing.
+func (p *Publisher) Close() {
+	close(p.quit)
+	p.c.Close()
+}
 
 type discoveryEntity struct {
 	component string

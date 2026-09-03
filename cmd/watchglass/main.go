@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"watchglass/internal/config"
+	"watchglass/internal/hass"
 	"watchglass/internal/history"
 	"watchglass/internal/ocr"
 	"watchglass/internal/state"
@@ -77,8 +78,29 @@ func run(configPath, dbPath, listen string) error {
 	defer stop()
 
 	reg := state.New(10)
+	var pub *hass.Publisher
+	// Registered before StopAll's defer so LIFO runs StopAll first, then
+	// this: watches drain their last publishes, then MQTT says offline.
+	defer func() {
+		if pub != nil {
+			pub.Close()
+		}
+	}()
 	sup := supervisor.New(store, reg, engine, log.Printf)
 	defer sup.StopAll()
+
+	if cfg.MQTT != nil {
+		mc, err := hass.Connect(*cfg.MQTT, log.Printf)
+		if err != nil {
+			return fmt.Errorf("mqtt: %w", err)
+		}
+		pub = hass.NewPublisher(mc, *cfg.MQTT, log.Printf)
+		pub.SyncAsync(cfg.Watches)
+		sup.OnEvent = pub.OnEvent
+		sup.OnHealth = pub.OnHealth
+		log.Printf("mqtt: publishing to %s (discovery prefix %s)", cfg.MQTT.Broker, cfg.MQTT.DiscoveryPrefix)
+	}
+
 	for _, w := range cfg.Watches {
 		if err := sup.Start(ctx, w); err != nil {
 			return err
@@ -91,6 +113,9 @@ func run(configPath, dbPath, listen string) error {
 		return err
 	}
 	ws.RunCtx = ctx
+	if pub != nil {
+		ws.OnConfigChanged = pub.SyncAsync
+	}
 
 	srv := &http.Server{Addr: listen, Handler: ws.Handler()}
 	go func() {

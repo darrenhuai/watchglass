@@ -55,3 +55,11 @@ watches:
       cooldown: 15m
     notify:
       - ntfy://ntfy.sh/my-lab-topic
+
+# Optional: publish every watch to Home Assistant via MQTT auto-discovery.
+# Each watch appears as a device with reading, health, motion, and snapshot
+# entities — no HA YAML needed. Omit the block to disable.
+# mqtt:
+#   broker: tcp://homeassistant.local:1883
+#   username: watchglass
+#   password: secret
