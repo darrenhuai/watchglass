@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install runtime tools (integration paths)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr
+      - name: Vet and format
+        run: |
+          go vet ./...
+          test -z "$(gofmt -l .)"
+      - name: Test
+        run: CGO_ENABLED=0 go test ./...
+      - name: Race (cgo available here)
+        run: go test -race ./internal/state ./internal/supervisor ./internal/hass
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test (no ffmpeg/tesseract - exercises skip paths)
+        run: go test ./...
+        env:
+          CGO_ENABLED: "0"
