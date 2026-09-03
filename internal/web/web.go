@@ -37,8 +37,11 @@ type Server struct {
 	// RunCtx is the parent context for watches the UI starts or restarts.
 	RunCtx context.Context
 	// OnConfigChanged, when set, is called with the new watch list after
-	// every successful config mutation (save, create, delete), outside all
-	// locks. The MQTT publisher uses it to resync discovery.
+	// every successful config mutation (save, create, delete), outside s.mu.
+	// NOTE: the calling handler still holds applyMu at that point (released
+	// by its deferred Unlock on return), so the hook must not block — Task 7
+	// wires it through a non-blocking ordered queue for exactly this reason.
+	// The MQTT publisher uses it to resync discovery.
 	OnConfigChanged func(watches []config.Watch)
 
 	cfgPath string
@@ -439,6 +442,13 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 	// added later) survive UI saves, then give Watches its own slice.
 	nextVal := *s.cfg
 	nextVal.Watches = append([]config.Watch(nil), s.cfg.Watches...)
+	// MQTT is a pointer: without its own copy, next.Validate()'s in-place
+	// defaulting (ClientID, BaseTopic, ...) would mutate the live config's
+	// MQTT struct even when fn or Validate later rejects the mutation.
+	if s.cfg.MQTT != nil {
+		m := *s.cfg.MQTT
+		nextVal.MQTT = &m
+	}
 	next := &nextVal
 	if err := fn(next); err != nil {
 		return err
@@ -454,7 +464,10 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 }
 
 // notifyConfigChanged hands the current watch list to the OnConfigChanged
-// hook, if set. Called outside s.mu/applyMu.
+// hook, if set. The hook itself runs outside s.mu (released below before
+// calling it), but NOT outside applyMu — the calling handler still holds
+// it until its deferred Unlock fires on return — so the hook must not
+// block; see the OnConfigChanged field doc.
 func (s *Server) notifyConfigChanged() {
 	if s.OnConfigChanged == nil {
 		return
