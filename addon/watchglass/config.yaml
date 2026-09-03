@@ -1,0 +1,17 @@
+name: watchglass
+version: "0.1.0"
+slug: watchglass
+description: Watch a region of any camera or stream and get notified when its text or pixels change
+url: https://github.com/darrenhuai/watchglass
+arch: [amd64, aarch64, armv7]
+init: false
+webui: http://[HOST]:[PORT:8080]
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: Web UI
+map:
+  - addon_config:rw
+# NOTE: image is intentionally unset while the repo is private — the add-on
+# builds locally from ./Dockerfile until a published ghcr image exists
+# (launch-day step). See DOCS.md.

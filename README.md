@@ -5,8 +5,44 @@ printer's LCD, a lab instrument, a server console — draw a region, and get a
 push notification when that region's text or pixels change. Self-hosted, one
 binary, nothing leaves your network.
 
-> Early development. Core engine, web UI, RTSP/ffmpeg sources, and
-> MQTT/Home Assistant discovery all work; Docker packaging is next.
+> Early development. Core engine, web UI, RTSP/ffmpeg sources,
+> MQTT/Home Assistant discovery, and Docker packaging all work; tagged
+> binary releases and a published Home Assistant add-on are next.
+
+## Install
+
+### Docker Compose (recommended)
+
+    git clone https://github.com/darrenhuai/watchglass && cd watchglass
+    mkdir -p config
+    docker compose up -d
+
+Binds to `127.0.0.1:8080` by default — widen the port mapping in
+`docker-compose.yml` deliberately if you want it reachable elsewhere on your
+network (see [Authentication](#authentication) first). Config and the
+SQLite history database live in `./config`, bind-mounted into the
+container.
+
+### Docker (build it yourself)
+
+    git clone https://github.com/darrenhuai/watchglass && cd watchglass
+    docker build -t watchglass .
+    docker run -d --name watchglass -p 127.0.0.1:8080:8080 -v ./config:/config watchglass
+
+### Binaries
+
+Once the first tag (`v0.1.0`) lands, prebuilt binaries for Linux, Windows,
+and macOS are attached to each
+[GitHub release](https://github.com/darrenhuai/watchglass/releases) — no Go
+toolchain required. ffmpeg and tesseract aren't bundled; install them
+separately if you need RTSP sources or OCR triggers.
+
+### From source (Go toolchain)
+
+    git clone https://github.com/darrenhuai/watchglass && cd watchglass
+    go install ./cmd/watchglass
+
+Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
 
 ## Quick start
 
@@ -102,11 +138,45 @@ the text comes back clean, then **Save**. The page shows a live strip of
 recent readings so you can verify triggers before trusting them.
 
 The UI binds to localhost only by default. `-listen 0.0.0.0:8080` exposes it
-on your network — there is no authentication yet, so put it behind a reverse
-proxy if you do that. Watch `source` URLs are also fetched by the server, so
+on your network — add an `auth:` block first (below) or put it behind a
+reverse proxy. Watch `source` URLs are also fetched by the server, so
 exposing the UI beyond localhost hands whoever reaches it a server-side fetch
-primitive too — another reason to keep it behind localhost or an
-authenticated reverse proxy.
+primitive too — another reason not to expose it unauthenticated.
+
+### Authentication
+
+Add an `auth:` block to `config.yaml` to put the web UI behind HTTP Basic
+auth:
+
+    auth:
+      username: admin
+      password: change-me
+
+The password lives in plaintext in `config.yaml` — same posture as the MQTT
+broker password above (the file is written `0o600` on Unix; keep it
+private). Omit the block entirely for no auth, which is fine as long as you
+stay on localhost.
+
+If `-listen` is bound to anything other than `127.0.0.1`/`localhost` and no
+`auth:` block is set, watchglass logs a `WARNING` on every startup. The
+Docker image always binds `0.0.0.0:8080` *inside* the container — that's
+correct there, since reachability is actually decided by the container's
+port mapping, not the bind address — so the container logs that warning on
+every start regardless. With the compose file's default mapping
+(`127.0.0.1:8080:8080`) the UI stays loopback-only anyway, making the
+warning expected and harmless; add an `auth:` block before widening that
+mapping to anything else.
+
+## History
+
+Every reading is recorded to a SQLite database at `-db` (default
+`watchglass.db`). `history_days` in `config.yaml` controls how long they're
+kept — default 30, or `-1` to keep everything forever:
+
+    history_days: 30
+
+Pruning runs once at startup and then once every 24 hours; with `-1` it
+never runs at all.
 
 ## Trigger types
 
@@ -126,6 +196,19 @@ crosses `threshold`. By default it parses the first number found in the OCR
 text; set `pattern` to a regex to extract a specific value instead — if the
 regex has a capture group, that group's text is parsed rather than the whole
 match.
+
+## Roadmap
+
+Post-v1, roughly in priority order:
+
+- [ ] Home Assistant Add-on — skeleton in `addon/` today, not yet
+      installable (no published image)
+- [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
+- [ ] Native seven-segment decoder
+- [ ] Recipes gallery (community configs per device)
+- [ ] Template matching triggers ("this icon appeared")
+- [ ] Multi-region compound conditions ("A matches AND B > 200")
+- [ ] Optional VLM engine (opt-in, off by default, clearly labeled)
 
 ## License
 

@@ -1,8 +1,8 @@
 .git
 .github
 .internal
-docs
-addon
+/docs
+/addon
 *.md
 watchglass.db
 /config/

@@ -56,6 +56,14 @@ watches:
     notify:
       - ntfy://ntfy.sh/my-lab-topic
 
+# How many days of readings to keep (default 30; -1 = forever):
+# history_days: 30
+
+# Protect the web UI (recommended before -listen 0.0.0.0):
+# auth:
+#   username: admin
+#   password: change-me
+
 # Optional: publish every watch to Home Assistant via MQTT auto-discovery.
 # Each watch appears as a device with reading, health, motion, and snapshot
 # entities — no HA YAML needed. Omit the block to disable.
