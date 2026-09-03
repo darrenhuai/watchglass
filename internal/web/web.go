@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/imgproc"
-	"watchglass/internal/ocr"
-	"watchglass/internal/source"
-	"watchglass/internal/state"
-	"watchglass/internal/supervisor"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/imgproc"
+	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/source"
+	"github.com/darrenhuai/watchglass/internal/state"
+	"github.com/darrenhuai/watchglass/internal/supervisor"
 )
 
 //go:embed templates/*.html static/*

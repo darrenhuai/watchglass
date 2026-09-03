@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 func mqttCfg() config.MQTT {

@@ -7,7 +7,7 @@ import (
 	"image/draw"
 	"math"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 // Crop extracts a normalized region from img. The result's bounds start at (0,0).

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 type pub struct {

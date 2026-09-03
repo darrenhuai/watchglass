@@ -9,7 +9,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 // Client is the thin MQTT surface the publisher needs. Tests fake it.

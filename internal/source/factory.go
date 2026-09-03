@@ -3,7 +3,7 @@ package source
 import (
 	"fmt"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 // For builds the frame source a watch's URL calls for. Unknown schemes are

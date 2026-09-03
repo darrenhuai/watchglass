@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/health"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 func syncedPublisher(t *testing.T) (*Publisher, *lockedFakeClient) {

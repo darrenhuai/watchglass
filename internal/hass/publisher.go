@@ -1,8 +1,8 @@
 package hass
 
 import (
-	"watchglass/internal/health"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 // OnEvent publishes one tick's outcome: the reading always (retained, so a

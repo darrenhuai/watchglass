@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/hass"
-	"watchglass/internal/history"
-	"watchglass/internal/ocr"
-	"watchglass/internal/state"
-	"watchglass/internal/supervisor"
-	"watchglass/internal/web"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/hass"
+	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/state"
+	"github.com/darrenhuai/watchglass/internal/supervisor"
+	"github.com/darrenhuai/watchglass/internal/web"
 )
 
 func main() {

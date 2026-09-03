@@ -1,4 +1,4 @@
-module watchglass
+module github.com/darrenhuai/watchglass
 
 go 1.27.0
 

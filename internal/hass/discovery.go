@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 // Publisher owns everything watchglass says over MQTT: retained Home

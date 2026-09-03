@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/health"
-	"watchglass/internal/history"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 // --- fakes ---

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 func mk(t *testing.T, cfg config.Trigger) (*Evaluator, *time.Time) {

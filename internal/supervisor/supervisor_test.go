@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/source"
-	"watchglass/internal/state"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/source"
+	"github.com/darrenhuai/watchglass/internal/state"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 type fakeSource struct{ img image.Image }

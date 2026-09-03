@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/health"
-	"watchglass/internal/history"
-	"watchglass/internal/notify"
-	"watchglass/internal/ocr"
-	"watchglass/internal/runner"
-	"watchglass/internal/source"
-	"watchglass/internal/state"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/notify"
+	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
+	"github.com/darrenhuai/watchglass/internal/source"
+	"github.com/darrenhuai/watchglass/internal/state"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 type handle struct {

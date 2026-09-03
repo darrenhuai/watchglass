@@ -9,14 +9,14 @@ import (
 	"image/png"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/health"
-	"watchglass/internal/history"
-	"watchglass/internal/imgproc"
-	"watchglass/internal/notify"
-	"watchglass/internal/ocr"
-	"watchglass/internal/source"
-	"watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/imgproc"
+	"github.com/darrenhuai/watchglass/internal/notify"
+	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/source"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 // diffTolerance absorbs camera sensor noise in pixel_change watches.

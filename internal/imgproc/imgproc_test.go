@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"testing"
 
-	"watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/config"
 )
 
 func TestCropQuadrant(t *testing.T) {

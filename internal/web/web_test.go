@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"watchglass/internal/config"
-	"watchglass/internal/ocr"
-	"watchglass/internal/source"
-	"watchglass/internal/state"
-	"watchglass/internal/supervisor"
+	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/source"
+	"github.com/darrenhuai/watchglass/internal/state"
+	"github.com/darrenhuai/watchglass/internal/supervisor"
 )
 
 type fakeSource struct{ img image.Image }

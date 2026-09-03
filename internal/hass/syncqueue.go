@@ -1,6 +1,6 @@
 package hass
 
-import "watchglass/internal/config"
+import "github.com/darrenhuai/watchglass/internal/config"
 
 // syncWorker is the single goroutine that ever calls Sync after startup, and
 // the only goroutine that ever calls Publish on the underlying MQTT client:
