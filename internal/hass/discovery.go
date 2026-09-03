@@ -3,6 +3,7 @@ package hass
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"watchglass/internal/config"
 )
@@ -14,17 +15,29 @@ type Publisher struct {
 	cfg  config.MQTT
 	logf func(string, ...any)
 
-	// slugs maps watch name -> slug for every watch the last Sync accepted.
-	slugs map[string]string
-	// skipped holds watch names dropped by slug collision; event methods
-	// must ignore them so two colliding watches never interleave state.
+	// mu guards slugs/skipped. Sync runs only on the background worker
+	// (see syncqueue.go) and writes both maps under Lock; OnEvent/OnHealth
+	// run on each watch's own poll goroutine and resolve a watch's slug
+	// under RLock. Every access to either map must go through mu — there
+	// is no other synchronization between the worker goroutine and the
+	// poll goroutines.
+	mu      sync.RWMutex
+	slugs   map[string]string
 	skipped map[string]bool
 
-	// syncCh feeds the background worker that runs Sync (see syncqueue.go);
-	// buffered to 1 so SyncAsync can hold exactly one pending, not-yet-run
-	// sync without ever blocking its caller.
+	// syncCh feeds the background worker a full discovery resync (see
+	// SyncAsync); buffered to 1 so only the latest pending resync survives
+	// a caller that never blocks.
 	syncCh chan []config.Watch
-	quit   chan struct{}
+	// jobs feeds the background worker one publish batch per event (see
+	// enqueue, syncqueue.go); buffered to 32 as a hard ceiling on
+	// outstanding publishes — and the PNGs some of them carry — when the
+	// broker is slow or down. Past that, enqueue drops the newest job
+	// rather than block the poll goroutine that called OnEvent/OnHealth;
+	// state topics are retained and republished next tick, so a drop just
+	// means HA shows last tick's value a little longer.
+	jobs chan func()
+	quit chan struct{}
 }
 
 func NewPublisher(c Client, cfg config.MQTT, logf func(string, ...any)) *Publisher {
@@ -32,20 +45,21 @@ func NewPublisher(c Client, cfg config.MQTT, logf func(string, ...any)) *Publish
 		c: c, cfg: cfg, logf: logf,
 		slugs: map[string]string{}, skipped: map[string]bool{},
 		syncCh: make(chan []config.Watch, 1),
+		jobs:   make(chan func(), 32),
 		quit:   make(chan struct{}),
 	}
 	go p.syncWorker()
 	return p
 }
 
-// Close stops the background sync worker and closes the MQTT client. It is
+// Close stops the background worker and closes the MQTT client. It is
 // called once, at shutdown, so idempotence is not required. Closing quit
-// first stops the worker from picking up any *new* Sync after this point;
-// Close deliberately does not wait for a Sync already in flight to finish
-// (that could itself be stuck retrying publishes against a dead broker) —
-// it proceeds straight to closing the client, whose own last-will "offline"
-// send is bounded by its own short timeout regardless of what the worker is
-// still doing.
+// first stops the worker from picking up any *new* Sync or job after this
+// point; Close deliberately does not wait for one already in flight to
+// finish (that could itself be stuck retrying a publish against a dead
+// broker) — it proceeds straight to closing the client, whose own
+// last-will "offline" send is bounded by its own short timeout regardless
+// of what the worker is still doing.
 func (p *Publisher) Close() {
 	close(p.quit)
 	p.c.Close()
@@ -147,7 +161,18 @@ func (p *Publisher) Sync(watches []config.Watch) {
 		{"sensor", "reading"}, {"binary_sensor", "health"},
 		{"binary_sensor", "motion"}, {"camera", "snapshot"},
 	}
-	for name, slug := range p.slugs {
+	// Swap in the new maps now, under lock, so OnEvent/OnHealth on other
+	// goroutines never observe a half-updated p.slugs. oldSlugs is kept
+	// only as a local snapshot for the clear loop below, which needs the
+	// *previous* mapping to know what vanished — it deliberately runs
+	// after the swap, outside the lock, since it does slow publish I/O.
+	p.mu.Lock()
+	oldSlugs := p.slugs
+	p.slugs = nextSlugs
+	p.skipped = nextSkipped
+	p.mu.Unlock()
+
+	for name, slug := range oldSlugs {
 		if still, ok := nextSlugs[name]; ok && still == slug {
 			continue
 		}
@@ -158,8 +183,6 @@ func (p *Publisher) Sync(watches []config.Watch) {
 			p.publish(p.discoveryTopic(c.component, slug, c.object), true, nil)
 		}
 	}
-	p.slugs = nextSlugs
-	p.skipped = nextSkipped
 }
 
 // publish is fire-and-forget: MQTT failures are logged, never propagated.

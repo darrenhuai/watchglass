@@ -3,52 +3,11 @@ package hass
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"watchglass/internal/config"
 )
-
-// lockedFakeClient is a concurrency-safe stand-in for fakeClient: the
-// SyncAsync worker publishes from its own goroutine while a test reads
-// pubs, so plain fakeClient's unsynchronized slice would race.
-type lockedFakeClient struct {
-	mu       sync.Mutex
-	pubs     []pub
-	delay    time.Duration
-	isClosed bool
-}
-
-func (f *lockedFakeClient) Publish(topic string, qos byte, retain bool, payload []byte) error {
-	if f.delay > 0 {
-		time.Sleep(f.delay)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.pubs = append(f.pubs, pub{topic: topic, retain: retain, payload: string(payload)})
-	return nil
-}
-
-func (f *lockedFakeClient) Close() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.isClosed = true
-}
-
-func (f *lockedFakeClient) snapshot() []pub {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]pub, len(f.pubs))
-	copy(out, f.pubs)
-	return out
-}
-
-func (f *lockedFakeClient) closed() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.isClosed
-}
 
 func TestSyncAsyncDeliversLatest(t *testing.T) {
 	fc := &lockedFakeClient{}
@@ -58,23 +17,14 @@ func TestSyncAsyncDeliversLatest(t *testing.T) {
 	p.SyncAsync([]config.Watch{testWatch("a")})
 	p.SyncAsync([]config.Watch{testWatch("b")})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		found := false
+	pollFor(t, 2*time.Second, func() bool {
 		for _, pb := range fc.snapshot() {
 			if strings.Contains(pb.topic, "watchglass-b") && pb.payload != "" {
-				found = true
-				break
+				return true
 			}
 		}
-		if found {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the latest sync (b) to be published; got %v", fc.snapshot())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	})
 }
 
 func TestSyncAsyncNeverBlocks(t *testing.T) {
