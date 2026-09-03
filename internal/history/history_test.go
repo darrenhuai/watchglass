@@ -103,10 +103,12 @@ func TestOpenCreatesIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	var name string
-	err = s.db.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_readings_watch_id'`).Scan(&name)
-	if err != nil {
-		t.Fatalf("index not found: %v", err)
+	for _, idx := range []string{"idx_readings_watch_id", "idx_readings_ts"} {
+		var name string
+		err = s.db.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name)
+		if err != nil {
+			t.Fatalf("index %s not found: %v", idx, err)
+		}
 	}
 }

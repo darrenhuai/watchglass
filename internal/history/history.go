@@ -45,6 +45,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Prune filters on ts alone (no watch predicate), so it needs its own
+	// index rather than riding the (watch, id) one above.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings(ts)`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
