@@ -6,6 +6,8 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"errors"
@@ -100,7 +102,37 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /watch/{name}/test", s.testRegion)
 	mux.HandleFunc("POST /watch/{name}/save", s.save)
 	mux.HandleFunc("POST /watch/{name}/delete", s.remove)
-	return mux
+	return s.withAuth(mux)
+}
+
+// withAuth enforces HTTP Basic over the whole UI when an auth block is
+// configured. Credentials are read under the config lock on every request
+// so a future config reload picks them up without a restart.
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		auth := s.cfg.Auth
+		s.mu.Unlock()
+		if auth == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || !timingSafeEqual(user, auth.Username) || !timingSafeEqual(pass, auth.Password) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="watchglass"`)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// timingSafeEqual compares via sha256 digests so length differences leak
+// nothing and the comparison is constant-time.
+func timingSafeEqual(a, b string) bool {
+	da := sha256.Sum256([]byte(a))
+	db := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(da[:], db[:]) == 1
 }
 
 // findWatch returns a copy of the named watch under the config lock.
@@ -448,6 +480,10 @@ func (s *Server) mutateConfig(fn func(*config.Config) error) error {
 	if s.cfg.MQTT != nil {
 		m := *s.cfg.MQTT
 		nextVal.MQTT = &m
+	}
+	if s.cfg.Auth != nil {
+		a := *s.cfg.Auth
+		nextVal.Auth = &a
 	}
 	next := &nextVal
 	if err := fn(next); err != nil {

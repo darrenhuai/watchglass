@@ -417,3 +417,57 @@ func TestOnConfigChangedFiresOnMutations(t *testing.T) {
 		t.Errorf("watch lists = %v", calls)
 	}
 }
+
+func TestAuthRejectsAndAccepts(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.mu.Lock()
+	s.cfg.Auth = &config.Auth{Username: "admin", Password: "hunter2"}
+	s.mu.Unlock()
+	h := s.Handler()
+
+	resp, _ := get(t, h, "/")
+	if resp.StatusCode != 401 {
+		t.Fatalf("no credentials: status = %d, want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, "Basic") {
+		t.Errorf("WWW-Authenticate = %q", got)
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "wrong")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Result().StatusCode != 401 {
+		t.Errorf("wrong password: status = %d, want 401", rec.Result().StatusCode)
+	}
+
+	req = httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "hunter2")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Result().StatusCode != 200 {
+		t.Errorf("correct credentials: status = %d, want 200", rec.Result().StatusCode)
+	}
+}
+
+func TestNoAuthBlockMeansOpen(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, _ := get(t, s.Handler(), "/")
+	if resp.StatusCode != 200 {
+		t.Errorf("nil auth must not gate: status = %d", resp.StatusCode)
+	}
+}
+
+func TestAuthCoversStaticAndAPI(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.mu.Lock()
+	s.cfg.Auth = &config.Auth{Username: "u", Password: "p"}
+	s.mu.Unlock()
+	h := s.Handler()
+	for _, path := range []string{"/static/app.js", "/watch/printer/snapshot", "/watch/printer/live"} {
+		resp, _ := get(t, h, path)
+		if resp.StatusCode != 401 {
+			t.Errorf("%s: status = %d, want 401 (auth must cover everything)", path, resp.StatusCode)
+		}
+	}
+}

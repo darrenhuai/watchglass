@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -152,6 +153,11 @@ func run(configPath, dbPath, listen string) error {
 	ws.RunCtx = ctx
 	if pub != nil {
 		ws.OnConfigChanged = pub.SyncAsync
+	}
+
+	if cfg.Auth == nil && !strings.HasPrefix(listen, "127.0.0.1") && !strings.HasPrefix(listen, "localhost") {
+		log.Printf("WARNING: web UI is listening on %s with NO authentication — anyone who can reach it "+
+			"controls your watches and sees your streams; add an auth: block or bind to localhost", listen)
 	}
 
 	srv := &http.Server{Addr: listen, Handler: ws.Handler()}
