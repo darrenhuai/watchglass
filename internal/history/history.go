@@ -41,6 +41,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_readings_watch_id ON readings(watch, id)`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -75,6 +79,17 @@ func (s *Store) LastN(watch string, n int) ([]Reading, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// Prune deletes readings recorded before the given time, returning how many
+// rows were removed. Retention keeps the database bounded on long-running
+// installs (one row per tick per watch adds up).
+func (s *Store) Prune(before time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM readings WHERE ts < ?`, before.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

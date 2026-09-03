@@ -101,6 +101,33 @@ func run(configPath, dbPath, listen string) error {
 		log.Printf("mqtt: publishing to %s (discovery prefix %s)", cfg.MQTT.Broker, cfg.MQTT.DiscoveryPrefix)
 	}
 
+	if cfg.HistoryDays > 0 {
+		retention := time.Duration(cfg.HistoryDays) * 24 * time.Hour
+		prune := func() {
+			n, err := store.Prune(time.Now().Add(-retention))
+			if err != nil {
+				log.Printf("history: prune: %v", err)
+				return
+			}
+			if n > 0 {
+				log.Printf("history: pruned %d readings older than %d days", n, cfg.HistoryDays)
+			}
+		}
+		prune()
+		go func() {
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					prune()
+				}
+			}
+		}()
+	}
+
 	for _, w := range cfg.Watches {
 		if err := sup.Start(ctx, w); err != nil {
 			return err
