@@ -296,3 +296,85 @@ func TestMQTTValidation(t *testing.T) {
 		t.Errorf("nil mqtt block should validate: %v", err)
 	}
 }
+
+func TestAuthValidation(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	missing := base()
+	missing.Auth = &Auth{Username: "u"}
+	if err := missing.Validate(); err == nil {
+		t.Error("auth without password: expected error")
+	}
+	ok := base()
+	ok.Auth = &Auth{Username: "u", Password: "p"}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid auth rejected: %v", err)
+	}
+	if err := base().Validate(); err != nil {
+		t.Errorf("nil auth rejected: %v", err)
+	}
+}
+
+func TestHistoryDaysNormalization(t *testing.T) {
+	mk := func(days int) *Config {
+		return &Config{HistoryDays: days, Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	cases := []struct {
+		in, want int
+		wantErr  bool
+	}{
+		{0, 30, false}, // absent/zero -> default 30
+		{7, 7, false},  // explicit positive kept
+		{-1, 0, false}, // -1 -> forever (normalized to 0 = no pruning)
+		{-2, 0, true},  // anything below -1 rejected
+	}
+	for _, c := range cases {
+		cfg := mk(c.in)
+		err := cfg.Validate()
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("history_days=%d: expected error", c.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("history_days=%d: %v", c.in, err)
+			continue
+		}
+		if cfg.HistoryDays != c.want {
+			t.Errorf("history_days=%d normalized to %d, want %d", c.in, cfg.HistoryDays, c.want)
+		}
+	}
+}
+
+func TestAuthAndHistoryRoundTrip(t *testing.T) {
+	cfg := &Config{
+		HistoryDays: 7,
+		Auth:        &Auth{Username: "u", Password: "p"},
+		Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}},
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HistoryDays != 7 || got.Auth == nil || got.Auth.Username != "u" || got.Auth.Password != "p" {
+		t.Errorf("round trip lost fields: days=%d auth=%+v", got.HistoryDays, got.Auth)
+	}
+}

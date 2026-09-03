@@ -38,6 +38,14 @@ type MQTT struct {
 	DiscoveryPrefix string `yaml:"discovery_prefix,omitempty"`
 }
 
+// Auth enables HTTP Basic authentication on the web UI. Credentials live in
+// this file in plaintext (same posture as the MQTT password — the file is
+// written 0o600); omit the block for no auth (fine on localhost).
+type Auth struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 // Duration is a time.Duration that unmarshals from YAML strings like "5s".
 type Duration time.Duration
 
@@ -95,8 +103,12 @@ type Watch struct {
 }
 
 type Config struct {
-	MQTT    *MQTT   `yaml:"mqtt,omitempty"`
-	Watches []Watch `yaml:"watches"`
+	// HistoryDays is how many days of readings to keep in the history
+	// database. Default 30; -1 keeps everything forever.
+	HistoryDays int     `yaml:"history_days,omitempty"`
+	Auth        *Auth   `yaml:"auth,omitempty"`
+	MQTT        *MQTT   `yaml:"mqtt,omitempty"`
+	Watches     []Watch `yaml:"watches"`
 }
 
 var validTypes = map[string]bool{
@@ -153,6 +165,17 @@ func (c *Config) Validate() error {
 		if m.DiscoveryPrefix == "" {
 			m.DiscoveryPrefix = "homeassistant"
 		}
+	}
+	if c.Auth != nil && (c.Auth.Username == "" || c.Auth.Password == "") {
+		return fmt.Errorf("auth: username and password are both required")
+	}
+	switch {
+	case c.HistoryDays == 0:
+		c.HistoryDays = 30
+	case c.HistoryDays == -1:
+		c.HistoryDays = 0 // forever: downstream treats 0 as "never prune"
+	case c.HistoryDays < -1:
+		return fmt.Errorf("history_days must be a positive day count, 0 (default 30), or -1 (forever)")
 	}
 	seen := map[string]bool{}
 	for i := range c.Watches {
