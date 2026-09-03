@@ -161,3 +161,27 @@ func TestSyncSameSlugRenamePreservesConfigs(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncClearsRetainedStateTopicsOnRemoval(t *testing.T) {
+	fc := &fakeClient{}
+	p := NewPublisher(fc, mqttCfg(), func(string, ...any) {})
+	p.Sync([]config.Watch{testWatch("a"), testWatch("b")})
+	fc.pubs = nil
+	p.Sync([]config.Watch{testWatch("a")})
+	for _, topic := range []string{
+		"watchglass/b/reading", "watchglass/b/health", "watchglass/b/snapshot",
+	} {
+		cleared := fc.find(t, topic)
+		if cleared.payload != "" || !cleared.retain {
+			t.Errorf("%s: want empty retained clear, got %+v", topic, cleared)
+		}
+	}
+	for _, pb := range fc.pubs {
+		if pb.topic == "watchglass/b/motion" {
+			t.Error("motion is not retained and must not be cleared")
+		}
+		if strings.HasPrefix(pb.topic, "watchglass/a/") && pb.payload == "" {
+			t.Errorf("surviving watch state cleared: %+v", pb)
+		}
+	}
+}

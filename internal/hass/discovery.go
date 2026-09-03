@@ -212,6 +212,11 @@ func (p *Publisher) Sync(watches []config.Watch) {
 		for _, c := range components {
 			p.publish(p.discoveryTopic(c.component, slug, c.object), true, nil)
 		}
+		// Clear retained state topics for the removed watch. Motion is not
+		// retained and must not be cleared.
+		for _, st := range []string{"reading", "health", "snapshot"} {
+			p.publish(p.cfg.BaseTopic+"/"+slug+"/"+st, true, nil)
+		}
 	}
 }
 
