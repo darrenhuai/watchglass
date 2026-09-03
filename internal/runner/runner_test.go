@@ -447,6 +447,40 @@ func (f *flakySource) Grab(ctx context.Context) (image.Image, error) {
 	return flat(10, 10, 128), nil
 }
 
+type imageNotifier struct {
+	fakeNotifier
+	images int
+}
+
+func (n *imageNotifier) SendImage(ctx context.Context, title, body string, png []byte) error {
+	if len(png) == 0 {
+		return errors.New("empty png")
+	}
+	n.images++
+	return nil
+}
+
+func TestFiredEventUsesImageSender(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	engine := &fakeOCR{texts: []string{"PRINT COMPLETE"}}
+	n := &imageNotifier{}
+	r, err := New(
+		watchCfg(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 1}),
+		src, engine, n, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n.images != 1 {
+		t.Errorf("SendImage calls = %d, want 1", n.images)
+	}
+	if len(n.sent) != 0 {
+		t.Errorf("plain Send should not be used when ImageSender available, got %v", n.sent)
+	}
+}
+
 func TestOnHealthHookFires(t *testing.T) {
 	failing := &flakySource{fail: true}
 	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})

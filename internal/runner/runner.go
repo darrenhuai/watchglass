@@ -2,9 +2,11 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
+	"image/png"
 	"time"
 
 	"watchglass/internal/config"
@@ -140,8 +142,20 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 	if ev.Fired && r.notifier != nil {
 		title := fmt.Sprintf("watchglass: %s", r.watch.Name)
 		body := fmt.Sprintf("%s — %s", ev.Reason, ev.Reading)
-		if err := r.notifier.Send(ctx, title, body); err != nil {
-			return ev, fmt.Errorf("notify: %w", err)
+		var sendErr error
+		if is, ok := r.notifier.(notify.ImageSender); ok {
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, crop); err != nil {
+				r.logf("watch %s: encode crop for notification: %v", r.watch.Name, err)
+				sendErr = r.notifier.Send(ctx, title, body)
+			} else {
+				sendErr = is.SendImage(ctx, title, body, buf.Bytes())
+			}
+		} else {
+			sendErr = r.notifier.Send(ctx, title, body)
+		}
+		if sendErr != nil {
+			return ev, fmt.Errorf("notify: %w", sendErr)
 		}
 	}
 	return ev, nil
