@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"watchglass/internal/config"
 )
@@ -38,6 +39,12 @@ type Publisher struct {
 	// means HA shows last tick's value a little longer.
 	jobs chan func()
 	quit chan struct{}
+	// done is closed by syncWorker right before it returns, once it has
+	// drained whatever was left in jobs/syncCh after quit fired (see
+	// drainRemaining, syncqueue.go). Close waits on it, bounded by
+	// closeDrainBudget, instead of assuming the worker is finished the
+	// instant quit is closed.
+	done chan struct{}
 }
 
 func NewPublisher(c Client, cfg config.MQTT, logf func(string, ...any)) *Publisher {
@@ -47,21 +54,44 @@ func NewPublisher(c Client, cfg config.MQTT, logf func(string, ...any)) *Publish
 		syncCh: make(chan []config.Watch, 1),
 		jobs:   make(chan func(), 32),
 		quit:   make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	go p.syncWorker()
 	return p
 }
 
+// closeDrainBudget bounds how long Close waits for the worker to drain
+// already-queued jobs and syncs before giving up and shutting down anyway.
+const closeDrainBudget = 2 * time.Second
+
 // Close stops the background worker and closes the MQTT client. It is
-// called once, at shutdown, so idempotence is not required. Closing quit
-// first stops the worker from picking up any *new* Sync or job after this
-// point; Close deliberately does not wait for one already in flight to
-// finish (that could itself be stuck retrying a publish against a dead
-// broker) — it proceeds straight to closing the client, whose own
-// last-will "offline" send is bounded by its own short timeout regardless
-// of what the worker is still doing.
+// called once, at shutdown, so idempotence is not required.
+//
+// Close closes quit, then waits (up to closeDrainBudget) for the worker to
+// confirm — via done — that it has actually stopped, rather than closing
+// the underlying client the instant quit is closed. That distinction is the
+// fix: quit merely wakes the worker's select in syncWorker, which treats
+// jobs/syncCh/quit as equally ready and could just as easily pick the quit
+// case over a job enqueued moments earlier (Go picks pseudo-randomly among
+// ready cases) — so on quit the worker doesn't return immediately, it first
+// drains whatever is left (drainRemaining, syncqueue.go) and only then
+// closes done. Waiting for that signal, instead of assuming it's instant,
+// is what actually keeps the promise (see cmd/watchglass/main.go) that
+// watches drain their last publishes before MQTT announces offline — the
+// job and the sync stay on the single worker goroutine throughout, so
+// there's never a second goroutine racing it for the same channels.
+//
+// If the worker is stuck (e.g. a job retrying against a dead broker),
+// closeDrainBudget still bounds how long Close itself waits: past that, it
+// gives up on the worker and closes the client anyway rather than hang
+// shutdown forever. The worker goroutine may keep running in the
+// background after that — acceptable at process shutdown.
 func (p *Publisher) Close() {
 	close(p.quit)
+	select {
+	case <-p.done:
+	case <-time.After(closeDrainBudget):
+	}
 	p.c.Close()
 }
 
