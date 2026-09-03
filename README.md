@@ -6,8 +6,8 @@ push notification when that region's text or pixels change. Self-hosted, one
 binary, nothing leaves your network.
 
 > Early development. Core engine, web UI, RTSP/ffmpeg sources,
-> MQTT/Home Assistant discovery, and Docker packaging all work; tagged
-> binary releases and a published Home Assistant add-on are next.
+> MQTT/Home Assistant discovery, Docker packaging, and tagged binary
+> releases all work; a published Home Assistant add-on is next.
 
 ## Install
 
@@ -31,11 +31,10 @@ container.
 
 ### Binaries
 
-Once the first tag (`v0.1.0`) lands, prebuilt binaries for Linux, Windows,
-and macOS are attached to each
-[GitHub release](https://github.com/darrenhuai/watchglass/releases) — no Go
-toolchain required. ffmpeg and tesseract aren't bundled; install them
-separately if you need RTSP sources or OCR triggers.
+Grab the latest [release](https://github.com/darrenhuai/watchglass/releases)
+for prebuilt binaries — Linux, Windows, and macOS — no Go toolchain
+required. ffmpeg and tesseract aren't bundled; install them separately if
+you need RTSP sources or OCR triggers.
 
 ### From source (Go toolchain)
 
