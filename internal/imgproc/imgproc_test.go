@@ -141,3 +141,49 @@ func TestApplyGrayscaleAveragesColor(t *testing.T) {
 		t.Errorf("red luma should be mid-range, got %d", r)
 	}
 }
+
+func TestPercentChangedFastPathMatchesGeneric(t *testing.T) {
+	mk := func(seed uint8) *image.RGBA {
+		img := image.NewRGBA(image.Rect(0, 0, 63, 41)) // odd sizes on purpose
+		for y := 0; y < 41; y++ {
+			for x := 0; x < 63; x++ {
+				v := uint8((x*7 + y*13 + int(seed)*29) % 256)
+				img.Set(x, y, color.RGBA{R: v, G: v / 2, B: 255 - v, A: 255})
+			}
+		}
+		return img
+	}
+	a, b := mk(1), mk(9)
+	fast := PercentChanged(a, b, 32)
+	// Force the generic path by wrapping one argument so the type-assert fails.
+	slow := PercentChanged(a, wrapImage{b}, 32)
+	if fast != slow {
+		t.Errorf("fast=%v generic=%v — paths disagree", fast, slow)
+	}
+	// Sub-image (non-zero origin) through the fast path must also agree.
+	sub := mk(3).SubImage(image.Rect(5, 5, 40, 30)).(*image.RGBA)
+	sub2 := mk(4).SubImage(image.Rect(5, 5, 40, 30)).(*image.RGBA)
+	if got, want := PercentChanged(sub, sub2, 32), PercentChanged(wrapImage{sub}, wrapImage{sub2}, 32); got != want {
+		t.Errorf("subimage fast=%v generic=%v", got, want)
+	}
+}
+
+type wrapImage struct{ image.Image }
+
+func BenchmarkPercentChangedRGBA(b *testing.B) {
+	a := gray(1280, 720, 100)
+	bb := gray(1280, 720, 140)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PercentChanged(a, bb, 32)
+	}
+}
+
+func BenchmarkPercentChangedGeneric(b *testing.B) {
+	a := gray(1280, 720, 100)
+	bb := gray(1280, 720, 140)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PercentChanged(wrapImage{a}, wrapImage{bb}, 32)
+	}
+}

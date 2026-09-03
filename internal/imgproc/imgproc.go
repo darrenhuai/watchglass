@@ -33,6 +33,11 @@ func PercentChanged(a, b image.Image, tol uint8) float64 {
 	if ab.Dx() != bb.Dx() || ab.Dy() != bb.Dy() {
 		return 100
 	}
+	if ra, ok := a.(*image.RGBA); ok {
+		if rb, ok := b.(*image.RGBA); ok {
+			return percentChangedRGBA(ra, rb, tol)
+		}
+	}
 	total := ab.Dx() * ab.Dy()
 	if total == 0 {
 		return 0
@@ -58,6 +63,43 @@ func grayAt(img image.Image, x, y int) uint8 {
 	r, g, b, _ := img.At(x, y).RGBA()
 	// standard luma weights on 16-bit channel values, scaled to 8-bit
 	return uint8((299*r + 587*g + 114*b) / 1000 >> 8)
+}
+
+// percentChangedRGBA is PercentChanged specialized for the *image.RGBA pair
+// every runner produces (Crop always returns RGBA). Direct Pix access runs
+// an order of magnitude faster than the generic At() path on large regions,
+// which is what keeps big-region pixel watches cheap on small hardware.
+//
+// The luma arithmetic below must replicate grayAt's exact 16-bit path
+// (image/color.RGBA.RGBA() expands each 8-bit channel c8 to 16-bit via
+// c8*0x101 before the standard-weights divide-and-shift). A naive 8-bit
+// reformulation is not always bit-identical to the 16-bit one because of
+// division-boundary rounding, so we scale up by 0x101 here too before
+// dividing — see TestPercentChangedFastPathMatchesGeneric, which pins this.
+func percentChangedRGBA(a, b *image.RGBA, tol uint8) float64 {
+	w, h := a.Bounds().Dx(), a.Bounds().Dy()
+	total := w * h
+	if total == 0 {
+		return 0
+	}
+	changed := 0
+	for y := 0; y < h; y++ {
+		ra := a.Pix[a.PixOffset(a.Bounds().Min.X, a.Bounds().Min.Y+y):]
+		rb := b.Pix[b.PixOffset(b.Bounds().Min.X, b.Bounds().Min.Y+y):]
+		for x := 0; x < w; x++ {
+			o := x * 4
+			ga := int((299*uint32(ra[o])*0x101 + 587*uint32(ra[o+1])*0x101 + 114*uint32(ra[o+2])*0x101) / 1000 >> 8)
+			gb := int((299*uint32(rb[o])*0x101 + 587*uint32(rb[o+1])*0x101 + 114*uint32(rb[o+2])*0x101) / 1000 >> 8)
+			d := ga - gb
+			if d < 0 {
+				d = -d
+			}
+			if d > int(tol) {
+				changed++
+			}
+		}
+	}
+	return float64(changed) / float64(total) * 100
 }
 
 // Apply runs the watch's preprocessing chain for OCR legibility:
