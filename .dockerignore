@@ -5,5 +5,5 @@ docs
 addon
 *.md
 watchglass.db
-config/
+/config/
 *.db-journal
