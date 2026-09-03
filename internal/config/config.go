@@ -228,7 +228,8 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+	// 0o600: the file can hold a plaintext MQTT password (config.MQTT.Password).
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

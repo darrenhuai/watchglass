@@ -81,6 +81,10 @@ stops.
 Broker down? watchglass keeps watching and reconnects in the background —
 MQTT is never allowed to take the watcher down with it.
 
+The broker password lives in plaintext in `config.yaml` — keep the file
+private (watchglass writes it `0o600` on Unix); a secrets-manager story is
+future work.
+
 ### Snapshot in your push notifications
 
 Notifications to [ntfy](https://ntfy.sh) topics include the cropped image of
