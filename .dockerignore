@@ -1,0 +1,7 @@
+.git
+.github
+.internal
+docs
+addon
+*.md
+watchglass.db
