@@ -512,6 +512,12 @@ func TestSaveMaxIntervalAndHealthAfter(t *testing.T) {
 	if got.Watches[0].MaxInterval != 0 {
 		t.Errorf("empty max_interval should clear it, got %v", got.Watches[0].MaxInterval)
 	}
+	// Empty health_after saves as 0, but config.Load runs Validate() on
+	// every load, which replaces a zero HealthAfter with the default (3) -
+	// so the reloaded watch should read back 3, not 0.
+	if got.Watches[0].HealthAfter != 3 {
+		t.Errorf("empty health_after should reload as the Validate default 3, got %d", got.Watches[0].HealthAfter)
+	}
 }
 
 func TestAuthCoversStaticAndAPI(t *testing.T) {
