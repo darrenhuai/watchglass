@@ -332,10 +332,10 @@ func TestHistoryDaysNormalization(t *testing.T) {
 		in, want int
 		wantErr  bool
 	}{
-		{0, 30, false}, // absent/zero -> default 30
-		{7, 7, false},  // explicit positive kept
-		{-1, 0, false}, // -1 -> forever (normalized to 0 = no pruning)
-		{-2, 0, true},  // anything below -1 rejected
+		{0, 30, false},  // absent/zero -> default 30
+		{7, 7, false},   // explicit positive kept
+		{-1, -1, false}, // -1 -> forever (preserved verbatim)
+		{-2, 0, true},   // anything below -1 rejected
 	}
 	for _, c := range cases {
 		cfg := mk(c.in)
@@ -376,5 +376,27 @@ func TestAuthAndHistoryRoundTrip(t *testing.T) {
 	}
 	if got.HistoryDays != 7 || got.Auth == nil || got.Auth.Username != "u" || got.Auth.Password != "p" {
 		t.Errorf("round trip lost fields: days=%d auth=%+v", got.HistoryDays, got.Auth)
+	}
+}
+
+func TestForeverRetentionSurvivesRoundTrip(t *testing.T) {
+	cfg := &Config{
+		HistoryDays: -1, // forever
+		Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}},
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HistoryDays != -1 {
+		t.Errorf("forever retention (-1) did not survive round-trip: got %d, want -1", got.HistoryDays)
 	}
 }

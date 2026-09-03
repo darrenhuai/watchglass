@@ -104,7 +104,9 @@ type Watch struct {
 
 type Config struct {
 	// HistoryDays is how many days of readings to keep in the history
-	// database. Default 30; -1 keeps everything forever.
+	// database. Default 30; -1 keeps everything forever and is preserved
+	// verbatim through save/load cycles (doesn't omitempty away). Consumers
+	// gate pruning on HistoryDays > 0.
 	HistoryDays int     `yaml:"history_days,omitempty"`
 	Auth        *Auth   `yaml:"auth,omitempty"`
 	MQTT        *MQTT   `yaml:"mqtt,omitempty"`
@@ -172,8 +174,6 @@ func (c *Config) Validate() error {
 	switch {
 	case c.HistoryDays == 0:
 		c.HistoryDays = 30
-	case c.HistoryDays == -1:
-		c.HistoryDays = 0 // forever: downstream treats 0 as "never prune"
 	case c.HistoryDays < -1:
 		return fmt.Errorf("history_days must be a positive day count, 0 (default 30), or -1 (forever)")
 	}
