@@ -46,6 +46,14 @@ func run(configPath, dbPath, listen string) error {
 	}
 	defer store.Close()
 
+	var pruneDone chan struct{}
+	// Defer join before closing store: ctx.Done() → pruneDone → store.Close() (LIFO).
+	defer func() {
+		if pruneDone != nil {
+			<-pruneDone
+		}
+	}()
+
 	var engine ocr.Engine
 	if _, err := exec.LookPath("tesseract"); err == nil {
 		engine = ocr.NewTesseract()
@@ -114,7 +122,9 @@ func run(configPath, dbPath, listen string) error {
 			}
 		}
 		prune()
+		pruneDone = make(chan struct{})
 		go func() {
+			defer close(pruneDone)
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()
 			for {
