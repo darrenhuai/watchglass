@@ -32,3 +32,35 @@ jobs:
         run: go test ./...
         env:
           CGO_ENABLED: "0"
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t watchglass:ci .
+      - name: Smoke test container
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          echo "watches: []" > "$workdir/config.yaml"
+          docker run -d --name watchglass-ci \
+            --user "$(id -u):$(id -g)" \
+            -p 127.0.0.1:18080:8080 \
+            -v "$workdir:/config" \
+            watchglass:ci
+          ok=""
+          for i in $(seq 1 20); do
+            if curl -fs -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/ | grep -q "^200$"; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          echo "--- container logs ---"
+          docker logs watchglass-ci || true
+          docker rm -f watchglass-ci
+          if [ -z "$ok" ]; then
+            echo "::error::watchglass container did not respond with HTTP 200 on / within 20s"
+            exit 1
+          fi
+          echo "watchglass container responded 200 OK"
