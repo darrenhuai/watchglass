@@ -3,6 +3,11 @@ services:
     build: .
     container_name: watchglass
     restart: unless-stopped
+    # Override PUID/PGID to match the owner of ./config on your host
+    # (e.g. Synology/Unraid/TrueNAS often aren't uid 1000); create the
+    # dir first with `mkdir -p ./config`. The image's baked-in uid 1000
+    # user only applies when nothing is bind-mounted over /config.
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "127.0.0.1:8080:8080"   # loopback by default; widen deliberately
     volumes:
