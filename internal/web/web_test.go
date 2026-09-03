@@ -458,6 +458,62 @@ func TestNoAuthBlockMeansOpen(t *testing.T) {
 	}
 }
 
+func TestSaveRestartsWithCanonicalDefaults(t *testing.T) {
+	s, _ := newTestServer(t)
+	var restarted []config.Watch
+	// Intercept at the supervisor's source factory: record the watch each
+	// (re)start builds a source for.
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) {
+		restarted = append(restarted, w)
+		return &fakeSource{img: testImage()}, nil
+	}
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "tthreshold": {"10"},
+		"confirm": {""}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	if len(restarted) == 0 {
+		t.Fatal("restart never reached the source factory")
+	}
+	got := restarted[len(restarted)-1]
+	if got.Trigger.Confirm != 3 {
+		t.Errorf("running watch Confirm = %d, want Validate's default 3 (canonical config)", got.Trigger.Confirm)
+	}
+}
+
+func TestSaveMaxIntervalAndHealthAfter(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "tthreshold": {"10"},
+		"confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+		"max_interval": {"1m"}, "health_after": {"5"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, _ := config.Load(cfgPath)
+	w := got.Watches[0]
+	if time.Duration(w.MaxInterval) != time.Minute || w.HealthAfter != 5 {
+		t.Errorf("max_interval=%v health_after=%d", time.Duration(w.MaxInterval), w.HealthAfter)
+	}
+	// Empty max_interval means off (zero).
+	form.Set("max_interval", "")
+	form.Set("health_after", "")
+	if resp, _ := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("empty optional fields rejected: %d", resp.StatusCode)
+	}
+	got, _ = config.Load(cfgPath)
+	if got.Watches[0].MaxInterval != 0 {
+		t.Errorf("empty max_interval should clear it, got %v", got.Watches[0].MaxInterval)
+	}
+}
+
 func TestAuthCoversStaticAndAPI(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.mu.Lock()

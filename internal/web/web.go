@@ -239,11 +239,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, errSaveFailed) {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), statusFor(err))
 		return
 	}
 	// Start from the canonical, post-Validate watch rather than nw:
@@ -431,6 +427,18 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 			return base, fmt.Errorf("threshold: %w", err)
 		}
 	}
+	maxInterval := time.Duration(0)
+	if v := r.FormValue("max_interval"); v != "" {
+		if maxInterval, err = time.ParseDuration(v); err != nil {
+			return base, fmt.Errorf("max_interval: %w", err)
+		}
+	}
+	healthAfter := 0
+	if v := r.FormValue("health_after"); v != "" {
+		if healthAfter, err = strconv.Atoi(v); err != nil {
+			return base, fmt.Errorf("health_after: %w", err)
+		}
+	}
 	var notifyURLs []string
 	for _, line := range strings.Split(r.FormValue("notify"), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
@@ -441,6 +449,8 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 	w.Region = region
 	w.Preprocess = prep
 	w.Interval = config.Duration(interval)
+	w.MaxInterval = config.Duration(maxInterval)
+	w.HealthAfter = healthAfter
 	w.Notify = notifyURLs
 	w.Trigger = config.Trigger{
 		Type:      r.FormValue("ttype"),
@@ -451,6 +461,15 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 		Cooldown:  config.Duration(cooldown),
 	}
 	return w, nil
+}
+
+// statusFor maps a mutateConfig error to its HTTP status: config.Save I/O
+// failures are server errors, everything else is caller error.
+func statusFor(err error) int {
+	if errors.Is(err, errSaveFailed) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
 }
 
 // errSaveFailed marks a mutateConfig failure that happened at the
@@ -538,14 +557,15 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return fmt.Errorf("watch %q vanished", name)
 	})
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, errSaveFailed) {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), statusFor(err))
 		return
 	}
-	if err := s.sup.Restart(s.RunCtx, updated); err != nil {
+	canonical, ok := s.findWatch(name)
+	if !ok {
+		http.Error(w, fmt.Sprintf("watch %q vanished after save", name), http.StatusInternalServerError)
+		return
+	}
+	if err := s.sup.Restart(s.RunCtx, canonical); err != nil {
 		http.Error(w, fmt.Sprintf("saved, but restart failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -577,11 +597,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, errSaveFailed) {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), statusFor(err))
 		return
 	}
 	s.sup.Stop(name)

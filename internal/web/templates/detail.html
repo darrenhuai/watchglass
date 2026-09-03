@@ -39,6 +39,8 @@
         <label>Confirm <input name="confirm" type="number" min="1" value="{{.Watch.Trigger.Confirm}}"></label>
         <label>Cooldown <input name="cooldown" value="{{dur .Watch.Trigger.Cooldown}}"></label>
         <label>Interval <input name="interval" value="{{dur .Watch.Interval}}"></label>
+        <label>Max interval <input name="max_interval" value="{{if .Watch.MaxInterval}}{{dur .Watch.MaxInterval}}{{end}}" placeholder="off"></label>
+        <label>Health after <input name="health_after" type="number" min="1" value="{{.Watch.HealthAfter}}"></label>
       </fieldset>
       <fieldset>
         <legend>Preprocess (OCR only)</legend>

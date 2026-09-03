@@ -35,7 +35,9 @@
   var drag = null;
   canvas.addEventListener("pointerdown", function (e) {
     var b = canvas.getBoundingClientRect();
-    drag = { x0: (e.clientX - b.left) / b.width, y0: (e.clientY - b.top) / b.height };
+    var cx = Math.min(Math.max((e.clientX - b.left) / b.width, 0), 1);
+    var cy = Math.min(Math.max((e.clientY - b.top) / b.height, 0), 1);
+    drag = { x0: cx, y0: cy };
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", function (e) {
