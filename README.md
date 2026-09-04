@@ -243,7 +243,7 @@ Post-v1, roughly in priority order:
       installable (no published image)
 - [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
 - [ ] Native seven-segment decoder
-- [ ] Recipes gallery (community configs per device)
+- [x] Recipes gallery (community configs per device)
 - [ ] Template matching triggers ("this icon appeared")
 - [ ] Multi-region compound conditions ("A matches AND B > 200")
 - [ ] Optional VLM engine (opt-in, off by default, clearly labeled)

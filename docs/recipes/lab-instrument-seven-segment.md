@@ -26,12 +26,13 @@ this order:
    background — most LED and backlit LCD readouts are. Tesseract expects
    dark text on a light background; inverting flips the crop so segments
    read like ink on paper instead of the reverse.
-3. **`threshold`** — binarize once the polarity is right. Start around
-   120–160 and slide until the glow around each lit segment collapses to a
-   crisp edge with no soft halo. This matters more here than for any other
-   recipe: an LED segment's glow radius is often wider than the gap to its
-   neighbor, so too low a threshold value fuses adjacent segments (or whole
-   digits) into a blob no OCR model can read.
+3. **Binarize** (the `threshold` field in YAML) — binarize once the
+   polarity is right. Start around 120–160 and slide until the glow around
+   each lit segment collapses to a crisp edge with no soft halo. This
+   matters more here than for any other recipe: an LED segment's glow
+   radius is often wider than the gap to its neighbor, so too low a value
+   fuses adjacent segments (or whole digits) into a blob no OCR model can
+   read.
 4. **`upscale: 2`–`4`** — instrument readouts are usually a small patch of
    the frame. Nearest-neighbor upscaling hands tesseract more pixels to
    tell a segment from the 1-pixel gap next to it.
@@ -52,7 +53,7 @@ watches:
       upscale: 3
     trigger:
       type: numeric
-      pattern: "([0-9]{1,4}\\.?[0-9]?)"   # generous: 1-4 digits, optional decimal
+      pattern: "([0-9]{1,4}(?:\\.[0-9]+)?)"   # generous: 1-4 digits, optional full decimal
       op: gt
       threshold: 500
       confirm: 1
@@ -93,6 +94,16 @@ that poll (it doesn't error). Looser patterns fail less often; they also
 occasionally let garbage through, which is what `confirm` and `cooldown`
 exist to filter.
 
+Get the decimal part of the pattern right, not just the integer part: an
+earlier version of this pattern used `\.?[0-9]?` — an optional dot followed
+by *at most one* digit — which silently truncates any reading with two or
+more decimal digits ("500.36" extracts as 500.3, not 500.36). That's a
+value close enough to the real one to look plausible in a notification but
+wrong enough to misfire near a threshold, and nothing about it looks like
+an error — the trigger fires normally, just on the wrong number. The
+pattern above, `(?:\.[0-9]+)?`, captures every digit after the dot instead
+of just the first.
+
 `pixel_change` is the honest fallback when you don't actually need the
 number, just to know something changed — it compares raw pixels, so
 `preprocess` doesn't apply to it at all (preprocessing is OCR-only; pixel
@@ -114,3 +125,10 @@ misreads.
   do a job it wasn't built for. Treat any given set of preprocessing values
   here as a starting point for your specific instrument, camera, and
   lighting, not a value to copy verbatim and trust.
+- The value a `numeric` trigger fires on is whatever your `pattern`'s
+  capture group extracted, not necessarily what the display actually shows
+  — a pattern that's too narrow silently truncates or drops digits (as
+  above), and one that's too loose can grab a stray digit from a unit
+  label or neighboring reading in the same crop. Watch the reading strip
+  against the physical display for a while after any pattern change, not
+  just once, before trusting the extracted value near a threshold.

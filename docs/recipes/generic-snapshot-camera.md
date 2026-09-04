@@ -60,8 +60,8 @@ Open the watch in the web UI, drag a rectangle over the exact part of the
 frame you care about, and hit **Test this region**. That single button is
 the whole tuning workflow: it shows you the cropped, preprocessed image
 next to what the OCR engine actually read, so you can adjust the region and
-the `preprocess` sliders (grayscale, invert, threshold, upscale) against a
-live result instead of guessing. Keep the region as tight as you can — less
+the `preprocess` sliders — grayscale, invert, Binarize (the `threshold`
+field), upscale — against a live result instead of guessing. Keep the region as tight as you can — less
 background means less noise for both `pixel_change` and OCR triggers.
 
 `pixel_change` doesn't care what's in the frame; it's the fastest way to
