@@ -227,6 +227,14 @@ text; set `pattern` to a regex to extract a specific value instead — if the
 regex has a capture group, that group's text is parsed rather than the whole
 match.
 
+## Recipes
+
+Seeded, copy-paste `watches:` configs for common gear live in
+[docs/recipes](docs/recipes/): a generic snapshot camera, RTSP, a
+closed-firmware printer LCD, a server console/IPMI KVM, and a seven-segment
+lab instrument. Don't see your screen there — [open an
+issue](https://github.com/darrenhuai/watchglass/issues) and we'll add one.
+
 ## Roadmap
 
 Post-v1, roughly in priority order:
