@@ -166,6 +166,37 @@ every start regardless. With the compose file's default mapping
 warning expected and harmless; add an `auth:` block before widening that
 mapping to anything else.
 
+### Behind a reverse proxy
+
+`-base-path` mounts the UI under a URL prefix — e.g. `https://home.example.com/watchglass/`
+instead of its own subdomain or port — for a proxy that **strips the
+prefix** before forwarding. watchglass itself always serves at `/`; it never
+routes on the prefix. All `-base-path` does is prepend it to every link,
+form action, and redirect the UI writes into its own HTML, so the browser's
+next request already carries the prefix the proxy is about to strip back
+off. An nginx `location` block doing that strip looks like:
+
+    location /watchglass/ {
+        proxy_pass http://127.0.0.1:8080/;
+    }
+
+Note the trailing slash on both sides — that's what tells nginx to strip
+`/watchglass/` before forwarding. Pair it with:
+
+    go run ./cmd/watchglass -base-path /watchglass
+
+`-base-path` must start with `/`; a trailing slash is trimmed automatically,
+so `/watchglass` and `/watchglass/` are equivalent. Leaving it unset (the
+default) is unchanged, unprefixed behavior — nothing here matters unless
+you're proxying under a subpath.
+
+Because watchglass never generates an absolute self-URL (everything it
+writes is prefix-relative, per above), it has no need to read
+`X-Forwarded-Host`, `X-Forwarded-Proto`, or similar headers, and none of
+that needs to be configured on the proxy side. The [Authentication](#authentication)
+section above still applies in front of a proxy exactly as it does standalone —
+`-base-path` only changes URLs, not access control.
+
 ## History
 
 Every reading is recorded to a SQLite database at `-db` (default

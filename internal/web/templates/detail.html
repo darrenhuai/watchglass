@@ -1,18 +1,18 @@
 {{template "head" .}}
-<p><a href="/">&larr; all watches</a></p>
+<p><a href="{{u "/"}}">&larr; all watches</a></p>
 <h1>{{.Watch.Name}} {{if .Running}}<span class="conf-ok" style="font-size:0.8rem">running</span>{{else}}<span class="conf-low" style="font-size:0.8rem">stopped</span>{{end}}</h1>
 <p class="muted">{{.Watch.Source}}</p>
 <div class="row">
   <div>
-    <div id="stage" data-name="{{.Watch.Name}}">
-      <img id="snap" src="/watch/{{.Watch.Name}}/snapshot" alt="snapshot">
+    <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
+      <img id="snap" src="{{u "/watch/"}}{{.Watch.Name}}/snapshot" alt="snapshot">
       <canvas id="overlay"></canvas>
     </div>
     <p class="muted">Drag on the image to select the region to watch.</p>
     <div id="test-result"></div>
   </div>
   <div>
-    <form id="watchform" method="post" action="/watch/{{.Watch.Name}}/save">
+    <form id="watchform" method="post" action="{{u "/watch/"}}{{.Watch.Name}}/save">
       <input type="hidden" name="x" value="{{.Watch.Region.X}}">
       <input type="hidden" name="y" value="{{.Watch.Region.Y}}">
       <input type="hidden" name="w" value="{{.Watch.Region.W}}">
@@ -68,5 +68,5 @@
 </div>
 <h2>Live</h2>
 <div id="live"><p class="muted">loading…</p></div>
-<script src="/static/app.js"></script>
+<script src="{{u "/static/app.js"}}"></script>
 {{template "foot" .}}

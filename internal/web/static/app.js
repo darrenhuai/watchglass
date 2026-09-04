@@ -9,6 +9,7 @@
   var fx = form.elements["x"], fy = form.elements["y"],
       fw = form.elements["w"], fh = form.elements["h"];
   var name = stage.dataset.name;
+  var base = stage.dataset.base || "";
 
   function sizeCanvas() {
     canvas.width = img.clientWidth;
@@ -59,7 +60,7 @@
   document.getElementById("testbtn").addEventListener("click", function () {
     var el = document.getElementById("test-result");
     el.innerHTML = "<p class='muted'>testing…</p>";
-    fetch("/watch/" + encodeURIComponent(name) + "/test", {
+    fetch(base + "/watch/" + encodeURIComponent(name) + "/test", {
       method: "POST",
       body: new URLSearchParams(new FormData(form))
     }).then(function (resp) { return resp.text(); })
@@ -69,7 +70,7 @@
 
   var live = document.getElementById("live");
   function poll() {
-    fetch("/watch/" + encodeURIComponent(name) + "/live")
+    fetch(base + "/watch/" + encodeURIComponent(name) + "/live")
       .then(function (resp) { return resp.ok ? resp.text() : null; })
       .then(function (html) { if (html !== null) live.innerHTML = html; })
       .catch(function () {});

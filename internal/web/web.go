@@ -45,6 +45,19 @@ type Server struct {
 	// wires it through a non-blocking ordered queue for exactly this reason.
 	// The MQTT publisher uses it to resync discovery.
 	OnConfigChanged func(watches []config.Watch)
+	// BasePath, when non-empty, is prefixed to every link, form action, and
+	// redirect the UI generates (e.g. "/watchglass" put in front of
+	// "/watch/printer"). It exists for running behind a reverse proxy that
+	// serves watchglass under a subpath: the proxy strips the prefix before
+	// forwarding, so watchglass's own routes stay mounted at "/" exactly as
+	// today (Handler below never sees or matches BasePath) — only what
+	// watchglass writes back out needs the prefix reapplied. main sets this
+	// once, before Handler is called, after validating it starts with "/"
+	// and trimming any trailing slash; leaving it empty (the default) is
+	// byte-identical to the pre-BasePath behavior. Templates read it via the
+	// "u" FuncMap entry's closure over Server, so it must not change once
+	// serving starts.
+	BasePath string
 
 	cfgPath string
 	mu      sync.Mutex // guards cfg
@@ -69,16 +82,7 @@ type Server struct {
 }
 
 func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *state.Registry, engine ocr.Engine, logf func(string, ...any)) (*Server, error) {
-	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"b64png": func(b []byte) template.URL {
-			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
-		},
-		"dur": func(d config.Duration) string { return time.Duration(d).String() },
-	}).ParseFS(assets, "templates/*.html")
-	if err != nil {
-		return nil, fmt.Errorf("parse templates: %w", err)
-	}
-	return &Server{
+	s := &Server{
 		NewSource: source.For,
 		RunCtx:    context.Background(),
 		cfgPath:   cfgPath,
@@ -86,9 +90,25 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		sup:       sup,
 		reg:       reg,
 		engine:    engine,
-		tmpl:      tmpl,
 		logf:      logf,
-	}, nil
+	}
+	// "u" closes over s rather than capturing BasePath by value: New builds
+	// and parses templates before main has set BasePath (it's assigned on
+	// the returned *Server afterward), so the func must read it fresh on
+	// each call. That's safe because BasePath is set once, before Handler
+	// is ever called, and never mutated while serving.
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"b64png": func(b []byte) template.URL {
+			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
+		},
+		"dur": func(d config.Duration) string { return time.Duration(d).String() },
+		"u":   func(p string) string { return s.BasePath + p },
+	}).ParseFS(assets, "templates/*.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse templates: %w", err)
+	}
+	s.tmpl = tmpl
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -263,12 +283,17 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		s.logf("ERROR: create %s: watch saved to config.yaml but failed to start: %v", name, err)
 	}
 	s.notifyConfigChanged()
-	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
+	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
 }
 
 type detailData struct {
 	Watch   config.Watch
 	Running bool
+	// Base carries BasePath into the page so app.js can prefix the fetch
+	// URLs it builds client-side (the "u" FuncMap func only covers
+	// server-rendered links) — see the #stage data-base attribute in
+	// detail.html.
+	Base string
 }
 
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +308,7 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 			running = true
 		}
 	}
-	s.render(w, "detail.html", detailData{Watch: wc, Running: running})
+	s.render(w, "detail.html", detailData{Watch: wc, Running: running, Base: s.BasePath})
 }
 
 // parseRegion reads and validates a normalized region (0.0-1.0) from form
@@ -570,7 +595,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyConfigChanged()
-	http.Redirect(w, r, "/watch/"+name, http.StatusSeeOther)
+	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
 }
 
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
@@ -603,5 +628,5 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 	s.sup.Stop(name)
 	s.reg.Drop(name)
 	s.notifyConfigChanged()
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, s.BasePath+"/", http.StatusSeeOther)
 }

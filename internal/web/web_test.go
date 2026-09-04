@@ -533,3 +533,39 @@ func TestAuthCoversStaticAndAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestBasePathPrefixesLinksAndRedirects(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.BasePath = "/wg"
+	h := s.Handler()
+
+	_, body := get(t, h, "/")
+	for _, want := range []string{`href="/wg/watch/printer"`, `action="/wg/watch/new"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index missing %s", want)
+		}
+	}
+	_, body = get(t, h, "/watch/printer")
+	for _, want := range []string{`src="/wg/static/app.js"`, `data-base="/wg"`, `action="/wg/watch/printer/save"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail missing %s", want)
+		}
+	}
+	resp, _ := postForm(t, h, "/watch/new", url.Values{
+		"name": {"oven"}, "source": {"http://cam2/snap.jpg"},
+	})
+	if resp.StatusCode != 303 {
+		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/wg/watch/oven" {
+		t.Errorf("redirect Location = %q, want /wg/watch/oven", loc)
+	}
+}
+
+func TestEmptyBasePathUnchanged(t *testing.T) {
+	s, _ := newTestServer(t)
+	_, body := get(t, s.Handler(), "/")
+	if !strings.Contains(body, `href="/watch/printer"`) {
+		t.Error("empty base path must leave URLs bare")
+	}
+}

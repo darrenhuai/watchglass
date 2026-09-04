@@ -27,15 +27,38 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	dbPath := flag.String("db", "watchglass.db", "path to sqlite history database")
 	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; no auth yet)")
+	basePath := flag.String("base-path", "", "URL path prefix for links/redirects when running behind a reverse proxy that strips it (e.g. /watchglass); empty (default) leaves the UI unprefixed")
 	flag.Parse()
 
-	if err := run(*configPath, *dbPath, *listen); err != nil {
+	bp, err := normalizeBasePath(*basePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "watchglass:", err)
+		os.Exit(1)
+	}
+
+	if err := run(*configPath, *dbPath, *listen, bp); err != nil {
 		fmt.Fprintln(os.Stderr, "watchglass:", err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath, dbPath, listen string) error {
+// normalizeBasePath validates and trims -base-path. Empty stays empty — the
+// default, byte-identical to pre-BasePath behavior. A non-empty value must
+// start with "/" (the actual mistake this guards against: a bare
+// "watchglass" would silently produce relative links); one trailing slash
+// is trimmed for convenience so "-base-path /watchglass/" and
+// "-base-path /watchglass" behave the same.
+func normalizeBasePath(bp string) (string, error) {
+	if bp == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(bp, "/") {
+		return "", fmt.Errorf("-base-path %q must start with \"/\" (e.g. -base-path /watchglass)", bp)
+	}
+	return strings.TrimSuffix(bp, "/"), nil
+}
+
+func run(configPath, dbPath, listen, basePath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -151,6 +174,7 @@ func run(configPath, dbPath, listen string) error {
 		return err
 	}
 	ws.RunCtx = ctx
+	ws.BasePath = basePath
 	if pub != nil {
 		ws.OnConfigChanged = pub.SyncAsync
 	}
