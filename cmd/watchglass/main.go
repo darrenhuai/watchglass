@@ -122,12 +122,30 @@ func run(configPath, dbPath, listen, basePath string) error {
 	defer sup.StopAll()
 
 	if cfg.MQTT != nil {
-		mc, err := hass.Connect(*cfg.MQTT, log.Printf)
+		// Bug 4: the initial discovery sync used to fire right after
+		// Connect() returned, which races paho's async handshake — with
+		// SetConnectRetry(true), IsConnected() can read true while still
+		// mid-CONNECT, and publishes made in that window get destroyed by
+		// paho's own CleanSession reset once the real connect lands, so
+		// the first sync's discovery configs silently vanish. Fixed by
+		// running the sync from the onReady callback instead, which
+		// BuildOptions invokes only on a real established connection —
+		// see internal/hass/client.go for the full mechanism. watches is
+		// snapshotted here so the closure doesn't read cfg.Watches (a
+		// slice header) if that field is ever reassigned later; pub is
+		// read at fire time and assigned immediately below — the connect
+		// handshake takes at least milliseconds, so the nil check exists
+		// only for a theoretical earlier fire, not an expected one.
+		watches := cfg.Watches
+		mc, err := hass.Connect(*cfg.MQTT, log.Printf, func() {
+			if pub != nil {
+				pub.SyncAsync(watches)
+			}
+		})
 		if err != nil {
 			return fmt.Errorf("mqtt: %w", err)
 		}
 		pub = hass.NewPublisher(mc, *cfg.MQTT, log.Printf)
-		pub.SyncAsync(cfg.Watches)
 		sup.OnEvent = pub.OnEvent
 		sup.OnHealth = pub.OnHealth
 		log.Printf("mqtt: publishing to %s (discovery prefix %s)", cfg.MQTT.Broker, cfg.MQTT.DiscoveryPrefix)
@@ -171,6 +189,10 @@ func run(configPath, dbPath, listen, basePath string) error {
 	ws.RunCtx = ctx
 	ws.BasePath = basePath
 	if pub != nil {
+		// UI-triggered syncs run against an already-established connection
+		// in practice; even one that lands mid-reconnect is harmless — the
+		// next on-connect sync (see the onReady wiring above) republishes
+		// the current watch list anyway.
 		ws.OnConfigChanged = pub.SyncAsync
 	}
 
