@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,5 +399,170 @@ func TestForeverRetentionSurvivesRoundTrip(t *testing.T) {
 	}
 	if got.HistoryDays != -1 {
 		t.Errorf("forever retention (-1) did not survive round-trip: got %d, want -1", got.HistoryDays)
+	}
+}
+
+// TestValidateTriggerConstraints mirrors trigger.New's exact constraints so
+// a config that passes Validate can never fail supervisor.Start on a
+// per-watch basis (Bug 1: a config that Validate waves through but Start
+// rejects gets persisted, and the NEXT daemon boot crash-loops on it).
+func TestValidateTriggerConstraints(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region: Region{X: 0, Y: 0, W: 1, H: 1},
+		}}}
+	}
+	cases := []struct {
+		name    string
+		trigger Trigger
+		wantErr bool
+	}{
+		{"pixel_change zero threshold", Trigger{Type: "pixel_change", Threshold: 0}, true},
+		{"pixel_change negative threshold", Trigger{Type: "pixel_change", Threshold: -5}, true},
+		{"pixel_change positive threshold ok", Trigger{Type: "pixel_change", Threshold: 10}, false},
+		{"ocr_match missing pattern", Trigger{Type: "ocr_match"}, true},
+		{"ocr_match empty pattern", Trigger{Type: "ocr_match", Pattern: ""}, true},
+		{"ocr_match unparseable regex", Trigger{Type: "ocr_match", Pattern: "("}, true},
+		{"ocr_match good pattern", Trigger{Type: "ocr_match", Pattern: "(?i)done"}, false},
+		{"numeric missing op", Trigger{Type: "numeric", Threshold: 10}, true},
+		{"numeric bad op", Trigger{Type: "numeric", Op: "eq", Threshold: 10}, true},
+		{"numeric op with unparseable pattern", Trigger{Type: "numeric", Op: "gt", Pattern: "(", Threshold: 10}, true},
+		{"numeric good op, default pattern", Trigger{Type: "numeric", Op: "gt", Threshold: 10}, false},
+		{"numeric good op, explicit pattern", Trigger{Type: "numeric", Op: "lt", Pattern: `Temp: (\d+)C`, Threshold: 10}, false},
+	}
+	for _, c := range cases {
+		cfg := base()
+		cfg.Watches[0].Trigger = c.trigger
+		err := cfg.Validate()
+		if c.wantErr && err == nil {
+			t.Errorf("%s: expected error, got nil", c.name)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		}
+	}
+}
+
+// TestValidateNotifyURLs is the second half of Bug 1: a notify URL that
+// can't even parse as a URL with a scheme would previously sail through
+// Validate and only blow up in supervisor.Start's shoutrrr.CreateSender.
+func TestValidateNotifyURLs(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	empty := base()
+	empty.Watches[0].Notify = []string{""}
+	if err := empty.Validate(); err == nil {
+		t.Error("empty notify URL: expected error")
+	}
+	noScheme := base()
+	noScheme.Watches[0].Notify = []string{"not a url with spaces and no scheme"}
+	if err := noScheme.Validate(); err == nil {
+		t.Error("notify URL without scheme: expected error")
+	}
+	bareHost := base()
+	bareHost.Watches[0].Notify = []string{"ntfy.sh/topic"}
+	if err := bareHost.Validate(); err == nil {
+		t.Error("scheme-less notify URL: expected error")
+	}
+	ok := base()
+	ok.Watches[0].Notify = []string{"ntfy://ntfy.sh/topic", "discord://token@id", "generic+https://host/path"}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid notify URLs rejected: %v", err)
+	}
+}
+
+// TestValidateRejectsUnroutableNames is Bug 6: a watch name containing
+// '/', '?', '#', or control characters produces a URL the web UI's own
+// routes (/watch/{name}, /watch/{name}/save, ...) can never address again.
+func TestValidateRejectsUnroutableNames(t *testing.T) {
+	mk := func(name string) *Config {
+		return &Config{Watches: []Watch{{
+			Name: name, Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	bad := []string{
+		"kitchen/oven", "a?b", "x#y", "a\nb",
+		"", " leading space", "trailing space ", "\ttab-prefixed",
+	}
+	for _, name := range bad {
+		if err := mk(name).Validate(); err == nil {
+			t.Errorf("name %q: expected error", name)
+		}
+	}
+	good := []string{"kitchen oven", "3d printer bay 2", "厨房烤箱", "a-b_c.d"}
+	for _, name := range good {
+		if err := mk(name).Validate(); err != nil {
+			t.Errorf("name %q: unexpected error: %v", name, err)
+		}
+	}
+}
+
+// TestValidateRejectsPixelChangeNonPositiveThreshold is a minor: threshold
+// <= 0 fires on every tick since any diff percentage satisfies pct >= 0.
+func TestValidateRejectsPixelChangeNonPositiveThreshold(t *testing.T) {
+	mk := func(threshold float64) *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: threshold},
+		}}}
+	}
+	if err := mk(0).Validate(); err == nil {
+		t.Error("threshold 0: expected error")
+	}
+	if err := mk(-1).Validate(); err == nil {
+		t.Error("negative threshold: expected error")
+	}
+	if err := mk(20).Validate(); err != nil {
+		t.Errorf("positive threshold rejected: %v", err)
+	}
+}
+
+// TestValidateRejectsNonFiniteFloats is the other minor: NaN silently
+// bypasses every plain comparison (NaN < x, NaN > x, NaN <= x are all
+// false), so a NaN region or threshold slips through the existing bounds
+// checks untouched.
+func TestValidateRejectsNonFiniteFloats(t *testing.T) {
+	base := func() *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/s.jpg",
+			Region:  Region{X: 0, Y: 0, W: 1, H: 1},
+			Trigger: Trigger{Type: "pixel_change", Threshold: 10},
+		}}}
+	}
+	fields := []struct {
+		name string
+		set  func(*Config, float64)
+	}{
+		{"region.x", func(c *Config, v float64) { c.Watches[0].Region.X = v }},
+		{"region.y", func(c *Config, v float64) { c.Watches[0].Region.Y = v }},
+		{"region.w", func(c *Config, v float64) { c.Watches[0].Region.W = v }},
+		{"region.h", func(c *Config, v float64) { c.Watches[0].Region.H = v }},
+		{"trigger.threshold", func(c *Config, v float64) { c.Watches[0].Trigger.Threshold = v }},
+	}
+	for _, f := range fields {
+		nan := base()
+		f.set(nan, math.NaN())
+		if err := nan.Validate(); err == nil {
+			t.Errorf("%s = NaN: expected error", f.name)
+		}
+		posInf := base()
+		f.set(posInf, math.Inf(1))
+		if err := posInf.Validate(); err == nil {
+			t.Errorf("%s = +Inf: expected error", f.name)
+		}
+		negInf := base()
+		f.set(negInf, math.Inf(-1))
+		if err := negInf.Validate(); err == nil {
+			t.Errorf("%s = -Inf: expected error", f.name)
+		}
 	}
 }

@@ -3,9 +3,13 @@ package config
 
 import (
 	"fmt"
+	"math"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -117,6 +121,38 @@ var validTypes = map[string]bool{
 	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true,
 }
 
+// validWatchName rejects names that would make a watch unaddressable
+// through the web UI's own routes (/watch/{name}, /watch/{name}/save, ...):
+// '/' breaks path segmentation, '?' and '#' truncate the path at the query
+// string / fragment, and control characters (including bare newlines) are
+// never legitimate in a display name. Leading/trailing whitespace is
+// rejected outright rather than silently trimmed, since the create handler
+// already trims before this runs — any survives-to-here whitespace means a
+// caller (e.g. a saved config.yaml hand-edited or written by another tool)
+// bypassed that.
+func validWatchName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(name) != name {
+		return fmt.Errorf("name %q must not have leading or trailing whitespace", name)
+	}
+	for _, r := range name {
+		if r == '/' || r == '?' || r == '#' || unicode.IsControl(r) {
+			return fmt.Errorf("name %q must not contain '/', '?', '#', or control characters", name)
+		}
+	}
+	return nil
+}
+
+// nonFinite reports whether v is NaN or +/-Inf. Plain comparisons (<, <=,
+// >, >=) are all false against NaN, so bounds checks like "x < 0" silently
+// let a NaN through; this must be checked explicitly wherever a float
+// crosses from user input (web form or hand-edited YAML) into Validate.
+func nonFinite(v float64) bool {
+	return math.IsNaN(v) || math.IsInf(v, 0)
+}
+
 // SourceKind classifies a watch's source URL into the source tier that can
 // read it: "http" for plain snapshot URLs (pure Go, no dependencies) or
 // "ffmpeg" for anything needing a decoder subprocess.
@@ -180,8 +216,8 @@ func (c *Config) Validate() error {
 	seen := map[string]bool{}
 	for i := range c.Watches {
 		w := &c.Watches[i]
-		if w.Name == "" {
-			return fmt.Errorf("watch %d: name is required", i)
+		if err := validWatchName(w.Name); err != nil {
+			return fmt.Errorf("watch %d: %w", i, err)
 		}
 		if seen[w.Name] {
 			return fmt.Errorf("duplicate watch name %q", w.Name)
@@ -209,11 +245,46 @@ func (c *Config) Validate() error {
 			w.HealthAfter = 3
 		}
 		r := w.Region
+		if nonFinite(r.X) || nonFinite(r.Y) || nonFinite(r.W) || nonFinite(r.H) {
+			return fmt.Errorf("watch %q: region must be finite", w.Name)
+		}
 		if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 1 || r.Y+r.H > 1 {
 			return fmt.Errorf("watch %q: region must be normalized 0-1 with positive size", w.Name)
 		}
 		if !validTypes[w.Trigger.Type] {
 			return fmt.Errorf("watch %q: unknown trigger type %q", w.Name, w.Trigger.Type)
+		}
+		if nonFinite(w.Trigger.Threshold) {
+			return fmt.Errorf("watch %q: trigger threshold must be finite", w.Name)
+		}
+		// Mirror trigger.New's exact constraints so a config that passes
+		// Validate can never fail supervisor.Start: a config that's wrong in
+		// a way only Start catches gets persisted anyway (the web UI has
+		// already shown success), and the NEXT daemon boot crash-loops on
+		// the very same watch it just failed to (re)start.
+		switch w.Trigger.Type {
+		case "ocr_match":
+			if w.Trigger.Pattern == "" {
+				return fmt.Errorf("watch %q: trigger: ocr_match requires a pattern", w.Name)
+			}
+			if _, err := regexp.Compile(w.Trigger.Pattern); err != nil {
+				return fmt.Errorf("watch %q: trigger: pattern: %w", w.Name, err)
+			}
+		case "numeric":
+			if w.Trigger.Op != "gt" && w.Trigger.Op != "lt" {
+				return fmt.Errorf("watch %q: trigger: numeric op must be gt or lt, got %q", w.Name, w.Trigger.Op)
+			}
+			// Pattern is optional for numeric (trigger.New falls back to a
+			// generic number pattern); only validate it when set.
+			if w.Trigger.Pattern != "" {
+				if _, err := regexp.Compile(w.Trigger.Pattern); err != nil {
+					return fmt.Errorf("watch %q: trigger: pattern: %w", w.Name, err)
+				}
+			}
+		case "pixel_change":
+			if w.Trigger.Threshold <= 0 {
+				return fmt.Errorf("watch %q: trigger: pixel_change threshold must be > 0", w.Name)
+			}
 		}
 		if w.Trigger.Confirm == 0 {
 			w.Trigger.Confirm = 3
@@ -223,6 +294,20 @@ func (c *Config) Validate() error {
 		}
 		if w.Preprocess.Upscale < 0 || w.Preprocess.Upscale > 4 {
 			return fmt.Errorf("watch %q: preprocess upscale must be 0-4", w.Name)
+		}
+		// Notify URLs: cheap sanity via url.Parse + a non-empty scheme.
+		// Deliberately does NOT call shoutrrr.CreateSender here (that's a
+		// per-service network/credential-shaped validation this layer isn't
+		// meant to duplicate) — just enough to reject the empty/garbage
+		// strings that would otherwise only surface as a Start failure.
+		for _, n := range w.Notify {
+			if strings.TrimSpace(n) == "" {
+				return fmt.Errorf("watch %q: notify: empty URL", w.Name)
+			}
+			u, err := url.Parse(n)
+			if err != nil || u.Scheme == "" {
+				return fmt.Errorf("watch %q: notify: invalid URL %q (must include a scheme, e.g. ntfy://...)", w.Name, n)
+			}
 		}
 	}
 	return nil
