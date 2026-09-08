@@ -122,7 +122,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /watch/{name}/test", s.testRegion)
 	mux.HandleFunc("POST /watch/{name}/save", s.save)
 	mux.HandleFunc("POST /watch/{name}/delete", s.remove)
-	return s.withAuth(mux)
+	// cop rejects cross-origin browser POSTs (via Sec-Fetch-Site, falling
+	// back to Origin-vs-Host) to the four mutation routes above — CSRF
+	// protection for /watch/new, /watch/{name}/test, /save, and /delete.
+	// Non-browser clients (curl, scripts) send neither header and are
+	// unaffected; GET/HEAD/OPTIONS are always allowed regardless.
+	//
+	// Wrapped INSIDE withAuth (auth runs first): an unauthenticated request
+	// gets a plain 401 without also probing whether it would have passed
+	// the cross-origin check, and curl-with-Basic-Auth automation — which
+	// carries no Sec-Fetch-Site/Origin headers either way — keeps working
+	// unchanged on both layers.
+	cop := http.NewCrossOriginProtection()
+	return s.withAuth(cop.Handler(mux))
 }
 
 // withAuth enforces HTTP Basic over the whole UI when an auth block is

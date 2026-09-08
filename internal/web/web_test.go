@@ -569,3 +569,57 @@ func TestEmptyBasePathUnchanged(t *testing.T) {
 		t.Error("empty base path must leave URLs bare")
 	}
 }
+
+// postFormWithHeaders is postForm plus the ability to set extra headers
+// (Sec-Fetch-Site, Origin, ...) for the cross-origin-protection tests.
+func postFormWithHeaders(t *testing.T, h http.Handler, path string, form url.Values, headers map[string]string) (*http.Response, string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+// Bug 5: the four mutation POST routes had no CSRF protection. A
+// same-origin browser POST or a non-browser client (curl, no fetch
+// metadata headers) must still work; a cross-site browser POST must not.
+func TestCrossOriginProtectionBlocksCrossSitePOST(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	resp, body := postFormWithHeaders(t, s.Handler(), "/watch/printer/delete", url.Values{},
+		map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-site POST: status = %d, want 403; body: %s", resp.StatusCode, body)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Watches) != 1 {
+		t.Errorf("cross-site POST must not have taken effect: watches = %d, want 1", len(got.Watches))
+	}
+}
+
+func TestCrossOriginProtectionAllowsSameOriginPOST(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, body := postFormWithHeaders(t, s.Handler(), "/watch/printer/delete", url.Values{},
+		map[string]string{"Sec-Fetch-Site": "same-origin"})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("same-origin POST: status = %d, want 303; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestCrossOriginProtectionAllowsNoFetchMetadataPOST(t *testing.T) {
+	s, _ := newTestServer(t)
+	// No Sec-Fetch-Site and no Origin header at all: curl and other
+	// non-browser clients must keep working.
+	resp, body := postFormWithHeaders(t, s.Handler(), "/watch/printer/delete", url.Values{}, nil)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("no-fetch-metadata POST: status = %d, want 303; body: %s", resp.StatusCode, body)
+	}
+}
