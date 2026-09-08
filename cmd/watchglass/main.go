@@ -162,12 +162,7 @@ func run(configPath, dbPath, listen, basePath string) error {
 		}()
 	}
 
-	for _, w := range cfg.Watches {
-		if err := sup.Start(ctx, w); err != nil {
-			return err
-		}
-		log.Printf("watching %q (%s every %v)", w.Name, w.Trigger.Type, time.Duration(w.Interval))
-	}
+	startWatches(ctx, sup, cfg.Watches, log.Printf)
 
 	ws, err := web.New(configPath, cfg, sup, reg, engine, log.Printf)
 	if err != nil {
@@ -197,4 +192,26 @@ func run(configPath, dbPath, listen, basePath string) error {
 		return err
 	}
 	return nil
+}
+
+// startWatches starts every configured watch, logging and continuing past
+// any that fail to start rather than aborting: config.Validate (called by
+// Load, above) rejects everything it knows how to check, but a Start
+// failure is still possible for anything Validate can't see from the
+// static config alone. Bug 1: this loop used to return the first Start
+// error, which made run() (and so main) exit non-zero — fine on a normal
+// launch, but fatal at boot under a restart-always supervisor
+// (docker restart: unless-stopped): the very next start hits the exact
+// same failing watch and exits again, crash-looping the whole daemon
+// (every OTHER watch included) until someone hand-edits config.yaml. Since
+// the web UI is what lets a user fix a bad watch's config in the first
+// place, it must come up regardless of any individual watch's fate.
+func startWatches(ctx context.Context, sup *supervisor.Supervisor, watches []config.Watch, logf func(string, ...any)) {
+	for _, w := range watches {
+		if err := sup.Start(ctx, w); err != nil {
+			logf("ERROR: watch %q failed to start: %v (fix its config in the web UI or config.yaml)", w.Name, err)
+			continue
+		}
+		logf("watching %q (%s every %v)", w.Name, w.Trigger.Type, time.Duration(w.Interval))
+	}
 }
