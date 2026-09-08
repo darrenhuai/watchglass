@@ -91,29 +91,53 @@ func (e *Evaluator) ObserveText(s string) Event {
 		return Event{Reading: s} // no transition
 	}
 	prev, prevHas := e.stable, e.hasStable
-	e.stable, e.hasStable = s, true
 
+	// A cooldown DELAYS notification of a persisting new state rather than
+	// dropping it: when a would-be transition lands inside the cooldown
+	// window, e.stable/e.numCond are left untouched (instead of committing
+	// the suppressed edge) so that, if the new state still holds once the
+	// window ends, the next confirmed reading still sees prev as the old
+	// (pre-edge) state and fires the transition then. If the state reverted
+	// before expiry, the (non-edge) revert commits normally and nothing
+	// fires — it resolved on its own.
 	switch e.cfg.Type {
 	case "ocr_changed":
-		if prevHas && prev != s && !e.coolingDown() {
+		wouldFire := prevHas && prev != s
+		if wouldFire && e.coolingDown() {
+			return Event{Reading: s}
+		}
+		e.stable, e.hasStable = s, true
+		if wouldFire {
 			return e.fire(s, "text changed")
 		}
 	case "ocr_match":
-		if e.re.MatchString(s) && (!prevHas || !e.re.MatchString(prev)) && !e.coolingDown() {
+		wouldFire := e.re.MatchString(s) && (!prevHas || !e.re.MatchString(prev))
+		if wouldFire && e.coolingDown() {
+			return Event{Reading: s}
+		}
+		e.stable, e.hasStable = s, true
+		if wouldFire {
 			return e.fire(s, "pattern matched")
 		}
 	case "numeric":
 		v, ok := e.extract(s)
 		if !ok {
+			e.stable, e.hasStable = s, true
 			return Event{Reading: s}
 		}
 		cond := (e.cfg.Op == "gt" && v > e.cfg.Threshold) ||
 			(e.cfg.Op == "lt" && v < e.cfg.Threshold)
-		was := e.numCond
+		wouldFire := cond && !e.numCond
+		if wouldFire && e.coolingDown() {
+			return Event{Reading: s}
+		}
+		e.stable, e.hasStable = s, true
 		e.numCond = cond
-		if cond && !was && !e.coolingDown() {
+		if wouldFire {
 			return e.fire(s, fmt.Sprintf("value %v crossed threshold", v))
 		}
+	default:
+		e.stable, e.hasStable = s, true
 	}
 	return Event{Reading: s}
 }

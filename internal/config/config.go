@@ -81,12 +81,16 @@ type Region struct {
 }
 
 type Trigger struct {
-	Type      string   `yaml:"type"`      // pixel_change | ocr_match | ocr_changed | numeric
-	Pattern   string   `yaml:"pattern"`   // regex for ocr_match / numeric extraction
-	Op        string   `yaml:"op"`        // numeric: gt | lt
-	Threshold float64  `yaml:"threshold"` // pixel_change: percent 0-100; numeric: compare value
-	Confirm   int      `yaml:"confirm"`   // N consecutive identical readings before a state is believed
-	Cooldown  Duration `yaml:"cooldown"`  // suppress re-fires within this window
+	Type      string  `yaml:"type"`      // pixel_change | ocr_match | ocr_changed | numeric
+	Pattern   string  `yaml:"pattern"`   // regex for ocr_match / numeric extraction
+	Op        string  `yaml:"op"`        // numeric: gt | lt
+	Threshold float64 `yaml:"threshold"` // pixel_change: percent 0-100; numeric: compare value
+	Confirm   int     `yaml:"confirm"`   // N consecutive identical readings before a state is believed
+	// Cooldown delays notification of a persisting new state until the
+	// window ends, rather than dropping it: a state that arrives and holds
+	// through cooldown still fires once, at the first reading after expiry.
+	// A state that reverts before expiry resolved on its own and never fires.
+	Cooldown Duration `yaml:"cooldown"`
 }
 
 type Watch struct {
