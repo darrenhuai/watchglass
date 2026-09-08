@@ -88,7 +88,7 @@ func (f *FFmpeg) Grab(ctx context.Context) (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
-	img, _, err := image.Decode(bytes.NewReader(out))
+	img, err := decodeImage(bytes.NewReader(out))
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg: decode frame: %w", err)
 	}

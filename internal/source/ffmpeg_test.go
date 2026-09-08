@@ -146,6 +146,40 @@ func TestFFmpegGrabRejectsGarbageOutput(t *testing.T) {
 	}
 }
 
+// TestFFmpegGrabRejectsDimensionBomb mirrors TestGrabRejectsDimensionBomb:
+// ffmpeg's stdout is just as attacker/misbehaving-source reachable as an
+// HTTP snapshot body (a spoofed/broken camera feeding a crafted frame), so
+// it must go through the same dimension guard before image.Decode.
+func TestFFmpegGrabRejectsDimensionBomb(t *testing.T) {
+	f, _ := NewFFmpeg("rtsp://cam/x")
+	bomb := pngBomb(t, 40000, 40000)
+	f.run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		return bomb, nil
+	}
+	_, err := f.Grab(context.Background())
+	if err == nil {
+		t.Fatal("expected error decoding dimension bomb")
+	}
+	if !strings.Contains(err.Error(), "40000") {
+		t.Errorf("error should name the offending dimensions, got %q", err)
+	}
+}
+
+func TestFFmpegGrabRejectsOversizedOutput(t *testing.T) {
+	f, _ := NewFFmpeg("rtsp://cam/x")
+	junk := bytes.Repeat([]byte{0xAB}, maxImageBytes+1024)
+	f.run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		return junk, nil
+	}
+	_, err := f.Grab(context.Background())
+	if err == nil {
+		t.Fatal("expected error on oversized ffmpeg output")
+	}
+	if !strings.Contains(err.Error(), "byte cap") {
+		t.Errorf("error should mention the byte cap, got %q", err)
+	}
+}
+
 // Integration: only runs where a real ffmpeg is installed. lavfi's testsrc
 // needs no camera, so this exercises the real subprocess path end to end.
 func TestFFmpegRealBinary(t *testing.T) {
