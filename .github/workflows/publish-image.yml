@@ -1,0 +1,40 @@
+name: publish-image
+# Builds and pushes the watchglass container image to GitHub Container
+# Registry (ghcr.io). The published package inherits this repo's visibility
+# (private for now; it flips to public automatically if the repo does).
+# The Home Assistant add-on (addon/watchglass) will consume this image once
+# it is public - see the commented `image:` line in addon/watchglass/config.yaml.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'master' }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

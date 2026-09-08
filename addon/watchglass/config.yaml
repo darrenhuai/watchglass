@@ -13,5 +13,7 @@ ports_description:
 map:
   - addon_config:rw
 # NOTE: image is intentionally unset while the repo is private — the add-on
-# builds locally from ./Dockerfile until a published ghcr image exists
-# (launch-day step). See DOCS.md.
+# builds locally from ./Dockerfile. The publish-image workflow now pushes
+# ghcr.io/darrenhuai/watchglass on tag or manual dispatch; uncommenting the
+# line below is a launch-day step once the package is public. See DOCS.md.
+# image: ghcr.io/darrenhuai/watchglass
