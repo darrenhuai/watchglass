@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html/template"
 	"image/png"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -330,6 +331,13 @@ func parseRegion(r *http.Request) (config.Region, error) {
 		v, err := strconv.ParseFloat(r.FormValue(name), 64)
 		if err != nil {
 			return 0, fmt.Errorf("region %s: %w", name, err)
+		}
+		// strconv.ParseFloat happily accepts "NaN"/"Inf"/"-Inf" as valid
+		// floats, and NaN in particular sails through every plain
+		// comparison the bounds check below performs, so it must be
+		// rejected explicitly here.
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("region %s: must be finite", name)
 		}
 		return v, nil
 	}

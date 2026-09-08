@@ -623,3 +623,38 @@ func TestCrossOriginProtectionAllowsNoFetchMetadataPOST(t *testing.T) {
 		t.Errorf("no-fetch-metadata POST: status = %d, want 303; body: %s", resp.StatusCode, body)
 	}
 }
+
+// Bug 6 (web-level): a name with a path-breaking character must be
+// rejected at /watch/new, not just at the config layer.
+func TestCreateRejectsUnroutableName(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	resp, _ := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"kitchen/oven"}, "source": {"http://cam2/snap.jpg"},
+	})
+	if resp.StatusCode != 400 {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	got, _ := config.Load(cfgPath)
+	if len(got.Watches) != 1 {
+		t.Errorf("watches after rejected create = %d, want 1 (unchanged)", len(got.Watches))
+	}
+}
+
+// Minor: parseRegion must reject NaN/Inf the same way it rejects
+// out-of-bounds values — strconv.ParseFloat happily parses "NaN" and "Inf"
+// as valid floats, and NaN in particular sails through every plain
+// comparison (<, <=, >), so the existing bounds check alone lets it by.
+func TestTestRegionRejectsNonFiniteFloats(t *testing.T) {
+	s, _ := newTestServer(t)
+	for _, bad := range []url.Values{
+		{"x": {"NaN"}, "y": {"0"}, "w": {"1"}, "h": {"1"}},
+		{"x": {"0"}, "y": {"NaN"}, "w": {"1"}, "h": {"1"}},
+		{"x": {"0"}, "y": {"0"}, "w": {"Inf"}, "h": {"1"}},
+		{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"-Inf"}},
+	} {
+		resp, body := postForm(t, s.Handler(), "/watch/printer/test", bad)
+		if resp.StatusCode != 400 {
+			t.Errorf("region %v: status = %d, want 400; body: %s", bad, resp.StatusCode, body)
+		}
+	}
+}
