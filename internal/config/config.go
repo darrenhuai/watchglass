@@ -90,6 +90,11 @@ type Trigger struct {
 	// window ends, rather than dropping it: a state that arrives and holds
 	// through cooldown still fires once, at the first reading after expiry.
 	// A state that reverts before expiry resolved on its own and never fires.
+	// That delay-not-drop behavior applies to the edge-triggered text and
+	// numeric trigger types (ocr_changed, ocr_match, numeric), which only
+	// evaluate on a transition. pixel_change has no edge state: it re-fires
+	// every reading where the diff is still above threshold, so a persisting
+	// change re-fires once per cooldown interval rather than once total.
 	Cooldown Duration `yaml:"cooldown"`
 }
 

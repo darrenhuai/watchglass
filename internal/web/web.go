@@ -168,6 +168,15 @@ func timingSafeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare(da[:], db[:]) == 1
 }
 
+// Watches returns a copy of the current watch list, safe to read without
+// holding s.mu — used by the MQTT on-connect resync (cmd/watchglass/main.go)
+// to read the live list at reconnect time instead of a stale boot snapshot.
+func (s *Server) Watches() []config.Watch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]config.Watch(nil), s.cfg.Watches...)
+}
+
 // findWatch returns a copy of the named watch under the config lock.
 func (s *Server) findWatch(name string) (config.Watch, bool) {
 	s.mu.Lock()

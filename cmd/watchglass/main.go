@@ -121,6 +121,11 @@ func run(configPath, dbPath, listen, basePath string) error {
 	sup := supervisor.New(store, reg, engine, log.Printf)
 	defer sup.StopAll()
 
+	// ws is declared here, before Connect, and assigned only after web.New
+	// runs below — the onReady closure captures it by reference (not by
+	// value) so it always reads whatever ws currently holds when it fires,
+	// never a value frozen at closure-creation time.
+	var ws *web.Server
 	if cfg.MQTT != nil {
 		// Bug 4: the initial discovery sync used to fire right after
 		// Connect() returned, which races paho's async handshake — with
@@ -130,16 +135,30 @@ func run(configPath, dbPath, listen, basePath string) error {
 		// the first sync's discovery configs silently vanish. Fixed by
 		// running the sync from the onReady callback instead, which
 		// BuildOptions invokes only on a real established connection —
-		// see internal/hass/client.go for the full mechanism. watches is
-		// snapshotted here so the closure doesn't read cfg.Watches (a
-		// slice header) if that field is ever reassigned later; pub is
-		// read at fire time and assigned immediately below — the connect
-		// handshake takes at least milliseconds, so the nil check exists
-		// only for a theoretical earlier fire, not an expected one.
-		watches := cfg.Watches
+		// see internal/hass/client.go for the full mechanism.
+		//
+		// Bug (c3ad308 regression): onReady fires on every reconnect, not
+		// just the first connect — that part is correct and intentional
+		// (see BuildOptions's doc comment). What was wrong is that it used
+		// to resync a `watches := cfg.Watches` slice captured ONCE here at
+		// boot. hass.Sync diffs against its own previous in-memory state,
+		// so a reconnect resync replaying that stale boot list would
+		// resurrect deleted watches' retained HA discovery configs and wipe
+		// the discovery/state topics of any watch added or renamed after
+		// boot — indistinguishable from actually deleting it. Fixed by
+		// reading the live list via ws.Watches() at fire time instead of
+		// closing over a snapshot.
+		//
+		// ws is assigned after Connect (web.New needs sup/reg, built below),
+		// so the nil check on ws guards a real gap this time, not just a
+		// theoretical one — but the connect handshake still takes at least
+		// milliseconds, so in practice onReady fires well after ws is set;
+		// the guard just makes that ordering safe instead of assumed, and
+		// turns the theoretical early-fire case into a logged no-op rather
+		// than a nil-pointer panic.
 		mc, err := hass.Connect(*cfg.MQTT, log.Printf, func() {
-			if pub != nil {
-				pub.SyncAsync(watches)
+			if pub != nil && ws != nil {
+				pub.SyncAsync(ws.Watches())
 			}
 		})
 		if err != nil {
@@ -182,17 +201,21 @@ func run(configPath, dbPath, listen, basePath string) error {
 
 	startWatches(ctx, sup, cfg.Watches, log.Printf)
 
-	ws, err := web.New(configPath, cfg, sup, reg, engine, log.Printf)
+	ws, err = web.New(configPath, cfg, sup, reg, engine, log.Printf)
 	if err != nil {
 		return err
 	}
 	ws.RunCtx = ctx
 	ws.BasePath = basePath
 	if pub != nil {
-		// UI-triggered syncs run against an already-established connection
-		// in practice; even one that lands mid-reconnect is harmless — the
-		// next on-connect sync (see the onReady wiring above) republishes
-		// the current watch list anyway.
+		// UI-triggered syncs and on-connect resyncs both now read the live
+		// watch list (UI saves via the config lock directly; on-connect via
+		// ws.Watches(), see the onReady wiring above) and funnel through the
+		// same SyncAsync queue, so a UI save racing a reconnect can no longer
+		// desync one from the other — whichever lands second just republishes
+		// the same current state the first one did. A sync that happens to
+		// land mid-reconnect is therefore genuinely harmless, not just
+		// assumed so: it heals, it never regresses.
 		ws.OnConfigChanged = pub.SyncAsync
 	}
 

@@ -418,6 +418,42 @@ func TestOnConfigChangedFiresOnMutations(t *testing.T) {
 	}
 }
 
+// TestWatchesSnapshotAccessor exercises Watches(), the accessor the MQTT
+// on-connect resync uses to read the live watch list instead of a stale
+// boot-time capture (c3ad308's regression: reconnect syncs replayed the
+// snapshot taken at startup, resurrecting deleted watches' discovery configs
+// and wiping ones added or renamed after boot).
+func TestWatchesSnapshotAccessor(t *testing.T) {
+	s, _ := newTestServer(t)
+	got := s.Watches()
+	if len(got) != 1 || got[0].Name != "printer" || got[0].Trigger.Threshold != 10 {
+		t.Fatalf("Watches() = %+v, want [printer] threshold 10", got)
+	}
+
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "tthreshold": {"42"},
+		"confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("save status = %d, body: %s", resp.StatusCode, body)
+	}
+	after := s.Watches()
+	if len(after) != 1 || after[0].Trigger.Threshold != 42 {
+		t.Fatalf("Watches() after save = %+v, want threshold 42", after)
+	}
+
+	// The returned slice must be a copy: mutating it must not reach back into
+	// the server's own state (the whole point is that a caller — the MQTT
+	// on-connect closure — reads a safe-to-use snapshot, not a live alias).
+	after[0].Name = "mutated"
+	again := s.Watches()
+	if again[0].Name != "printer" {
+		t.Errorf("Watches() leaked a live reference; mutating the returned slice changed internal state: %+v", again)
+	}
+}
+
 func TestAuthRejectsAndAccepts(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.mu.Lock()
