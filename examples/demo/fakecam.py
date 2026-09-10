@@ -16,6 +16,10 @@ Frame selection:
     `period` seconds counted from this process's start, then holds frame 5
     (PRINT COMPLETE) forever. This is the shot for the launch GIF: start
     the server, start watchglass, and the printer finishes exactly once.
+  * --hold N: serve frame N forever. For scripted recordings: hold a
+    mid-print frame while you frame the shot, then restart the server
+    with --once-complete for the finish — the free-running loop can hit
+    PRINT COMPLETE at an unscripted moment and fire the trigger early.
 
 Only GET /snapshot.jpg is served; anything else is a 404. stdlib only.
 """
@@ -37,7 +41,9 @@ def load_frames():
     return frames
 
 
-def frame_index(start, period, once_complete):
+def frame_index(start, period, once_complete, hold):
+    if hold is not None:
+        return hold
     if once_complete:
         elapsed = time.time() - start
         idx = int(elapsed / period)
@@ -45,7 +51,7 @@ def frame_index(start, period, once_complete):
     return int(time.time() / period) % FRAME_COUNT
 
 
-def make_handler(frames, start, period, once_complete):
+def make_handler(frames, start, period, once_complete, hold):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -54,7 +60,7 @@ def make_handler(frames, start, period, once_complete):
             if self.path != "/snapshot.jpg":
                 self.send_error(404, "not found")
                 return
-            idx = frame_index(start, period, once_complete)
+            idx = frame_index(start, period, once_complete, hold)
             body = frames[idx]
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
@@ -75,14 +81,17 @@ def main():
                          help="port to listen on (default 8100)")
     parser.add_argument("--once-complete", action="store_true",
                          help="play frames 0..5 once, then hold PRINT COMPLETE forever")
+    parser.add_argument("--hold", type=int, choices=range(FRAME_COUNT), default=None,
+                         help="serve this frame forever (for scripted recordings)")
     args = parser.parse_args()
 
     frames = load_frames()
     start = time.time()
-    handler = make_handler(frames, start, args.period, args.once_complete)
+    handler = make_handler(frames, start, args.period, args.once_complete, args.hold)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
 
-    mode = "once-complete" if args.once_complete else "looping"
+    mode = (f"hold frame_{args.hold}" if args.hold is not None
+            else "once-complete" if args.once_complete else "looping")
     print(f"fakecam: serving http://127.0.0.1:{args.port}/snapshot.jpg "
           f"(period={args.period}s, mode={mode})", file=sys.stderr)
     try:
