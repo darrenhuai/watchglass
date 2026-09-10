@@ -27,11 +27,19 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     var r = region();
     if (!(r.w > 0) || !(r.h > 0)) return;
+    var rx = r.x * canvas.width, ry = r.y * canvas.height,
+        rw = r.w * canvas.width, rh = r.h * canvas.height;
+    ctx.fillStyle = "rgba(127, 212, 168, 0.12)";
+    ctx.fillRect(rx, ry, rw, rh);
     ctx.strokeStyle = "#7fd4a8";
     ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(r.x * canvas.width, r.y * canvas.height,
-                   r.w * canvas.width, r.h * canvas.height);
+    ctx.setLineDash([]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    var hs = 6;
+    ctx.fillStyle = "#7fd4a8";
+    [[rx, ry], [rx + rw, ry], [rx, ry + rh], [rx + rw, ry + rh]].forEach(function (c) {
+      ctx.fillRect(c[0] - hs / 2, c[1] - hs / 2, hs, hs);
+    });
   }
   var drag = null;
   canvas.addEventListener("pointerdown", function (e) {

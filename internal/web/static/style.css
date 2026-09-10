@@ -1,0 +1,640 @@
+/* ==========================================================================
+   watchglass — "instrument" theme
+   Precision-instrument / control-room visual language: hairline structure,
+   restrained LED status dots, monospace for technical readings, quiet
+   dense-but-breathing layout. Dark only.
+   ========================================================================== */
+
+/* ---- Reset ------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { color-scheme: dark; }
+body, h1, h2, h3, p, figure, fieldset { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+img { max-width: 100%; }
+
+/* ---- Tokens -------------------------------------------------------------
+   Dark neutral ground, hairline borders, green/amber/red signal colors. */
+:root {
+  --bg:            #0b0d10;
+  --bg-inset:      #08090b;
+  --surface:       #13161b;
+  --surface-2:     #181c22;
+  --surface-hover: #1a1f26;
+  --border:        #22262d;
+  --border-strong: #2d323b;
+  --border-hair:   rgba(255, 255, 255, 0.06);
+
+  --text:        #e8eaed;
+  --text-dim:    #a1a8b3;
+  --text-faint:  #838b98;
+
+  --accent:      #7fd4a8; /* running / ok / focus */
+  --accent-hover: #93ddb6;
+  --accent-dim:  #3e6f57;
+  --accent-ink:  #08150f; /* text-on-accent */
+  --amber:       #ffb454; /* fired */
+  --red:         #ff6b6b; /* stopped / low-confidence / danger */
+  --red-dim:     #5c2b2b;
+  --blue:        #8ab8ff; /* links */
+
+  --focus-ring:  rgba(127, 212, 168, 0.25);
+
+  /* Alpha variants of the signal colors, named once and reused at every
+     call site instead of re-typed as raw rgba() literals. */
+  --accent-a15:  rgba(127, 212, 168, 0.15);
+  --accent-a25:  rgba(127, 212, 168, 0.25);
+  --accent-a30:  rgba(127, 212, 168, 0.3);
+  --accent-a35:  rgba(127, 212, 168, 0.35);
+  --accent-a65:  rgba(127, 212, 168, 0.65);
+  --accent-a70:  rgba(127, 212, 168, 0.7);
+  --red-a10:     rgba(255, 107, 107, 0.1);
+  --red-a30:     rgba(255, 107, 107, 0.3);
+  --red-a35:     rgba(255, 107, 107, 0.35);
+  --amber-a55:   rgba(255, 180, 84, 0.55);
+  --amber-a65:   rgba(255, 180, 84, 0.65);
+
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --field-label-w: 128px;
+
+  --font-ui:   -apple-system, "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a929e' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* ---- Base typography ----------------------------------------------------*/
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+p { margin: 0 0 var(--space-3); }
+h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+h2 {
+  font: 650 11.5px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-dim);
+  margin: var(--space-6) 0 var(--space-3);
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-dim); }
+.fired { color: var(--amber); font-weight: 600; }
+.conf-low { color: var(--red); }
+.conf-ok { color: var(--accent); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- Layout ---------------------------------------------------------- */
+main {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-5) var(--space-6);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+/* ---- Header / topbar ---------------------------------------------------*/
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 9px; color: var(--text); }
+.brand:hover { text-decoration: none; }
+.brand-name { font: 700 14px/1 var(--font-ui); letter-spacing: 0.01em; }
+.brand-mark {
+  position: relative;
+  width: 16px; height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface-2);
+}
+.brand-mark::after {
+  content: "";
+  position: absolute; inset: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-a70);
+}
+.topbar-meta { display: flex; align-items: center; gap: 8px; }
+.topbar-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* ---- LED status dots -----------------------------------------------------
+   Restrained signal indicators — small, quiet, a soft glow only when lit.
+   Color carries the primary signal; a filled-vs-ringed treatment gives a
+   second, non-color channel between the two "steady state" values (running
+   vs stopped) without stacking a third cue on top. */
+.led {
+  display: inline-block;
+  flex: none;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.led-green { background: var(--accent); box-shadow: 0 0 5px var(--accent-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.led-amber { background: var(--amber);  box-shadow: 0 0 5px var(--amber-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.led-red   { background: transparent; box-shadow: inset 0 0 0 1.5px var(--red); }
+.led-off   { background: var(--border-strong); box-shadow: none; }
+
+/* ---- Pills / chips / status badges -------------------------------------*/
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 100px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 100px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  font: 650 10.5px/1.6 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+.status-run  { color: var(--accent); border-color: var(--accent-a35); }
+.status-stop { color: var(--red);    border-color: var(--red-a30); }
+
+/* ---- Buttons -------------------------------------------------------------*/
+button, input[type="submit"], input[type="button"] {
+  font-family: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.btn {
+  font: 600 13px/1 var(--font-ui);
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-outline { background: transparent; border-color: var(--border-strong); color: var(--text); }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-ghost {
+  background: transparent; border-color: transparent; color: var(--text-dim);
+  height: auto; padding: 6px 10px; font-size: 12px;
+}
+.btn-danger { color: var(--red); }
+.btn-danger:hover { background: var(--red-dim); border-color: var(--red-a35); }
+
+/* ---- Form controls ---------------------------------------------------- */
+input, select, textarea {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  height: 36px;
+  font: 13px/1.4 var(--font-ui);
+  width: 100%;
+}
+textarea { height: auto; padding: 8px 10px; }
+textarea.mono { font-family: var(--font-mono); }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  width: auto;
+  height: auto;
+}
+.checkbox input[type="checkbox"] {
+  width: 14px; height: 14px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 2px;
+  background: var(--border-strong);
+  border-radius: 2px;
+  outline: none;
+  padding: 0;
+  border: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  margin-top: -6px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 3px var(--accent-a15);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-track { height: 2px; background: var(--border-strong); border-radius: 2px; }
+input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 3px var(--accent-a15);
+  cursor: pointer;
+}
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+fieldset {
+  border: 0;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding: var(--space-4) 0;
+}
+fieldset:first-of-type { border-top: 0; padding-top: 0; }
+legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font: 650 11px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.legend-note {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-faint);
+  margin-left: 6px;
+}
+
+/* Label-left / field-right grid — replaces the old inline paragraph flow.
+   The Pattern row stacks its label above the input via .field-row-wide
+   since a regex benefits from the room a fixed label column can't give it. */
+.field-row {
+  display: grid;
+  grid-template-columns: var(--field-label-w) 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 0;
+  border-top: 1px solid var(--border-hair);
+}
+.field-row:first-child { border-top: none; }
+.field-row > label {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+.field-row-wide { grid-template-columns: 1fr; }
+.field-row-wide > label { margin-bottom: 4px; }
+.field-row-wide input { font-family: var(--font-mono); }
+.field-row-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  grid-template-columns: none;
+}
+.range-field { display: flex; align-items: center; gap: 10px; }
+.range-field input[type="range"] { flex: 1; }
+.ppt-val { min-width: 34px; text-align: right; font-size: 12px; color: var(--text-dim); }
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.form-actions .btn, .form-actions input[type="submit"] { width: auto; }
+
+/* ---- Index: page head, watch table, empty states ---------------------- */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.page-head h1 { margin-bottom: 4px; }
+.count-chip {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 100px;
+  padding: 3px 10px;
+  letter-spacing: 0.03em;
+  flex: none;
+}
+
+.panel-table { padding: 0; overflow: hidden; }
+
+.watch-table { width: 100%; border-collapse: collapse; }
+.watch-table th {
+  text-align: left;
+  font: 650 10.5px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.watch-table td {
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-hair);
+  vertical-align: middle;
+}
+.watch-table tbody tr:last-child td { border-bottom: 0; }
+.watch-table tbody tr:hover { background: var(--surface-hover); }
+.watch-table .cell-name a { font-weight: 600; font-family: var(--font-mono); }
+.reading-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.watch-table th.col-actions, .watch-table td.col-actions { text-align: right; width: 1%; white-space: nowrap; }
+
+.empty-state { padding: var(--space-6) var(--space-5); text-align: center; color: var(--text-dim); }
+.empty-state p { margin: 4px 0; }
+.empty-state p:first-child { color: var(--text); font-weight: 600; }
+
+.form-inline-add {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+}
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.02em; }
+.field-grow { flex: 1 1 320px; }
+.field input { width: 100%; }
+
+/* ---- Detail page header ------------------------------------------------*/
+.detail-head { margin-bottom: var(--space-5); }
+.back-link { font-size: 12.5px; color: var(--text-dim); }
+.back-link:hover { color: var(--accent); }
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.detail-title-row h1 { margin: 0; font-family: var(--font-mono); }
+.source-line { margin: 6px 0 0; font-size: 12.5px; word-break: break-all; }
+
+/* ---- Detail two-column grid --------------------------------------------*/
+.detail-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+}
+.col-stage  { flex: 1 1 460px; min-width: 0; }
+.col-config { flex: 1 1 380px; min-width: 0; }
+
+/* ---- Stage: snapshot + canvas overlay -----------------------------------
+   #stage/#snap/#overlay geometry is load-bearing for app.js (canvas is
+   sized from img.clientWidth/clientHeight) — the frame decoration lives on
+   the wrapping .stage-frame, never as padding/border on #stage itself.
+   #stage stays position:relative with #stage img display:block;max-width:100%
+   exactly as contracted. Rounding+clipping happens once, on #stage itself
+   (overflow:hidden + border-radius, sized to the img it tightly wraps via
+   inline-block), so there is never a seam between a corner radius and the
+   canvas drawn on top of it. */
+#stage {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+#stage img { display: block; max-width: 100%; }
+#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
+
+.stage-frame {
+  position: relative;
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px;
+}
+.stage-frame::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+  opacity: 0.55;
+  background:
+    linear-gradient(var(--accent-dim), var(--accent-dim)) top left / 12px 2px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) top left / 2px 12px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) top right / 12px 2px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) top right / 2px 12px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) bottom left / 12px 2px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) bottom left / 2px 12px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) bottom right / 12px 2px no-repeat,
+    linear-gradient(var(--accent-dim), var(--accent-dim)) bottom right / 2px 12px no-repeat;
+}
+.hint { margin-top: var(--space-3); font-size: 12.5px; }
+
+/* ---- Test result fragment (#test-result) --------------------------------
+   Injected via innerHTML — no <style>/<script> inside the fragment; every
+   rule lives here. Collapses to nothing (no stray bordered box) until a
+   test has actually run. */
+#test-result { margin-top: var(--space-4); }
+#test-result:empty { display: none; }
+.crop-frame { display: inline-block; margin: 0 0 var(--space-3); }
+.crop-frame img {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ocr-line { font-size: 14px; margin: 0 0 var(--space-2); }
+.note { font-size: 13px; margin: 0 0 var(--space-2); }
+.word-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
+.word-chip {
+  font: 12px/1.4 var(--font-mono);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+}
+.word-chip.conf-ok { border-color: var(--accent-a30); }
+.word-chip.conf-low { border-color: var(--red-a30); }
+.word-chip.conf-low::before { content: "! "; color: var(--red); }
+
+/* ---- Live section (#live, polled fragment) ------------------------------
+   Injected via innerHTML — no <style>/<script> inside the fragment. */
+.live-section { margin-top: var(--space-6); }
+.live-panel { min-height: 60px; }
+
+.readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.readout-label {
+  font: 650 10px/1 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.readout-value { font-size: 16px; }
+.readout-ts { margin-left: auto; font-size: 12px; }
+
+.strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+}
+.strip::-webkit-scrollbar { height: 6px; }
+.strip::-webkit-scrollbar-track { background: transparent; }
+.strip::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.strip figure { flex: none; width: 120px; text-align: center; }
+.strip img {
+  display: block;
+  width: 120px; height: 72px;
+  object-fit: cover;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.strip figure:has(figcaption.fired) img { border-color: var(--amber-a55); }
+.strip figcaption {
+  margin-top: 6px;
+  font: 12px/1.3 var(--font-mono);
+  color: var(--text-dim);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* .strip figcaption's own color rule (class+tag) outranks the bare .fired
+   utility class on specificity alone — restate it here so a fired crop's
+   caption still reads amber instead of silently losing the color. */
+.strip figcaption.fired { color: var(--amber); }
+
+/* ---- Responsive: tablet -------------------------------------------------*/
+@media (max-width: 860px) {
+  .detail-grid { flex-direction: column; }
+  .col-stage, .col-config { flex: 1 1 auto; width: 100%; }
+}
+
+/* ---- Responsive: mobile (~375px demo viewport) --------------------------*/
+@media (max-width: 560px) {
+  main { padding: var(--space-4); }
+  .topbar { padding: var(--space-3) var(--space-4); }
+
+  .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+
+  .watch-table thead { display: none; }
+  .watch-table, .watch-table tbody, .watch-table tr, .watch-table td { display: block; width: 100%; }
+  .watch-table tr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+  .watch-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 0;
+  }
+  .watch-table td::before {
+    content: attr(data-label);
+    flex: none;
+    font: 650 10px/1 var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+  }
+  /* An unbreakable OCR "Last reading" value must not push the row (and the
+     page) wider than the viewport — flex items default to min-width:auto,
+     so the value column needs an explicit min-width:0 to be allowed to
+     shrink, plus overflow-wrap so a long space-free string breaks instead
+     of overflowing. */
+  .watch-table td > * { min-width: 0; }
+  .reading-wrap { min-width: 0; }
+  .reading-wrap .mono { min-width: 0; overflow-wrap: anywhere; }
+  .watch-table td.col-actions { justify-content: flex-end; width: 100%; }
+  .watch-table td.col-actions::before { content: none; }
+
+  .form-inline-add { flex-direction: column; align-items: stretch; }
+
+  .field-row { grid-template-columns: 1fr; }
+  .field-row > label { margin-bottom: 2px; }
+
+  .form-actions { flex-direction: column-reverse; }
+  .form-actions .btn, .form-actions input[type="submit"] { width: 100%; justify-content: center; }
+
+  .readout-ts { margin-left: 0; }
+}

@@ -1,21 +1,66 @@
 {{template "head" .}}
-<h1>Watches</h1>
-<table>
-<tr><th>Name</th><th>Trigger</th><th>Interval</th><th>Last reading</th><th></th></tr>
-{{range .}}
-<tr>
-  <td><a href="{{u "/watch/"}}{{.Watch.Name}}">{{.Watch.Name}}</a></td>
-  <td>{{.Watch.Trigger.Type}}</td>
-  <td>{{dur .Watch.Interval}}</td>
-  <td>{{if .Has}}<span {{if .Latest.Fired}}class="fired"{{end}}>{{.Latest.Reading}}</span>{{else}}<span class="muted">no data yet</span>{{end}}</td>
-  <td><form method="post" action="{{u "/watch/"}}{{.Watch.Name}}/delete" onsubmit="return confirm('Delete watch {{.Watch.Name}}?')"><button class="danger">delete</button></form></td>
-</tr>
-{{end}}
+<div class="page-head">
+  <div>
+    <h1>Watches</h1>
+    <p class="muted">Camera-fed regions under observation.</p>
+  </div>
+  <span class="count-chip mono">{{len .}} total</span>
+</div>
+<div class="panel panel-table">
+{{if len .}}
+<table class="watch-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Trigger</th>
+      <th>Interval</th>
+      <th>Last reading</th>
+      <th class="col-actions"><span class="sr-only">Actions</span></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .}}
+    <tr>
+      <td class="cell-name" data-label="Name"><a href="{{u "/watch/"}}{{.Watch.Name}}">{{.Watch.Name}}</a></td>
+      <td data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
+      <td class="mono" data-label="Interval">{{dur .Watch.Interval}}</td>
+      <td data-label="Last reading">
+        <span class="reading-wrap">
+        {{if .Has}}
+          <span class="led {{if .Latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
+          <span class="mono{{if .Latest.Fired}} fired{{end}}">{{.Latest.Reading}}</span>
+        {{else}}
+          <span class="led led-off" aria-hidden="true"></span>
+          <span class="muted">no data yet</span>
+        {{end}}
+        </span>
+      </td>
+      <td class="col-actions">
+        <form method="post" action="{{u "/watch/"}}{{.Watch.Name}}/delete" onsubmit="return confirm('Delete watch {{.Watch.Name}}?')">
+          <button type="submit" class="btn btn-ghost btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
 </table>
+{{else}}
+<div class="empty-state">
+  <p>No watches yet.</p>
+  <p class="muted">Point a camera at a screen and add one below.</p>
+</div>
+{{end}}
+</div>
 <h2>Add a watch</h2>
-<form method="post" action="{{u "/watch/new"}}">
-  <input name="name" placeholder="name (e.g. printer-lcd)" required>
-  <input name="source" placeholder="http://camera/snapshot.jpg" size="40" required>
-  <input type="submit" value="Create">
+<form class="panel form-inline-add" method="post" action="{{u "/watch/new"}}">
+  <div class="field">
+    <label for="new-name">Name</label>
+    <input id="new-name" name="name" placeholder="printer-lcd" required>
+  </div>
+  <div class="field field-grow">
+    <label for="new-source">Source URL</label>
+    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg" required>
+  </div>
+  <button type="submit" class="btn btn-primary">Create</button>
 </form>
 {{template "foot" .}}

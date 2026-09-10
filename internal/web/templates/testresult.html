@@ -1,12 +1,12 @@
-<figure style="margin:0">
-  <img src="{{.Crop}}" alt="preprocessed crop" style="max-width:100%;border:1px solid #2a2e35;border-radius:4px">
+<figure class="crop-frame">
+  <img src="{{.Crop}}" alt="preprocessed crop">
 </figure>
-{{if .Note}}<p class="muted">{{.Note}}</p>{{end}}
-{{if .Text}}<p>Read: <strong>{{.Text}}</strong></p>{{end}}
+{{if .Note}}<p class="muted note">{{.Note}}</p>{{end}}
+{{if .Text}}<p class="ocr-line">Read: <strong class="mono">{{.Text}}</strong></p>{{end}}
 {{if .Words}}
-<p>
+<p class="word-list">
 {{range .Words}}
-  <span class="{{if lt .Conf 60.0}}conf-low{{else}}conf-ok{{end}}" title="confidence {{.Conf}}">{{.Text}} ({{.Conf}})</span>
+  <span class="word-chip {{if lt .Conf 60.0}}conf-low{{else}}conf-ok{{end}}" title="confidence {{.Conf}}">{{.Text}} ({{.Conf}})</span>
 {{end}}
 </p>
 {{end}}

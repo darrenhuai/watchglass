@@ -1,72 +1,118 @@
 {{template "head" .}}
-<p><a href="{{u "/"}}">&larr; all watches</a></p>
-<h1>{{.Watch.Name}} {{if .Running}}<span class="conf-ok" style="font-size:0.8rem">running</span>{{else}}<span class="conf-low" style="font-size:0.8rem">stopped</span>{{end}}</h1>
-<p class="muted">{{.Watch.Source}}</p>
-<div class="row">
-  <div>
-    <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
-      <img id="snap" src="{{u "/watch/"}}{{.Watch.Name}}/snapshot" alt="snapshot">
-      <canvas id="overlay"></canvas>
+<div class="detail-head">
+  <a class="back-link" href="{{u "/"}}">&larr; all watches</a>
+  <div class="detail-title-row">
+    <h1 class="mono">{{.Watch.Name}}</h1>
+    <span class="status-pill {{if .Running}}status-run{{else}}status-stop{{end}}">
+      <span class="led {{if .Running}}led-green{{else}}led-red{{end}}" aria-hidden="true"></span>
+      {{if .Running}}running{{else}}stopped{{end}}
+    </span>
+  </div>
+  <p class="source-line muted mono">{{.Watch.Source}}</p>
+</div>
+<div class="detail-grid">
+  <div class="col-stage">
+    <div class="stage-frame">
+      <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
+        <img id="snap" src="{{u "/watch/"}}{{.Watch.Name}}/snapshot" alt="snapshot">
+        <canvas id="overlay"></canvas>
+      </div>
     </div>
-    <p class="muted">Drag on the image to select the region to watch.</p>
+    <p class="hint muted">Drag on the image to select the region to watch.</p>
     <div id="test-result"></div>
   </div>
-  <div>
-    <form id="watchform" method="post" action="{{u "/watch/"}}{{.Watch.Name}}/save">
+  <div class="col-config">
+    <form id="watchform" class="panel" method="post" action="{{u "/watch/"}}{{.Watch.Name}}/save">
       <input type="hidden" name="x" value="{{.Watch.Region.X}}">
       <input type="hidden" name="y" value="{{.Watch.Region.Y}}">
       <input type="hidden" name="w" value="{{.Watch.Region.W}}">
       <input type="hidden" name="h" value="{{.Watch.Region.H}}">
       <fieldset>
         <legend>Trigger</legend>
-        <label>Type
-          <select name="ttype">
+        <div class="field-row">
+          <label for="f-ttype">Type</label>
+          <select id="f-ttype" name="ttype">
             <option value="pixel_change" {{if eq .Watch.Trigger.Type "pixel_change"}}selected{{end}}>pixel_change</option>
             <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}}>ocr_match</option>
             <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}}>ocr_changed</option>
             <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}}>numeric</option>
           </select>
-        </label>
-        <label>Pattern <input name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete"></label>
-        <label>Op
-          <select name="op">
+        </div>
+        <div class="field-row field-row-wide">
+          <label for="f-pattern">Pattern</label>
+          <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete">
+        </div>
+        <div class="field-row">
+          <label for="f-op">Op</label>
+          <select id="f-op" name="op">
             <option value="" {{if eq .Watch.Trigger.Op ""}}selected{{end}}>-</option>
             <option value="gt" {{if eq .Watch.Trigger.Op "gt"}}selected{{end}}>gt</option>
             <option value="lt" {{if eq .Watch.Trigger.Op "lt"}}selected{{end}}>lt</option>
           </select>
-        </label>
-        <label>Threshold <input name="tthreshold" type="number" step="any" value="{{.Watch.Trigger.Threshold}}"></label>
-        <label>Confirm <input name="confirm" type="number" min="1" value="{{.Watch.Trigger.Confirm}}"></label>
-        <label>Cooldown <input name="cooldown" value="{{dur .Watch.Trigger.Cooldown}}"></label>
-        <label>Interval <input name="interval" value="{{dur .Watch.Interval}}"></label>
-        <label>Max interval <input name="max_interval" value="{{if .Watch.MaxInterval}}{{dur .Watch.MaxInterval}}{{end}}" placeholder="off"></label>
-        <label>Health after <input name="health_after" type="number" min="1" value="{{.Watch.HealthAfter}}"></label>
+        </div>
+        <div class="field-row">
+          <label for="f-threshold">Threshold</label>
+          <input id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Watch.Trigger.Threshold}}">
+        </div>
+        <div class="field-row">
+          <label for="f-confirm">Confirm</label>
+          <input id="f-confirm" name="confirm" type="number" min="1" value="{{.Watch.Trigger.Confirm}}">
+        </div>
+        <div class="field-row">
+          <label for="f-cooldown">Cooldown</label>
+          <input id="f-cooldown" name="cooldown" value="{{dur .Watch.Trigger.Cooldown}}">
+        </div>
+        <div class="field-row">
+          <label for="f-interval">Interval</label>
+          <input id="f-interval" name="interval" value="{{dur .Watch.Interval}}">
+        </div>
+        <div class="field-row">
+          <label for="f-maxinterval">Max interval</label>
+          <input id="f-maxinterval" name="max_interval" value="{{if .Watch.MaxInterval}}{{dur .Watch.MaxInterval}}{{end}}" placeholder="off">
+        </div>
+        <div class="field-row">
+          <label for="f-health">Health after</label>
+          <input id="f-health" name="health_after" type="number" min="1" value="{{.Watch.HealthAfter}}">
+        </div>
       </fieldset>
       <fieldset>
-        <legend>Preprocess (OCR only)</legend>
-        <label><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> grayscale</label>
-        <label><input type="checkbox" name="pp_invert" {{if .Watch.Preprocess.Invert}}checked{{end}}> invert</label>
-        <label>Binarize <input type="range" name="pp_threshold" min="0" max="255" value="{{.Watch.Preprocess.Threshold}}"> <span id="ppt-val"></span></label>
-        <label>Upscale
-          <select name="pp_upscale">
+        <legend>Preprocess <span class="legend-note">OCR only</span></legend>
+        <div class="field-row field-row-check">
+          <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> grayscale</label>
+          <label class="checkbox"><input type="checkbox" name="pp_invert" {{if .Watch.Preprocess.Invert}}checked{{end}}> invert</label>
+        </div>
+        <div class="field-row">
+          <label for="f-binarize">Binarize</label>
+          <div class="range-field">
+            <input id="f-binarize" type="range" name="pp_threshold" min="0" max="255" value="{{.Watch.Preprocess.Threshold}}">
+            <span id="ppt-val" class="mono ppt-val"></span>
+          </div>
+        </div>
+        <div class="field-row">
+          <label for="f-upscale">Upscale</label>
+          <select id="f-upscale" name="pp_upscale">
             <option value="0" {{if lt .Watch.Preprocess.Upscale 2}}selected{{end}}>off</option>
             <option value="2" {{if eq .Watch.Preprocess.Upscale 2}}selected{{end}}>2x</option>
             <option value="3" {{if eq .Watch.Preprocess.Upscale 3}}selected{{end}}>3x</option>
             <option value="4" {{if eq .Watch.Preprocess.Upscale 4}}selected{{end}}>4x</option>
           </select>
-        </label>
+        </div>
       </fieldset>
       <fieldset>
-        <legend>Notify (one shoutrrr URL per line)</legend>
-        <textarea name="notify" rows="3" cols="42">{{range .Watch.Notify}}{{.}}
+        <legend>Notify <span class="legend-note">one shoutrrr URL per line</span></legend>
+        <textarea class="mono" name="notify" rows="3" cols="42">{{range .Watch.Notify}}{{.}}
 {{end}}</textarea>
       </fieldset>
-      <button type="button" id="testbtn">Test this region</button>
-      <input type="submit" value="Save &amp; restart watch">
+      <div class="form-actions">
+        <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
+        <input type="submit" value="Save &amp; restart watch" class="btn btn-primary">
+      </div>
     </form>
   </div>
 </div>
-<h2>Live</h2>
-<div id="live"><p class="muted">loading…</p></div>
+<section class="live-section">
+  <h2>Live</h2>
+  <div id="live" class="panel live-panel"><p class="muted">loading…</p></div>
+</section>
 <script src="{{u "/static/app.js"}}"></script>
 {{template "foot" .}}

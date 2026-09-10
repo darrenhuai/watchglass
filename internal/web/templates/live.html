@@ -1,7 +1,11 @@
 {{if .Recent}}
 {{$latest := index .Recent 0}}
-<p>Latest: <strong {{if $latest.Fired}}class="fired"{{end}}>{{$latest.Reading}}</strong>
-<span class="muted">{{$latest.TS.Format "15:04:05"}}</span></p>
+<div class="readout">
+  <span class="led {{if $latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
+  <span class="readout-label">latest</span>
+  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}</strong>
+  <span class="readout-ts mono muted">{{$latest.TS.Format "15:04:05"}}</span>
+</div>
 <div class="strip">
 {{range .Recent}}
   <figure>
