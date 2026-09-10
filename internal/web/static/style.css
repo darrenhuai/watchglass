@@ -561,11 +561,15 @@ legend {
 .strip::-webkit-scrollbar { height: 6px; }
 .strip::-webkit-scrollbar-track { background: transparent; }
 .strip::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
-.strip figure { flex: none; width: 120px; text-align: center; }
+.strip figure { flex: none; max-width: 280px; text-align: center; }
 .strip img {
+  /* Natural aspect ratio: a crop of a status line is wide, a numeric
+     readout is square-ish — cropping either to a fixed tile destroys
+     the text the crop exists to show. */
   display: block;
-  width: 120px; height: 72px;
-  object-fit: cover;
+  width: auto; height: auto;
+  max-height: 72px;
+  max-width: 280px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -575,7 +579,7 @@ legend {
   margin-top: 6px;
   font: 12px/1.3 var(--font-mono);
   color: var(--text-dim);
-  max-width: 120px;
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
