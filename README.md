@@ -5,6 +5,11 @@ printer's LCD, a lab instrument, a server console — draw a region, and get a
 push notification when that region's text or pixels change. Self-hosted, one
 binary, nothing leaves your network.
 
+![Drawing a watch region on a printer LCD, testing it, and watching the trigger fire when the screen reads PRINT COMPLETE](docs/demo.gif)
+
+*Recorded against the bundled [demo rig](examples/demo/) — run it yourself
+with two commands, no camera needed.*
+
 > Early development. Core engine, web UI, RTSP/ffmpeg sources,
 > MQTT/Home Assistant discovery, Docker packaging, and tagged binary
 > releases all work; a published Home Assistant add-on is next.
