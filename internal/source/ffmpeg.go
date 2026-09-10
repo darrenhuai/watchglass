@@ -23,8 +23,8 @@ type ffmpegRunFunc func(ctx context.Context, bin string, args ...string) ([]byte
 // it exit. There is no persistent decoder: between polls this source costs
 // nothing, which is the project's headline resource claim.
 //
-// ffmpeg is invoked as a SUBPROCESS and is never linked or redistributed —
-// see the licensing and patent notes in the PRD.
+// ffmpeg is invoked as a SUBPROCESS and is never linked or redistributed,
+// which keeps watchglass clear of ffmpeg's (L)GPL linking obligations.
 type FFmpeg struct {
 	Bin     string
 	Timeout time.Duration

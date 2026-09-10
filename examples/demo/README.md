@@ -33,7 +33,7 @@ change as frames cycle.
 
 ## Recording the launch GIF
 
-Mirrors PRD §10's beats, using this rig instead of a real printer:
+The beats to record, using this rig instead of a real printer:
 
 1. Open `demo-printer`'s live preview; drag a rectangle around the status
    line (region is already set, but the drag is the visual beat).

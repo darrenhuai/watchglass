@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/watchglass ./cmd/watchglass
 
 # Runtime: Debian slim for reliable ffmpeg/tesseract packaging (musl builds
-# of both are a recurring source of subtle breakage — see the PRD).
+# of both are a recurring source of subtle breakage).
 FROM debian:trixie-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr ca-certificates \

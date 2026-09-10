@@ -1,6 +1,4 @@
-.git
-.github
-.internal
+.*
 /docs
 /addon
 *.md

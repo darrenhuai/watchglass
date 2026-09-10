@@ -1,6 +1,3 @@
-# Internal scratch directory
-.internal/
-
 # Database files
 *.db
 
