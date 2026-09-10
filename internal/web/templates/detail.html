@@ -20,6 +20,10 @@
     </div>
     <p class="hint muted">Drag on the image to select the region to watch.</p>
     <div id="test-result"></div>
+    <section class="live-section">
+      <h2>Live</h2>
+      <div id="live" class="panel live-panel"><p class="muted">loading…</p></div>
+    </section>
   </div>
   <div class="col-config">
     <form id="watchform" class="panel" method="post" action="{{u "/watch/"}}{{.Watch.Name}}/save">
@@ -110,9 +114,5 @@
     </form>
   </div>
 </div>
-<section class="live-section">
-  <h2>Live</h2>
-  <div id="live" class="panel live-panel"><p class="muted">loading…</p></div>
-</section>
 <script src="{{u "/static/app.js"}}"></script>
 {{template "foot" .}}

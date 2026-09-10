@@ -222,6 +222,18 @@ button, input[type="submit"], input[type="button"] {
 }
 .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-hover); }
+/* The shared :focus-visible ring is the same mint as this button's own
+   fill, so on a light/filled control it needs a higher-contrast color
+   (not just the low-opacity green glow) to actually stand out. Covers the
+   <button> case (Create); the <input type="submit"> case (Save & restart
+   watch) is separately overridden below — it's caught by the generic
+   `input:focus` rule further down, which outranks this on specificity and
+   would otherwise silently win back the low-contrast ring. */
+.btn-primary:focus-visible { outline-color: var(--text); }
+input.btn-primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
+}
 .btn-outline { background: transparent; border-color: var(--border-strong); color: var(--text); }
 .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-ghost {
@@ -305,11 +317,15 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 0 3px var(--accent-a15);
   cursor: pointer;
 }
+/* Same reasoning as .btn-primary:focus-visible above: the thumb is already
+   solid accent-green, so the standard low-opacity green ring all but
+   disappears against it. A near-white ring (with a thin dark gap to keep
+   it separate from the thumb's own fill) reads clearly instead. */
 input[type="range"]:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px var(--focus-ring);
+  box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
 }
 input[type="range"]:focus-visible::-moz-range-thumb {
-  box-shadow: 0 0 0 3px var(--focus-ring);
+  box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
 }
 
 fieldset {
@@ -394,7 +410,12 @@ legend {
   flex: none;
 }
 
-.panel-table { padding: 0; overflow: hidden; }
+/* overflow-x is a safety net: the mobile card breakpoint below is set wide
+   enough that .watch-table should never need it, but if a future column
+   ever blows the min content width out again, it scrolls internally with
+   a visible scrollbar instead of leaking into page-level horizontal
+   scroll with the actions column unreachable. */
+.panel-table { padding: 0; overflow-x: auto; overflow-y: hidden; }
 
 .watch-table { width: 100%; border-collapse: collapse; }
 .watch-table th {
@@ -409,12 +430,21 @@ legend {
 .watch-table td {
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border-hair);
-  vertical-align: middle;
+  vertical-align: top;
 }
 .watch-table tbody tr:last-child td { border-bottom: 0; }
 .watch-table tbody tr:hover { background: var(--surface-hover); }
 .watch-table .cell-name a { font-weight: 600; font-family: var(--font-mono); }
-.reading-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.reading-wrap { display: inline-flex; align-items: flex-start; gap: 8px; }
+/* An OCR reading can be arbitrarily long (ocr_match/ocr_changed triggers
+   read whatever text is on screen) — cap it so one row can't balloon to
+   many wrapped lines and drag the rest of the row's cells down with it. */
+.reading-wrap .mono {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .watch-table th.col-actions, .watch-table td.col-actions { text-align: right; width: 1%; white-space: nowrap; }
 
 .empty-state { padding: var(--space-6) var(--space-5); text-align: center; color: var(--text-dim); }
@@ -512,7 +542,8 @@ legend {
 .crop-frame img {
   display: block;
   max-width: 100%;
-  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-dim);
   border-radius: var(--radius-sm);
 }
 .ocr-line { font-size: 14px; margin: 0 0 var(--space-2); }
@@ -553,6 +584,7 @@ legend {
 .readout-ts { margin-left: auto; font-size: 12px; }
 
 .strip {
+  position: relative;
   display: flex;
   gap: 10px;
   overflow-x: auto;
@@ -561,6 +593,16 @@ legend {
 .strip::-webkit-scrollbar { height: 6px; }
 .strip::-webkit-scrollbar-track { background: transparent; }
 .strip::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+/* A persistent "there's more" hint at the trailing edge — the custom
+   scrollbar thumb above is easy to miss, especially on touch devices. */
+.strip::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 0; bottom: 8px;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--surface));
+  pointer-events: none;
+}
 .strip figure { flex: none; max-width: 280px; text-align: center; }
 .strip img {
   /* Natural aspect ratio: a crop of a status line is wide, a numeric
@@ -595,8 +637,10 @@ legend {
   .col-stage, .col-config { flex: 1 1 auto; width: 100%; }
 }
 
-/* ---- Responsive: mobile (~375px demo viewport) --------------------------*/
-@media (max-width: 560px) {
+/* ---- Responsive: mobile (~375px demo viewport, up through the table/card
+   seam — pushed to 640px so .watch-table's ~583px min content width always
+   has room once the table layout is actually in effect) -------------------*/
+@media (max-width: 640px) {
   main { padding: var(--space-4); }
   .topbar { padding: var(--space-3) var(--space-4); }
 
@@ -607,7 +651,7 @@ legend {
   .watch-table tr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
   .watch-table td {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
     padding: 4px 0;
@@ -633,6 +677,11 @@ legend {
   .watch-table td.col-actions::before { content: none; }
 
   .form-inline-add { flex-direction: column; align-items: stretch; }
+  /* .field-grow's 320px flex-basis is meant to grow the field horizontally
+     in the desktop row layout — once the form stacks to a column, that
+     basis is read as a height instead, leaving a tall empty gap above the
+     Create button. Reset it so the field sizes to its label+input again. */
+  .field-grow { flex: 0 1 auto; }
 
   .field-row { grid-template-columns: 1fr; }
   .field-row > label { margin-bottom: 2px; }
@@ -641,4 +690,18 @@ legend {
   .form-actions .btn, .form-actions input[type="submit"] { width: 100%; justify-content: center; }
 
   .readout-ts { margin-left: 0; }
+
+  /* A frame sized to fill the whole visible strip leaves no sliver of the
+     next frame showing, and the custom scrollbar thumb is easy to miss —
+     capping below 100% keeps a peek of frame #2 visible as a "there's
+     more" affordance. */
+  .strip figure { max-width: 90%; }
+  .strip img { max-width: 100%; }
+
+  /* Touch targets: the checkbox's own box stays 14px, but its clickable
+     label area gets padded closer to 40px; buttons and the Delete link
+     get the same treatment. */
+  .btn { height: 40px; }
+  .checkbox { padding: 10px 0; }
+  .btn-ghost { padding: 12px 12px; }
 }
