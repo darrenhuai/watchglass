@@ -77,8 +77,9 @@ Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
 
 For RTSP and device sources watchglass spawns ffmpeg once per poll, grabs a
 single frame, and lets it exit. There is no persistent decoder, so a watch
-costs nothing between checks. ffmpeg is never bundled — install your
-distribution's package.
+costs nothing between checks — the whole daemon sits around 55MB of RAM
+with a watch polling a 640x360 snapshot every 2 seconds, no GPU needed.
+ffmpeg is never bundled — install your distribution's package.
 
 If a camera speaks something exotic (HomeKit, Nest, WebRTC-only), run
 [go2rtc](https://github.com/AlexxIT/go2rtc) alongside and point watchglass at
