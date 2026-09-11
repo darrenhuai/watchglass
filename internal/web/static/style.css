@@ -692,6 +692,10 @@ legend {
   gap: 10px;
   overflow-x: auto;
   padding: 4px 2px 8px;
+  /* Firefox has no ::-webkit-scrollbar; give it the standard properties so
+     the strip's scrollbar is thin and on-theme there too, not the default. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 .strip::-webkit-scrollbar { height: 6px; }
 .strip::-webkit-scrollbar-track { background: transparent; }
