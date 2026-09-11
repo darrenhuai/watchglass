@@ -214,6 +214,40 @@ func TestTestRegionWithoutEngineShowsCropOnly(t *testing.T) {
 	}
 }
 
+// should_fix 3: pixel_change never uses OCR, so the tesseract-missing note
+// (which reads as an error) must not appear on the most common first test a
+// new user runs against a pixel_change watch.
+func TestTestRegionPixelChangeSuppressesTesseractNote(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engine = nil
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"pixel_change"}}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if strings.Contains(body, "tesseract") {
+		t.Errorf("pixel_change test must not show the tesseract-missing note; body:\n%s", body)
+	}
+	if !strings.Contains(body, "data:image/png;base64,") {
+		t.Errorf("crop should still render; body:\n%s", body)
+	}
+}
+
+// should_fix 3 (still applies): an OCR trigger type with no engine keeps
+// showing the note, matching pre-fix behavior — only pixel_change is exempt.
+func TestTestRegionOCRTypeKeepsTesseractNote(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engine = nil
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"ocr_match"}}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if !strings.Contains(body, "tesseract") {
+		t.Errorf("ocr_match test without an engine should still show the tesseract note; body:\n%s", body)
+	}
+}
+
 func TestSavePersistsAndRestarts(t *testing.T) {
 	s, cfgPath := newTestServer(t)
 	form := url.Values{
@@ -680,6 +714,202 @@ func TestCreateRejectsUnroutableName(t *testing.T) {
 // out-of-bounds values — strconv.ParseFloat happily parses "NaN" and "Inf"
 // as valid floats, and NaN in particular sails through every plain
 // comparison (<, <=, >), so the existing bounds check alone lets it by.
+// must_fix 1 case 1: a watch that config.yaml still lists but that isn't
+// actually running (e.g. a failed restart) must render as stopped on the
+// dashboard, never as a stale green "healthy" reading.
+func TestIndexShowsStoppedWhenNotRunning(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "42% changed", Fired: false, PNG: pngBytes(t)})
+	s.sup.Stop("printer") // newTestServer doesn't actually start it, but be explicit/robust
+	_, body := get(t, s.Handler(), "/")
+	// Isolate the watch row from the topbar's own always-on led-green
+	// "local instrument" indicator (unrelated to any watch's status).
+	rowStart := strings.Index(body, `data-label="Last reading"`)
+	if rowStart == -1 {
+		t.Fatalf("Last reading cell not found; body:\n%s", body)
+	}
+	row := body[rowStart:]
+	if !strings.Contains(row, "led-red") || !strings.Contains(row, "stopped") {
+		t.Errorf("stopped watch with a stale reading must show stopped, not the stale reading; row:\n%s", row)
+	}
+	if strings.Contains(row, "led-green") || strings.Contains(row, "42% changed") {
+		t.Errorf("stopped watch must not show a healthy LED or the stale reading; row:\n%s", row)
+	}
+}
+
+// must_fix 1 case 2: a running watch whose source has been failing must
+// show a distinct error indicator with the failure text, not the same
+// neutral "no data yet" a brand-new watch shows.
+func TestIndexShowsErrorWhenHealthDown(t *testing.T) {
+	s, _ := newTestServer(t)
+	if err := s.sup.Start(context.Background(), config.Watch{
+		Name: "printer", Source: "http://x/snap.jpg", Interval: config.Duration(time.Second),
+		Region: config.Region{X: 0, Y: 0, W: 1, H: 1}, Trigger: config.Trigger{Type: "pixel_change", Threshold: 10},
+	}); err == nil {
+		t.Cleanup(func() { s.sup.Stop("printer") })
+	}
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: "stream unreachable after 3 consecutive failures: dial tcp: connection refused"})
+	_, body := get(t, s.Handler(), "/")
+	if !strings.Contains(body, "led-error") {
+		t.Errorf("running-but-erroring watch must show the error LED; body:\n%s", body)
+	}
+	if !strings.Contains(body, "connection refused") {
+		t.Errorf("dashboard must surface the health error text, not stay neutral; body:\n%s", body)
+	}
+	if strings.Contains(body, "no data yet") {
+		t.Errorf("erroring watch must not read the same as a brand-new one; body:\n%s", body)
+	}
+}
+
+// The detail page's status pill must show the same three states, plus the
+// error message, and the Live panel fragment must carry a stale-since badge.
+func TestDetailAndLiveShowErrorStatus(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.sup.Start(context.Background(), config.Watch{
+		Name: "printer", Source: "http://x/snap.jpg", Interval: config.Duration(time.Second),
+		Region: config.Region{X: 0, Y: 0, W: 1, H: 1}, Trigger: config.Trigger{Type: "pixel_change", Threshold: 10},
+	})
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: "stream unreachable: refused", Since: time.Now()})
+
+	_, body := get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(body, "status-error") || !strings.Contains(body, "stream unreachable: refused") {
+		t.Errorf("detail status pill missing error state/message; body:\n%s", body)
+	}
+
+	_, body = get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(body, "stale since") || !strings.Contains(body, "stream unreachable: refused") {
+		t.Errorf("live fragment missing stale-since badge; body:\n%s", body)
+	}
+}
+
+// must_fix 3: server-side rejections on create/save must render the app's
+// normal page chrome (brand header + a link back), never a bare
+// http.Error() text body.
+func TestCreateRejectionRendersAppChrome(t *testing.T) {
+	s, _ := newTestServer(t)
+	resp, body := postForm(t, s.Handler(), "/watch/new", url.Values{
+		"name": {"printer"}, "source": {"http://x/snap.jpg"}, // duplicate name
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	for _, want := range []string{"watchglass", "all watches", "duplicate watch name"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("error page missing %q; body:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "<pre>") {
+		t.Errorf("error page should not be a bare http.Error() dump; body:\n%s", body)
+	}
+}
+
+func TestSaveRejectionRendersAppChromeWithBackLink(t *testing.T) {
+	s, _ := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"ocr_match"}, "pattern": {"("}, // invalid regex
+		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"watchglass", "back to printer", `href="/watch/printer"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("error page missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+// must_fix 1 case 1 + must_fix 3: a restart failure (e.g. the trigger type
+// requires an OCR engine watchglass doesn't have) must render the styled
+// error page AND leave the watch stopped, not a still-running stale state.
+func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
+	// newTestServer's supervisor is built with a fixed fake OCR engine, so
+	// this needs its own server whose supervisor genuinely has none —
+	// otherwise Restart would succeed and there'd be nothing to test.
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{Watches: []config.Watch{{
+		Name: "printer", Source: "http://unused.invalid/snap.jpg",
+		Interval: config.Duration(time.Second), Region: config.Region{X: 0, Y: 0, W: 1, H: 1},
+		Trigger: config.Trigger{Type: "pixel_change", Threshold: 10},
+	}}}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	reg := state.New(5)
+	sup := supervisor.New(nil, reg, nil, func(string, ...any) {}) // nil: no OCR engine
+	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
+	t.Cleanup(sup.StopAll)
+	s, err := New(cfgPath, cfg, sup, reg, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
+	if err := sup.Start(context.Background(), cfg.Watches[0]); err != nil {
+		t.Fatalf("start printer: %v", err)
+	}
+
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"ocr_match"}, "pattern": {"(?i)done"},
+		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 500 {
+		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "restart failed") || !strings.Contains(body, "watchglass") {
+		t.Errorf("error page missing restart-failure message or app chrome; body:\n%s", body)
+	}
+	if running := s.sup.Running(); len(running) != 0 {
+		t.Errorf("watch should be stopped after a failed restart, got running = %v", running)
+	}
+	_, indexBody := get(t, s.Handler(), "/")
+	rowStart := strings.Index(indexBody, `data-label="Last reading"`)
+	if rowStart == -1 {
+		t.Fatalf("Last reading cell not found; body:\n%s", indexBody)
+	}
+	row := indexBody[rowStart:]
+	if !strings.Contains(row, "stopped") || strings.Contains(row, "led-green") {
+		t.Errorf("dashboard must show the watch stopped after a failed restart, not a healthy LED; row:\n%s", row)
+	}
+}
+
+// should_fix 2: with no OCR engine configured, the OCR-only trigger types
+// must be disabled in the dropdown so a config known to fail restart can't
+// be written in the first place.
+func TestDetailDisablesOCRTypesWithoutEngine(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engine = nil
+	_, body := get(t, s.Handler(), "/watch/printer")
+	for _, want := range []string{`value="ocr_match" `, `value="ocr_changed" `, `value="numeric" `} {
+		idx := strings.Index(body, want)
+		if idx == -1 {
+			t.Fatalf("option %q not found; body:\n%s", want, body)
+		}
+		// disabled should appear on the same <option> line, shortly after.
+		line := body[idx : idx+120]
+		if !strings.Contains(line, "disabled") {
+			t.Errorf("option %q should be disabled without an OCR engine: %q", want, line)
+		}
+	}
+}
+
+func TestDetailEnablesOCRTypesWithEngine(t *testing.T) {
+	s, _ := newTestServer(t)
+	_, body := get(t, s.Handler(), "/watch/printer")
+	idx := strings.Index(body, `value="ocr_match" `)
+	if idx == -1 {
+		t.Fatalf("ocr_match option not found; body:\n%s", body)
+	}
+	line := body[idx : idx+120]
+	if strings.Contains(line, "disabled") {
+		t.Errorf("ocr_match must not be disabled when an OCR engine is available: %q", line)
+	}
+}
+
 func TestTestRegionRejectsNonFiniteFloats(t *testing.T) {
 	s, _ := newTestServer(t)
 	for _, bad := range []url.Values{

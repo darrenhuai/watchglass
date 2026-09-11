@@ -1,16 +1,19 @@
+{{if eq .Status.State "error"}}
+<p class="stale-badge conf-low">stale since {{.Status.Since.Format "15:04:05"}} — {{.Status.Message}}</p>
+{{end}}
 {{if .Recent}}
 {{$latest := index .Recent 0}}
 <div class="readout">
   <span class="led {{if $latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
   <span class="readout-label">latest</span>
-  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}</strong>
+  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}{{if $latest.Fired}}<span class="sr-only">, fired</span>{{end}}</strong>
   <span class="readout-ts mono muted">{{$latest.TS.Format "15:04:05"}}</span>
 </div>
 <div class="strip">
 {{range .Recent}}
   <figure>
     <img src="{{b64png .PNG}}" alt="crop">
-    <figcaption {{if .Fired}}class="fired"{{end}}>{{.Reading}}</figcaption>
+    <figcaption {{if .Fired}}class="fired"{{end}}>{{.Reading}}{{if .Fired}}<span class="sr-only">, fired</span>{{end}}</figcaption>
   </figure>
 {{end}}
 </div>

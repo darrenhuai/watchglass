@@ -193,6 +193,47 @@ type indexRow struct {
 	Watch  config.Watch
 	Latest state.Sample
 	Has    bool
+	Status watchStatus
+}
+
+// watchStatus is a watch's true health for display, derived from three
+// independent signals that must_fix 1 found the UI conflating: whether the
+// supervisor actually has the watch running (not just whether config.yaml
+// lists it), and — if it is running — whether its source has been failing
+// health.Tracker's consecutive-failure threshold. Rendered on the dashboard
+// list, the detail page's status pill, and the Live panel's staleness
+// badge, so a failed-restart or fetch-failing watch never looks like a
+// genuinely healthy one in any of the three places.
+type watchStatus struct {
+	State   string // "running" | "stopped" | "error"
+	Message string // set only for "error": health.Event.Message
+	Since   time.Time
+}
+
+// isRunning reports whether name is currently running in the supervisor.
+func (s *Server) isRunning(name string) bool {
+	for _, n := range s.sup.Running() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// statusFor derives a watch's display status. A watch that isn't running at
+// all (e.g. config.yaml still lists it, but a "Save & restart" failed to
+// actually restart it — must_fix 1 case 1) always reads as "stopped",
+// regardless of any stale health verdict left over from before. A running
+// watch whose source has been failing reads as "error" (must_fix 1 case 2);
+// everything else reads as "running".
+func (s *Server) statusFor(name string, running bool) watchStatus {
+	if !running {
+		return watchStatus{State: "stopped"}
+	}
+	if h, ok := s.reg.GetHealth(name); ok && h.Down {
+		return watchStatus{State: "error", Message: h.Message, Since: h.Since}
+	}
+	return watchStatus{State: "running"}
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +243,12 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	rows := make([]indexRow, 0, len(watches))
 	for _, wc := range watches {
 		latest, has := s.reg.Latest(wc.Name)
-		rows = append(rows, indexRow{Watch: wc, Latest: latest, Has: has})
+		rows = append(rows, indexRow{
+			Watch:  wc,
+			Latest: latest,
+			Has:    has,
+			Status: s.statusFor(wc.Name, s.isRunning(wc.Name)),
+		})
 	}
 	s.render(w, "index.html", rows)
 }
@@ -238,6 +284,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 type liveData struct {
 	Name   string
 	Recent []state.Sample
+	Status watchStatus
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +293,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, "live.html", liveData{Name: name, Recent: s.reg.Recent(name)})
+	s.render(w, "live.html", liveData{
+		Name:   name,
+		Recent: s.reg.Recent(name),
+		Status: s.statusFor(name, s.isRunning(name)),
+	})
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -264,7 +315,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	src := strings.TrimSpace(r.FormValue("source"))
 	if name == "" || src == "" {
-		http.Error(w, "name and source are required", http.StatusBadRequest)
+		s.renderError(w, http.StatusBadRequest, "name and source are required", "/", "back to all watches")
 		return
 	}
 	nw := config.Watch{
@@ -281,7 +332,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		s.renderError(w, statusFor(err), err.Error(), "/", "back to all watches")
 		return
 	}
 	// Start from the canonical, post-Validate watch rather than nw:
@@ -309,8 +360,13 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 }
 
 type detailData struct {
-	Watch   config.Watch
-	Running bool
+	Watch  config.Watch
+	Status watchStatus
+	// EngineAvailable is false when the server started with no OCR engine on
+	// PATH — should_fix 2: the detail page uses it to disable/annotate the
+	// OCR-only trigger types in the Type dropdown instead of only failing
+	// after Save writes a config whose restart is already known to fail.
+	EngineAvailable bool
 	// Base carries BasePath into the page so app.js can prefix the fetch
 	// URLs it builds client-side (the "u" FuncMap func only covers
 	// server-rendered links) — see the #stage data-base attribute in
@@ -324,13 +380,41 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	running := false
-	for _, n := range s.sup.Running() {
-		if n == wc.Name {
-			running = true
-		}
+	s.render(w, "detail.html", detailData{
+		Watch:           wc,
+		Status:          s.statusFor(wc.Name, s.isRunning(wc.Name)),
+		EngineAvailable: s.engine != nil,
+		Base:            s.BasePath,
+	})
+}
+
+// errorPageData feeds error.html — must_fix 3: every server-side rejection
+// on watch create/save used to fall straight through to a bare http.Error()
+// text body with no header, no branding, and no link back into the app, a
+// dead end recoverable only via the browser's Back button. This wraps that
+// same message in the normal page chrome instead.
+type errorPageData struct {
+	Message   string
+	BackURL   string
+	BackLabel string
+}
+
+// renderError writes status and message as a styled, on-brand error page
+// (app header + a link back to backURL) instead of a bare http.Error() text
+// body. backURL is relative to "/" and gets BasePath-prefixed like every
+// other link the UI writes. Falls back to http.Error if the template itself
+// fails to render, matching s.render's own failure handling.
+func (s *Server) renderError(w http.ResponseWriter, status int, message, backURL, backLabel string) {
+	var buf bytes.Buffer
+	data := errorPageData{Message: message, BackURL: s.BasePath + backURL, BackLabel: backLabel}
+	if err := s.tmpl.ExecuteTemplate(&buf, "error.html", data); err != nil {
+		s.logf("render error.html: %v", err)
+		http.Error(w, message, status)
+		return
 	}
-	s.render(w, "detail.html", detailData{Watch: wc, Running: running, Base: s.BasePath})
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	buf.WriteTo(w)
 }
 
 // parseRegion reads and validates a normalized region (0.0-1.0) from form
@@ -437,7 +521,16 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	res := testResult{Crop: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()))}
 	switch e := s.engine.(type) {
 	case nil:
-		res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only."
+		// should_fix 3: pixel_change never uses OCR, so the tesseract-missing
+		// note is noise (and reads as an error) on the most common first test
+		// a new user runs. r.FormValue("ttype") is the type currently
+		// selected in the form — the whole watchform, ttype included, is what
+		// app.js's testbtn handler posts here. An unset/unknown value (a
+		// request that, unlike the UI, doesn't send ttype at all) falls back
+		// to showing the note, matching the pre-fix behavior for that case.
+		if r.FormValue("ttype") != "pixel_change" {
+			res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only."
+		}
 	case ocr.DetailedEngine:
 		res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
 	default:
@@ -594,9 +687,10 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	backURL, backLabel := "/watch/"+name, "back to "+name
 	updated, err := parseWatchForm(base, r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderError(w, http.StatusBadRequest, err.Error(), backURL, backLabel)
 		return
 	}
 	s.applyMu.Lock()
@@ -611,16 +705,24 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return fmt.Errorf("watch %q vanished", name)
 	})
 	if err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		s.renderError(w, statusFor(err), err.Error(), backURL, backLabel)
 		return
 	}
 	canonical, ok := s.findWatch(name)
 	if !ok {
-		http.Error(w, fmt.Sprintf("watch %q vanished after save", name), http.StatusInternalServerError)
+		s.renderError(w, http.StatusInternalServerError, fmt.Sprintf("watch %q vanished after save", name), "/", "back to all watches")
 		return
 	}
 	if err := s.sup.Restart(s.RunCtx, canonical); err != nil {
-		http.Error(w, fmt.Sprintf("saved, but restart failed: %v", err), http.StatusInternalServerError)
+		// must_fix 1 case 1: Restart calls Stop then Start, so a Start
+		// failure here (e.g. the trigger type was switched to ocr_match/
+		// numeric with no tesseract on PATH) leaves the watch fully stopped
+		// even though config.yaml now holds the new config — s.isRunning
+		// will correctly read false and the dashboard/detail page will show
+		// it stopped, not a stale healthy LED. Say so explicitly here too.
+		msg := fmt.Sprintf("saved, but restart failed: %v — the watch is now stopped; fix the config and save again", err)
+		s.logf("ERROR: save %s: %s", name, msg)
+		s.renderError(w, http.StatusInternalServerError, msg, backURL, backLabel)
 		return
 	}
 	s.notifyConfigChanged()

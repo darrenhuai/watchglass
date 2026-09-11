@@ -2,8 +2,10 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +18,32 @@ import (
 type fakeSource struct{ img image.Image }
 
 func (f *fakeSource) Grab(ctx context.Context) (image.Image, error) { return f.img, nil }
+
+// flakySource always errors on Grab — used to drive health.Tracker into its
+// Down state deterministically, without a real unreachable network address.
+type flakySource struct{}
+
+func (flakySource) Grab(ctx context.Context) (image.Image, error) {
+	return nil, errors.New("connection refused")
+}
+
+// countingSource errors until n successful Grabs remain to give, guarded by
+// a mutex since Tick runs on the watch's own goroutine.
+type countingSource struct {
+	mu   sync.Mutex
+	fail int
+	img  image.Image
+}
+
+func (c *countingSource) Grab(ctx context.Context) (image.Image, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail > 0 {
+		c.fail--
+		return nil, errors.New("connection refused")
+	}
+	return c.img, nil
+}
 
 func testWatch(name string) config.Watch {
 	return config.Watch{
@@ -159,6 +187,89 @@ func TestStartFailsOnBadSource(t *testing.T) {
 	}
 	if got := s.Running(); len(got) != 0 {
 		t.Errorf("failed Start must not register a watch, got %v", got)
+	}
+}
+
+// must_fix 1/4: OnHealth must mirror into the registry unconditionally
+// (there is no OnHealth hook set on the Supervisor here at all — this is
+// the "even with no MQTT publisher wired" case), so the web UI can derive
+// its running/error/stopped status without any extra plumbing.
+func TestHealthMirroredIntoRegistryOnFailure(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, nil, func(string, ...any) {})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return flakySource{}, nil }
+	w := testWatch("a")
+	w.HealthAfter = 2
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.StopAll()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth("a"); ok && h.Down {
+			if h.Message == "" {
+				t.Error("Down health event carries no message")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("registry never observed a Down health transition")
+}
+
+// A watch that recovers must flip the registry's verdict back to healthy —
+// the Live panel's staleness badge (must_fix 4) and the dashboard/detail
+// status (must_fix 1) both depend on this clearing automatically once the
+// source comes back, with no user action required.
+func TestHealthRecoversInRegistry(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, nil, func(string, ...any) {})
+	src := &countingSource{fail: 3, img: flat()}
+	s.NewSource = func(w config.Watch) (source.Source, error) { return src, nil }
+	w := testWatch("a")
+	w.HealthAfter = 2
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.StopAll()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth("a"); ok && h.Down {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if h, ok := reg.GetHealth("a"); !ok || !h.Down {
+		t.Fatalf("never observed Down before recovery: %+v ok=%v", h, ok)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth("a"); ok && !h.Down {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("registry never observed recovery")
+}
+
+// A fresh Start must reset any Down verdict left over from a previous run
+// of the same-named watch — otherwise a successful restart into a healthy
+// config would still read as "error" until the new health.Tracker happens
+// to produce its own transition.
+func TestStartResetsStaleHealthFromPreviousRun(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, nil, func(string, ...any) {})
+	reg.SetHealth("a", state.Health{Down: true, Message: "stale from a previous run"})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
+	if err := s.Start(context.Background(), testWatch("a")); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.StopAll()
+	if h, ok := reg.GetHealth("a"); ok && h.Down {
+		t.Errorf("Start did not reset stale Down health: %+v", h)
 	}
 }
 

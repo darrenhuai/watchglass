@@ -3,12 +3,13 @@
   <a class="back-link" href="{{u "/"}}">&larr; all watches</a>
   <div class="detail-title-row">
     <h1 class="mono">{{.Watch.Name}}</h1>
-    <span class="status-pill {{if .Running}}status-run{{else}}status-stop{{end}}">
-      <span class="led {{if .Running}}led-green{{else}}led-red{{end}}" aria-hidden="true"></span>
-      {{if .Running}}running{{else}}stopped{{end}}
+    <span class="status-pill status-{{.Status.State}}">
+      <span class="led {{if eq .Status.State "running"}}led-green{{else if eq .Status.State "error"}}led-error{{else}}led-red{{end}}" aria-hidden="true"></span>
+      {{.Status.State}}
     </span>
   </div>
   <p class="source-line muted mono">{{.Watch.Source}}</p>
+  {{if eq .Status.State "error"}}<p class="status-detail conf-low">{{.Status.Message}}</p>{{end}}
 </div>
 <div class="detail-grid">
   <div class="col-stage">
@@ -16,13 +17,33 @@
       <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
         <img id="snap" src="{{u "/watch/"}}{{.Watch.Name}}/snapshot" alt="snapshot">
         <canvas id="overlay"></canvas>
+        <div id="snap-error" class="snap-error" hidden></div>
       </div>
     </div>
     <p class="hint muted">Drag on the image to select the region to watch.</p>
-    <div id="test-result"></div>
+    <details class="region-manual">
+      <summary>Set region manually</summary>
+      <div class="field-row">
+        <label for="m-x">X (0–1)</label>
+        <input id="m-x" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
+      </div>
+      <div class="field-row">
+        <label for="m-y">Y (0–1)</label>
+        <input id="m-y" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
+      </div>
+      <div class="field-row">
+        <label for="m-w">W (0–1)</label>
+        <input id="m-w" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
+      </div>
+      <div class="field-row">
+        <label for="m-h">H (0–1)</label>
+        <input id="m-h" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
+      </div>
+    </details>
+    <div id="test-result" aria-live="polite" aria-atomic="true"></div>
     <section class="live-section">
       <h2>Live</h2>
-      <div id="live" class="panel live-panel"><p class="muted">loading…</p></div>
+      <div id="live" class="panel live-panel" aria-live="polite" aria-atomic="true"><p class="muted">loading…</p></div>
     </section>
   </div>
   <div class="col-config">
@@ -37,16 +58,18 @@
           <label for="f-ttype">Type</label>
           <select id="f-ttype" name="ttype">
             <option value="pixel_change" {{if eq .Watch.Trigger.Type "pixel_change"}}selected{{end}}>pixel_change</option>
-            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}}>ocr_match</option>
-            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}}>ocr_changed</option>
-            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}}>numeric</option>
+            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if not .EngineAvailable}}disabled{{end}}>ocr_match{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
+            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if not .EngineAvailable}}disabled{{end}}>ocr_changed{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
+            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if not .EngineAvailable}}disabled{{end}}>numeric{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
           </select>
         </div>
-        <div class="field-row field-row-wide">
+        {{if not .EngineAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — OCR-based trigger types (ocr_match, ocr_changed, numeric) are disabled until it's installed.</p>{{end}}
+        <p id="ttype-help" class="muted trigger-note"></p>
+        <div class="field-row field-row-wide" id="row-pattern">
           <label for="f-pattern">Pattern</label>
           <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete">
         </div>
-        <div class="field-row">
+        <div class="field-row" id="row-op">
           <label for="f-op">Op</label>
           <select id="f-op" name="op">
             <option value="" {{if eq .Watch.Trigger.Op ""}}selected{{end}}>-</option>
@@ -56,11 +79,11 @@
         </div>
         <div class="field-row">
           <label for="f-threshold">Threshold</label>
-          <input id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Watch.Trigger.Threshold}}">
+          <input id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Watch.Trigger.Threshold}}" title="pixel_change: percent of the region that must change, 0-100. numeric: the compare value — can be negative (e.g. a sub-zero reading).">
         </div>
         <div class="field-row">
           <label for="f-confirm">Confirm</label>
-          <input id="f-confirm" name="confirm" type="number" min="1" value="{{.Watch.Trigger.Confirm}}">
+          <input id="f-confirm" name="confirm" type="number" min="1" value="{{.Watch.Trigger.Confirm}}" title="Consecutive identical readings required before a state is believed (must be at least 1).">
         </div>
         <div class="field-row">
           <label for="f-cooldown">Cooldown</label>
@@ -79,7 +102,7 @@
           <input id="f-health" name="health_after" type="number" min="1" value="{{.Watch.HealthAfter}}">
         </div>
       </fieldset>
-      <fieldset>
+      <fieldset id="fs-preprocess">
         <legend>Preprocess <span class="legend-note">OCR only</span></legend>
         <div class="field-row field-row-check">
           <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> grayscale</label>
@@ -104,9 +127,11 @@
       </fieldset>
       <fieldset>
         <legend>Notify <span class="legend-note">one shoutrrr URL per line</span></legend>
-        <textarea class="mono" name="notify" rows="3" cols="42">{{range .Watch.Notify}}{{.}}
+        <label for="f-notify" class="sr-only">Notify URLs</label>
+        <textarea id="f-notify" class="mono" name="notify" rows="3" cols="42">{{range .Watch.Notify}}{{.}}
 {{end}}</textarea>
       </fieldset>
+      <p class="save-warning muted">Saving rewrites the whole of config.yaml — hand-written comments, field order, and formatting will not survive.</p>
       <div class="form-actions">
         <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
         <input type="submit" value="Save &amp; restart watch" class="btn btn-primary">

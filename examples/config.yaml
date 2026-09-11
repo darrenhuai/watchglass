@@ -1,4 +1,11 @@
 # watchglass example: watch a 3D printer's LCD via an HTTP snapshot camera.
+#
+# WARNING: the web UI's Save button rewrites this entire file via a full
+# YAML re-marshal. The comments below, the field order, and the formatting
+# will NOT survive the first "Save & restart watch" click, even for watches
+# you never touched. Treat this file as copy-paste starting material, not
+# as an annotated template that stays annotated — see the README's Web UI
+# section for the same warning and the comment-preserving-writer TODO.
 watches:
   - name: printer-lcd
     # Any URL that returns a JPEG/PNG. Most IP cameras expose one
@@ -56,7 +63,9 @@ watches:
     notify:
       - ntfy://ntfy.sh/my-lab-topic
 
-# How many days of readings to keep (default 30; -1 = forever):
+# How many days of readings to keep (default 30; -1 = forever). Roughly
+# 8 MB/day per watch at a 2s poll interval (scales with interval and watch
+# count) — worth knowing before sizing onto e.g. an SD card.
 # history_days: 30
 
 # Protect the web UI (recommended before -listen 0.0.0.0):

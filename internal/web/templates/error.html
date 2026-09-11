@@ -1,0 +1,7 @@
+{{template "head" .}}
+<div class="panel error-panel">
+  <h1>Couldn't do that</h1>
+  <p class="error-message mono">{{.Message}}</p>
+  <p><a href="{{.BackURL}}">&larr; {{.BackLabel}}</a></p>
+</div>
+{{template "foot" .}}

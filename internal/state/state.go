@@ -21,14 +21,27 @@ type Sample struct {
 	PNG     []byte
 }
 
+// Health is a watch's most recent stream health verdict, mirrored from
+// health.Tracker's edge-triggered up/down transitions (see
+// supervisor.Supervisor.Start's r.OnHealth wiring). The zero value (Down:
+// false) reads as healthy — indistinguishable from "never checked yet",
+// which is intentional: a brand-new watch with no Health entry at all
+// should also read as healthy rather than erroring, see Registry.GetHealth.
+type Health struct {
+	Down    bool
+	Message string
+	Since   time.Time // when this Down/healthy state began
+}
+
 type Registry struct {
-	mu  sync.Mutex
-	n   int
-	buf map[string][]Sample // newest first
+	mu     sync.Mutex
+	n      int
+	buf    map[string][]Sample // newest first
+	health map[string]Health
 }
 
 func New(n int) *Registry {
-	return &Registry{n: n, buf: map[string][]Sample{}}
+	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}}
 }
 
 func (r *Registry) Add(watch string, s Sample) {
@@ -68,4 +81,26 @@ func (r *Registry) Drop(watch string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.buf, watch)
+	delete(r.health, watch)
+}
+
+// SetHealth records watch's current stream health verdict, overwriting
+// whatever was there before. Called from supervisor.Supervisor.Start's
+// r.OnHealth closure on every edge-triggered transition, and reset to the
+// zero value (healthy) each time a watch (re)starts, since a fresh
+// health.Tracker always begins in the "not down" state.
+func (r *Registry) SetHealth(watch string, h Health) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.health[watch] = h
+}
+
+// GetHealth returns watch's last recorded health verdict, or false if none
+// has ever been recorded (which reads as healthy to callers, same as an
+// explicit Health{Down: false}).
+func (r *Registry) GetHealth(watch string) (Health, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.health[watch]
+	return h, ok
 }

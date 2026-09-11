@@ -11,6 +11,15 @@ html { color-scheme: dark; }
 body, h1, h2, h3, p, figure, fieldset { margin: 0; }
 ul, ol { margin: 0; padding: 0; }
 img { max-width: 100%; }
+/* should_fix 1/7: fields are toggled via the native `hidden` attribute
+   (app.js's updateTriggerFields, the manual-region <details>'s own native
+   behavior). Several of the elements that get hidden this way — .field-row,
+   fieldset — also carry a class that sets `display` (grid / block), which
+   has the same specificity as the UA stylesheet's own `[hidden]{display:
+   none}` rule; author rules win same-specificity ties over UA ones purely
+   by cascade order, so without this override a hidden field-row would stay
+   visible. This one rule keeps `el.hidden = true` reliable everywhere. */
+[hidden] { display: none !important; }
 
 /* ---- Tokens -------------------------------------------------------------
    Dark neutral ground, hairline borders, green/amber/red signal colors. */
@@ -174,6 +183,10 @@ main {
 .led-amber { background: var(--amber);  box-shadow: 0 0 5px var(--amber-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
 .led-red   { background: transparent; box-shadow: inset 0 0 0 1.5px var(--red); }
 .led-off   { background: var(--border-strong); box-shadow: none; }
+/* must_fix 1: a third, visually distinct state for "running, but the
+   source has been failing" — solid red (unlike led-red's ring-only
+   "stopped") so the two red states never read as the same LED at a glance. */
+.led-error { background: var(--red); box-shadow: 0 0 5px var(--red-a30), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
 
 /* ---- Pills / chips / status badges -------------------------------------*/
 .pill {
@@ -199,8 +212,12 @@ main {
   letter-spacing: 0.07em;
   color: var(--text-dim);
 }
-.status-run  { color: var(--accent); border-color: var(--accent-a35); }
-.status-stop { color: var(--red);    border-color: var(--red-a30); }
+/* Class names mirror watchStatus.State verbatim ("running"/"stopped"/
+   "error" — see detail.html's class="status-{{.Status.State}}"). */
+.status-running { color: var(--accent); border-color: var(--accent-a35); }
+.status-stopped { color: var(--red);    border-color: var(--red-a30); }
+.status-error   { color: var(--red);    border-color: var(--red-a30); }
+.status-detail  { margin: 6px 0 0; font-size: 12.5px; }
 
 /* ---- Buttons -------------------------------------------------------------*/
 button, input[type="submit"], input[type="button"] {
@@ -260,6 +277,15 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-ring);
+}
+/* should_fix 6: placeholder text (e.g. Pattern's "(?i)print complete")
+   rendered in a color nearly identical to real input text, easy to mistake
+   for an actually-filled field. Dimmer + italic makes the two unmistakable
+   across every field in the form, not just Pattern. */
+input::placeholder, textarea::placeholder {
+  color: var(--text-faint);
+  font-style: italic;
+  opacity: 1; /* Firefox otherwise dims placeholders further on top of this */
 }
 
 select {
@@ -350,6 +376,10 @@ legend {
   color: var(--text-faint);
   margin-left: 6px;
 }
+/* should_fix 1/2: the one-line description under the Type dropdown
+   (#ttype-help, text supplied by app.js) and the tesseract-missing note
+   that appears there when the server has no OCR engine configured. */
+.trigger-note { margin: 4px 0 0; font-size: 12px; color: var(--text-faint); }
 
 /* Label-left / field-right grid — replaces the old inline paragraph flow.
    The Pattern row stacks its label above the input via .field-row-wide
@@ -380,6 +410,12 @@ legend {
 .range-field { display: flex; align-items: center; gap: 10px; }
 .range-field input[type="range"] { flex: 1; }
 .ppt-val { min-width: 34px; text-align: right; font-size: 12px; color: var(--text-dim); }
+
+/* should_fix 5: config.Save() re-marshals the whole file on every save, so
+   hand-written comments/order in a hand-edited config.yaml don't survive
+   the first UI save — this sits permanently near Save rather than as a
+   one-time dismissable warning, since the fact stays true on every save. */
+.save-warning { margin-top: var(--space-4); font-size: 12px; }
 
 .form-actions {
   display: flex;
@@ -450,6 +486,23 @@ legend {
 .empty-state { padding: var(--space-6) var(--space-5); text-align: center; color: var(--text-dim); }
 .empty-state p { margin: 4px 0; }
 .empty-state p:first-child { color: var(--text); font-weight: 600; }
+
+/* ---- Error page (error.html) --------------------------------------------
+   must_fix 3: every server-side rejection on create/save used to fall
+   through to a bare http.Error() text body — no header, no branding, no
+   link back, a dead end recoverable only via the browser Back button. This
+   wraps the same message in the app's normal chrome instead. */
+.error-panel { max-width: 560px; }
+.error-panel h1 { margin-bottom: var(--space-3); }
+.error-message {
+  padding: var(--space-3);
+  border: 1px solid var(--red-a30);
+  border-radius: var(--radius-sm);
+  background: var(--red-a10);
+  color: var(--red);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .form-inline-add {
   display: flex;
@@ -532,6 +585,42 @@ legend {
 }
 .hint { margin-top: var(--space-3); font-size: 12.5px; }
 
+/* ---- Snapshot error placeholder (#snap-error) ---------------------------
+   must_fix 2: shown in place of the <img>'s generic broken-image glyph when
+   /snapshot 502s (unreachable source, no successful frame yet). Sized with
+   its own min-height rather than inheriting the image's natural size, since
+   #stage's own sizing (inline-block, wrapping the img) collapses once the
+   img is hidden. */
+.snap-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 220px;
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--red);
+  background: var(--bg-inset);
+  font-size: 12.5px;
+}
+.snap-error strong { color: var(--text); font-size: 13px; }
+.snap-error div { color: var(--text-dim); word-break: break-word; max-width: 46ch; }
+
+/* ---- Manual region entry (should_fix 7) ----------------------------------
+   Keyboard/switch/screen-reader path to the same fx/fy/fw/fh fields the
+   pointer-drag overlay writes to; a <details> disclosure so it stays out of
+   the way for pointer users who don't need it. */
+.region-manual { margin-top: var(--space-3); }
+.region-manual summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.region-manual summary:hover { color: var(--accent); }
+.region-manual .field-row { grid-template-columns: 60px 1fr; }
+.region-manual[open] summary { margin-bottom: var(--space-2); }
+
 /* ---- Test result fragment (#test-result) --------------------------------
    Injected via innerHTML — no <style>/<script> inside the fragment; every
    rule lives here. Collapses to nothing (no stray bordered box) until a
@@ -564,6 +653,20 @@ legend {
    Injected via innerHTML — no <style>/<script> inside the fragment. */
 .live-section { margin-top: var(--space-6); }
 .live-panel { min-height: 60px; }
+
+/* must_fix 4: killing the source behind a running watch used to leave the
+   Live panel showing zero visible change — badge still green, filmstrip
+   frozen with no indication the timestamp had stopped advancing. Shown once
+   Status.State is "error" (the same health.Tracker verdict must_fix 1
+   drives), so recovery — the badge disappearing — needs no extra wiring. */
+.stale-badge {
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px;
+  border: 1px solid var(--red-a30);
+  border-radius: var(--radius-sm);
+  background: var(--red-a10);
+  font-size: 12.5px;
+}
 
 .readout {
   display: flex;

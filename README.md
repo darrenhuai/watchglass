@@ -41,6 +41,15 @@ for prebuilt binaries — Linux, Windows, and macOS — no Go toolchain
 required. ffmpeg and tesseract aren't bundled; install them separately if
 you need RTSP sources or OCR triggers.
 
+**Windows, running the native binary (not Docker):** stop it with **Ctrl+C
+in the console that's running it**, not Task Manager or `taskkill`. Windows
+has no forceless `taskkill` for a console app — anything else kills the
+process outright, so the graceful-shutdown path (draining the web server,
+publishing the MQTT last-will, closing the history database cleanly) never
+runs. A service wrapper that sends a real stop signal works too. This
+doesn't affect the Docker image: its exec-form `ENTRYPOINT`/`CMD` lets a
+real `docker stop` deliver SIGTERM straight to the process.
+
 ### From source (Go toolchain)
 
     git clone https://github.com/darrenhuai/watchglass && cd watchglass
@@ -53,17 +62,29 @@ Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
 1. Install [tesseract](https://github.com/tesseract-ocr/tesseract) (only
    needed for OCR triggers): `apt install tesseract-ocr` or
    `choco install tesseract`.
-2. Copy `examples/config.yaml` to `config.yaml` (the default path the binary
-   looks for), point `source` at your camera's snapshot URL, and adjust the
-   region and trigger.
-3. Run:
+2. Start with an empty config and run watchglass:
 
+    echo "watches: []" > config.yaml
     go run ./cmd/watchglass -config config.yaml
 
    `-config` defaults to `config.yaml` in the working directory, so if you
    used that name you can omit the flag. Readings are logged to a SQLite
    database at `-db` (default `watchglass.db`), which is created
    automatically on first run.
+
+   No camera handy? Run the bundled demo rig instead — no config needed, no
+   camera required — see [examples/demo/README.md](examples/demo/).
+3. Open http://127.0.0.1:8080 in your browser, click **Add a watch**, point
+   `source` at your camera's snapshot URL, then open the new watch: drag a
+   rectangle over the part of the screen you care about, hit **Test this
+   region** to see exactly what the OCR engine reads, tune the preprocessing
+   sliders (grayscale, invert, binarize, upscale) until the text comes back
+   clean, pick a trigger type, and **Save**. This is the same drag → test →
+   save loop the hero GIF above records — it's the low-friction path, not
+   hand-editing YAML. `examples/config.yaml` is still there as copy-paste
+   material for more watches once you've got the hang of it (see the
+   [Web UI](#web-ui) section's warning about what a UI Save does to a
+   hand-edited file first).
 
 ## Sources
 
@@ -133,6 +154,12 @@ the region that fired — the actual pixels, in the push. Use `ntfy://host/topic
 (TLS) or `ntfy+http://host:port/topic` (local server). Other services get
 the text.
 
+### Other notification services
+
+Every `notify` URL is handed to [shoutrrr](https://containrrr.dev/shoutrrr/)
+under the hood — see its docs for the full list of supported services and
+URL formats (Discord, Slack, Telegram, Pushover, and more), not just ntfy.
+
 ## Web UI
 
 watchglass serves a local dashboard while it runs — open http://127.0.0.1:8080.
@@ -141,6 +168,13 @@ about, and hit **Test this region** to see exactly what the OCR engine reads —
 tune the preprocessing sliders (grayscale, invert, binarize, upscale) until
 the text comes back clean, then **Save**. The page shows a live strip of
 recent readings so you can verify triggers before trusting them.
+
+> **Save rewrites the whole file.** Clicking **Save** re-marshals all of
+> `config.yaml` from scratch — hand-written comments, field order, and
+> formatting do not survive a UI save, even for watches you never touched.
+> Treat `examples/config.yaml` as copy-paste starting material, not as an
+> annotated template that stays annotated once the UI has saved over it. A
+> comment-preserving writer is tracked as future work.
 
 The UI binds to localhost only by default. `-listen 0.0.0.0:8080` exposes it
 on your network — add an `auth:` block first (below) or put it behind a
@@ -213,6 +247,12 @@ kept — default 30, or `-1` to keep everything forever:
 
 Pruning runs once at startup and then once every 24 hours; with `-1` it
 never runs at all.
+
+Rough sizing: measured at ~189 bytes/row (including its two indexes) at a 2s
+poll interval, that's roughly 8 MB/day per watch — about 245 MB at the
+default 30-day retention. Scales linearly with `interval` (halve the poll
+rate, halve the size) and with how many watches you run; worth knowing
+before sizing onto an SD card (e.g. the Home Assistant add-on target).
 
 ## Trigger types
 

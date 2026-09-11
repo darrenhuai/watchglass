@@ -101,8 +101,23 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			onEvent(name, ev, buf.Bytes())
 		}
 	}
-	if onHealth != nil {
-		r.OnHealth = func(hev health.Event) { onHealth(name, hev) }
+	// Always mirror health transitions into the registry (must_fix 1/4: the
+	// web UI derives its running/error/stopped display and the Live panel's
+	// staleness badge from this), regardless of whether an onHealth hook is
+	// also wired (e.g. the MQTT publisher). Reset to healthy first: a fresh
+	// health.Tracker always begins in the "not down" state, so any Down
+	// verdict left over from a watch of the same name that ran before this
+	// Start must not linger and read as still-erroring.
+	s.reg.SetHealth(name, state.Health{})
+	r.OnHealth = func(hev health.Event) {
+		s.reg.SetHealth(name, state.Health{
+			Down:    hev.State == "down",
+			Message: hev.Message,
+			Since:   time.Now(),
+		})
+		if onHealth != nil {
+			onHealth(name, hev)
+		}
 	}
 	wctx, cancel := context.WithCancel(ctx)
 	h := &handle{cancel: cancel, done: make(chan struct{})}

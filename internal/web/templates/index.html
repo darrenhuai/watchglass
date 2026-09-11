@@ -26,9 +26,15 @@
       <td class="mono" data-label="Interval">{{dur .Watch.Interval}}</td>
       <td data-label="Last reading">
         <span class="reading-wrap">
-        {{if .Has}}
+        {{if eq .Status.State "stopped"}}
+          <span class="led led-red" aria-hidden="true"></span>
+          <span class="muted">stopped</span>
+        {{else if eq .Status.State "error"}}
+          <span class="led led-error" aria-hidden="true"></span>
+          <span class="conf-low">{{.Status.Message}}</span>
+        {{else if .Has}}
           <span class="led {{if .Latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="mono{{if .Latest.Fired}} fired{{end}}">{{.Latest.Reading}}</span>
+          <span class="mono{{if .Latest.Fired}} fired{{end}}">{{.Latest.Reading}}{{if .Latest.Fired}}<span class="sr-only">, fired</span>{{end}}</span>
         {{else}}
           <span class="led led-off" aria-hidden="true"></span>
           <span class="muted">no data yet</span>
