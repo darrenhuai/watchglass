@@ -1,12 +1,14 @@
 # watchglass — Home Assistant Add-on
 
-## EXPERIMENTAL — not yet installable
+## EXPERIMENTAL — not yet installable from the store
 
-This directory is a prepared skeleton, not a published add-on. `config.yaml`
-has no `image:` key on purpose, so the Supervisor can't pull and install it
-yet — there's no published `ghcr.io` image (a launch-day step). Until then,
-run watchglass on this host via the plain Docker/Compose route in the main
-repository README instead; nothing below works today.
+`config.yaml` now points at the published `ghcr.io/darrenhuai/watchglass`
+image (amd64 and aarch64; armv7 isn't built yet), so the Supervisor has
+something to pull. What's still missing is the add-on *repository*
+packaging — a `repository.yaml` at the root of a repo with this directory
+one level down — so "add repository → install" doesn't work yet. Until
+that lands, run watchglass via the plain Docker/Compose route in the main
+repository README.
 
 ## Once installable
 

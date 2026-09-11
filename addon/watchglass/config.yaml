@@ -1,9 +1,11 @@
 name: watchglass
-version: "0.1.0"
+version: "0.1.2"
 slug: watchglass
 description: Watch a region of any camera or stream and get notified when its text or pixels change
 url: https://github.com/darrenhuai/watchglass
-arch: [amd64, aarch64, armv7]
+# armv7 is omitted until the publish-image workflow builds linux/arm/v7;
+# the published manifest currently covers linux/amd64 and linux/arm64.
+arch: [amd64, aarch64]
 init: false
 webui: http://[HOST]:[PORT:8080]
 ports:
@@ -12,8 +14,6 @@ ports_description:
   8080/tcp: Web UI
 map:
   - addon_config:rw
-# NOTE: image is intentionally unset while the repo is private — the add-on
-# builds locally from ./Dockerfile. The publish-image workflow now pushes
-# ghcr.io/darrenhuai/watchglass on tag or manual dispatch; uncommenting the
-# line below is a launch-day step once the package is public. See DOCS.md.
-# image: ghcr.io/darrenhuai/watchglass
+# The Supervisor pulls image:<version>, so version above must match a tag
+# the publish-image workflow has pushed (it tags each vX.Y.Z release).
+image: ghcr.io/darrenhuai/watchglass
