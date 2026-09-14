@@ -20,6 +20,9 @@ Frame selection:
     mid-print frame while you frame the shot, then restart the server
     with --once-complete for the finish — the free-running loop can hit
     PRINT COMPLETE at an unscripted moment and fire the trigger early.
+  * --bind ADDR: interface to listen on (default 127.0.0.1). Use 0.0.0.0
+    to feed a watchglass running in a container, which reaches the host
+    at host.docker.internal:<port> rather than 127.0.0.1.
 
 Only GET /snapshot.jpg is served; anything else is a 404. stdlib only.
 """
@@ -83,16 +86,18 @@ def main():
                          help="play frames 0..5 once, then hold PRINT COMPLETE forever")
     parser.add_argument("--hold", type=int, choices=range(FRAME_COUNT), default=None,
                          help="serve this frame forever (for scripted recordings)")
+    parser.add_argument("--bind", default="127.0.0.1",
+                         help="interface to listen on (default 127.0.0.1; 0.0.0.0 for containers)")
     args = parser.parse_args()
 
     frames = load_frames()
     start = time.time()
     handler = make_handler(frames, start, args.period, args.once_complete, args.hold)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    server = ThreadingHTTPServer((args.bind, args.port), handler)
 
     mode = (f"hold frame_{args.hold}" if args.hold is not None
             else "once-complete" if args.once_complete else "looping")
-    print(f"fakecam: serving http://127.0.0.1:{args.port}/snapshot.jpg "
+    print(f"fakecam: serving http://{args.bind}:{args.port}/snapshot.jpg "
           f"(period={args.period}s, mode={mode})", file=sys.stderr)
     try:
         server.serve_forever()

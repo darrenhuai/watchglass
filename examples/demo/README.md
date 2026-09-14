@@ -55,3 +55,12 @@ rm demo.db
 ```
 
 (and Ctrl-C both terminals). Nothing else here is generated at runtime.
+
+## Feeding a container
+
+Running watchglass in Docker instead? Start the camera on every interface
+and point the watch at the host:
+
+    python fakecam.py --bind 0.0.0.0
+
+and use `http://host.docker.internal:8100/snapshot.jpg` as the source.
