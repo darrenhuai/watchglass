@@ -4,8 +4,8 @@
 
 The main repository doubles as an add-on repository: `repository.yaml` at
 its root, this directory as the add-on. It pulls the published
-`ghcr.io/darrenhuai/watchglass` image (amd64 and aarch64; armv7 isn't
-built yet). It hasn't been submitted to the official store and hasn't had
+`ghcr.io/darrenhuai/watchglass` image (amd64 and aarch64, the two
+architectures the Supervisor permits for add-ons). It hasn't been submitted to the official store and hasn't had
 wide testing on real Supervisors, so expect rough edges and please report
 them — the plain Docker/Compose route in the main README is the
 better-trodden path.
