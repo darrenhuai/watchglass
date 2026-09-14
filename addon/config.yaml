@@ -6,7 +6,6 @@ url: https://github.com/darrenhuai/watchglass
 # armv7 is omitted until the publish-image workflow builds linux/arm/v7;
 # the published manifest currently covers linux/amd64 and linux/arm64.
 arch: [amd64, aarch64]
-init: false
 webui: http://[HOST]:[PORT:8080]
 ports:
   8080/tcp: 8080

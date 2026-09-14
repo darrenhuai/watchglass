@@ -1,9 +1,8 @@
 name: publish-image
 # Builds and pushes the watchglass container image to GitHub Container
-# Registry (ghcr.io). The published package inherits this repo's visibility
-# (private for now; it flips to public automatically if the repo does).
-# The Home Assistant add-on (addon/watchglass) will consume this image once
-# it is public - see the commented `image:` line in addon/watchglass/config.yaml.
+# Registry (ghcr.io). The Home Assistant add-on (addon/config.yaml) pulls
+# this image at the tag matching its `version`, so cut the add-on version
+# together with the release tag.
 on:
   push:
     tags: ["v*"]

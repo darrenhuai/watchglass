@@ -1,19 +1,22 @@
 # watchglass — Home Assistant Add-on
 
-## EXPERIMENTAL — not yet installable from the store
+## EXPERIMENTAL
 
-`config.yaml` now points at the published `ghcr.io/darrenhuai/watchglass`
-image (amd64 and aarch64; armv7 isn't built yet), so the Supervisor has
-something to pull. What's still missing is the add-on *repository*
-packaging — a `repository.yaml` at the root of a repo with this directory
-one level down — so "add repository → install" doesn't work yet. Until
-that lands, run watchglass via the plain Docker/Compose route in the main
-repository README.
+The main repository doubles as an add-on repository: `repository.yaml` at
+its root, this directory as the add-on. It pulls the published
+`ghcr.io/darrenhuai/watchglass` image (amd64 and aarch64; armv7 isn't
+built yet). It hasn't been submitted to the official store and hasn't had
+wide testing on real Supervisors, so expect rough edges and please report
+them — the plain Docker/Compose route in the main README is the
+better-trodden path.
 
-## Once installable
+## Installing
 
-Add this repository to the Supervisor's add-on store, install watchglass,
-and start it.
+Settings → Add-ons → Add-on store → ⋮ → Repositories, paste
+`https://github.com/darrenhuai/watchglass`, then install **watchglass**
+and start it. Or use the one-click link:
+
+[Add the watchglass repository to Home Assistant](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdarrenhuai%2Fwatchglass)
 
 ### Config
 

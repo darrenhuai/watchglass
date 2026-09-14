@@ -12,7 +12,8 @@ with two commands, no camera needed.*
 
 > Early development. Core engine, web UI, RTSP/ffmpeg sources,
 > MQTT/Home Assistant discovery, Docker packaging, and tagged binary
-> releases all work; a published Home Assistant add-on is next.
+> releases all work; the Home Assistant add-on installs as a custom
+> repository but is still experimental.
 
 ## Install
 
@@ -155,6 +156,15 @@ The broker password lives in plaintext in `config.yaml` — keep the file
 private (watchglass writes it `0o600` on Unix); a secrets-manager story is
 future work.
 
+### Add-on (experimental)
+
+This repository doubles as a Home Assistant add-on repository. Add
+`https://github.com/darrenhuai/watchglass` under Settings → Add-ons →
+Add-on store → Repositories (or use [this link](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdarrenhuai%2Fwatchglass)) and install
+**watchglass**. It pulls the published image and serves the dashboard on
+port 8080. It hasn't been through the official store, so expect rough
+edges — details and caveats in [`addon/DOCS.md`](addon/DOCS.md).
+
 ### Snapshot in your push notifications
 
 Notifications to [ntfy](https://ntfy.sh) topics include the cropped image of
@@ -293,8 +303,8 @@ issue](https://github.com/darrenhuai/watchglass/issues) and we'll add one.
 
 Post-v1, roughly in priority order:
 
-- [ ] Home Assistant Add-on — skeleton in `addon/` today, not yet
-      installable (no published image)
+- [ ] Home Assistant Add-on — installs as a custom repository today (see
+      `addon/DOCS.md`); official store submission and an armv7 image remain
 - [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
 - [ ] Native seven-segment decoder
 - [x] Recipes gallery (community configs per device)
