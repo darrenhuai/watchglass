@@ -389,7 +389,7 @@ func TestHealthNotifiesOnDownAndRecovery(t *testing.T) {
 	if len(notifier.sent) != 1 {
 		t.Fatalf("threshold reached: want 1 notification, got %v", notifier.sent)
 	}
-	if !strings.Contains(notifier.sent[0], "unreachable") {
+	if !strings.Contains(notifier.sent[0], "no reading for 2 consecutive polls") || !strings.Contains(notifier.sent[0], "connection refused") {
 		t.Errorf("down notification = %q", notifier.sent[0])
 	}
 	if _, err := r.Tick(ctx); err == nil {
@@ -478,6 +478,117 @@ func TestFiredEventUsesImageSender(t *testing.T) {
 	}
 	if len(n.sent) != 0 {
 		t.Errorf("plain Send should not be used when ImageSender available, got %v", n.sent)
+	}
+}
+
+// blockingSource models a grab in flight when Stop fires: it returns
+// ctx.Err() the moment ctx is cancelled.
+type blockingSource struct{}
+
+func (blockingSource) Grab(ctx context.Context) (image.Image, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// Stop cancelling a grab mid-flight is not a verdict on the stream: with
+// health_after=1 it used to trip a Down transition ("context canceled") on
+// the way out, fanning out to the notifier, the registry, and the MQTT
+// health topic.
+func TestCancelledPollIsNotAHealthFailure(t *testing.T) {
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})
+	w.HealthAfter = 1
+	notifier := &fakeNotifier{}
+	r, err := New(w, blockingSource{}, nil, notifier, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []health.Event
+	r.OnHealth = func(hev health.Event) { events = append(events, hev) }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Tick(ctx); err == nil {
+		t.Fatal("cancelled grab should still return an error to the caller")
+	}
+	if len(events) != 0 || len(notifier.sent) != 0 {
+		t.Errorf("cancelled grab tripped health: events=%+v sent=%v", events, notifier.sent)
+	}
+}
+
+type failingOCR struct{ fail bool }
+
+func (f *failingOCR) Recognize(ctx context.Context, img image.Image) (string, error) {
+	if f.fail {
+		return "", errors.New("tesseract: exit status 1")
+	}
+	return "PRINT COMPLETE", nil
+}
+
+// A frame that arrives but can't be read is a poll with no reading: it must
+// count toward the health threshold like a failed grab, so an engine failing
+// on every tick surfaces as down (and recovers) instead of reading as a
+// healthy watch that never produces data.
+func TestOCRFailureCountsTowardHealth(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	engine := &failingOCR{fail: true}
+	w := watchCfg(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 1})
+	w.HealthAfter = 2
+	r, err := New(w, src, engine, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []health.Event
+	r.OnHealth = func(hev health.Event) { events = append(events, hev) }
+	ctx := context.Background()
+	r.Tick(ctx)
+	if len(events) != 0 {
+		t.Fatalf("one OCR failure must not transition, got %+v", events)
+	}
+	r.Tick(ctx)
+	if len(events) != 1 || events[0].State != "down" || !strings.Contains(events[0].Message, "ocr: tesseract") {
+		t.Fatalf("second OCR failure should transition to down quoting the OCR error, got %+v", events)
+	}
+	r.Tick(ctx)
+	if len(events) != 1 {
+		t.Fatalf("already-down must not re-report, got %+v", events)
+	}
+	engine.fail = false
+	if _, err := r.Tick(ctx); err != nil {
+		t.Fatalf("recovered tick: %v", err)
+	}
+	if len(events) != 2 || events[1].State != "healthy" {
+		t.Errorf("first readable frame should transition back to healthy, got %+v", events)
+	}
+}
+
+// A runner seeded down (restart of a watch that was down) reports exactly
+// one "healthy" — on the first poll that produces a reading — and nothing
+// while the source is still failing.
+func TestSeedDownReportsRecoveryOnFirstReading(t *testing.T) {
+	failing := &flakySource{fail: true}
+	notifier := &fakeNotifier{}
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})
+	w.HealthAfter = 2
+	r, err := New(w, failing, nil, notifier, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SeedDown()
+	var events []health.Event
+	r.OnHealth = func(hev health.Event) { events = append(events, hev) }
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		r.Tick(ctx)
+	}
+	if len(events) != 0 || len(notifier.sent) != 0 {
+		t.Fatalf("still-dead source after SeedDown must stay silent, got events=%+v sent=%v", events, notifier.sent)
+	}
+	failing.fail = false
+	r.Tick(ctx)
+	if len(events) != 1 || events[0].State != "healthy" {
+		t.Fatalf("first reading after SeedDown should emit healthy, got %+v", events)
+	}
+	if len(notifier.sent) != 1 || !strings.Contains(notifier.sent[0], "recovered") {
+		t.Errorf("recovery should notify once, got %v", notifier.sent)
 	}
 }
 

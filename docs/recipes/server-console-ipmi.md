@@ -46,7 +46,7 @@ text is parsed.
 
 `health_after: 6` instead of the default 3: KVM-over-IP sessions and USB
 capture cards are more prone to a dropped frame or a brief HDMI handshake
-hiccup than a normal IP camera, and a false "stream unreachable" alert on
+hiccup than a normal IP camera, and a false "down" alert on
 hardware that's actually fine is worse than being a bit slower to notice a
 real outage. Raise it further if your specific KVM is chattier than that.
 

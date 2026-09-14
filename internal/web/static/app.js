@@ -12,6 +12,7 @@
   var base = stage.dataset.base || "";
 
   function sizeCanvas() {
+    canvas.hidden = false;
     canvas.width = img.clientWidth;
     canvas.height = img.clientHeight;
     drawRect();
@@ -73,18 +74,26 @@
   }
   // applyManualFields is the manual-entry path: the manual fields ARE the
   // source of the change and must be left exactly as typed, so this only
-  // repaints — never calls syncManualFields.
+  // repaints — never calls syncManualFields. A field that is empty (or
+  // holds a partial entry the browser reports as "") leaves its hidden
+  // counterpart alone rather than zeroing it: one keystroke in X must not
+  // silently rewrite Y/W/H.
   function applyManualFields() {
-    fx.value = mx.value || "0";
-    fy.value = my.value || "0";
-    fw.value = mw.value || "0";
-    fh.value = mh.value || "0";
+    if (mx.value !== "") fx.value = mx.value;
+    if (my.value !== "") fy.value = my.value;
+    if (mw.value !== "") fw.value = mw.value;
+    if (mh.value !== "") fh.value = mh.value;
     paint();
   }
   if (mx) {
     [mx, my, mw, mh].forEach(function (el) {
       el.addEventListener("input", applyManualFields);
     });
+    // Populate from the configured region right away, not only from the
+    // image-load path (drawRect): when the camera is down the image never
+    // loads, and manual entry is then the ONLY way to edit the region — it
+    // must start from the real values, not from blanks.
+    syncManualFields();
   }
   var drag = null;
   canvas.addEventListener("pointerdown", function (e) {
@@ -115,14 +124,49 @@
   // request itself never exposes a failed response's body) purely to read
   // that text, then swap in an in-app placeholder showing it.
   var snapError = document.getElementById("snap-error");
+  var snapURL = base + "/watch/" + encodeURIComponent(name) + "/snapshot";
+  // One image retry per page load, at most: an intermittently failing
+  // camera could otherwise bounce forever between a failed <img> load and
+  // a successful diagnostic fetch, hammering it once per round trip.
+  var snapRetried = false;
   function showSnapError() {
     img.hidden = true;
+    // The never-sized canvas (300x150 by default) would otherwise sit on top
+    // of the placeholder, catching a text-select drag across the error
+    // message as a region drag. sizeCanvas unhides it once an image loads.
+    canvas.hidden = true;
     if (!snapError) return;
     snapError.hidden = false;
     snapError.textContent = "camera unreachable — checking why…";
-    fetch(base + "/watch/" + encodeURIComponent(name) + "/snapshot")
-      .then(function (resp) { return resp.text(); })
+    fetch(snapURL)
+      .then(function (resp) {
+        // Whenever the body isn't read as text below, cancel it: an
+        // unread response body keeps the request in flight (and holds a
+        // frame's worth of PNG) until it is garbage-collected.
+        var discard = function () { if (resp.body) resp.body.cancel(); };
+        if (resp.ok) {
+          discard();
+          // The camera answered this time (a transient failure, not a dead
+          // source). Retry the image once instead of printing the PNG body
+          // as the "reason".
+          if (!snapRetried) {
+            snapRetried = true;
+            snapError.hidden = true;
+            img.hidden = false;
+            img.src = snapURL + "?r=" + Date.now();
+            return null;
+          }
+          return "the camera answered a retry but failed again — it may be overloaded; reload to try once more";
+        }
+        var ct = resp.headers.get("Content-Type") || "";
+        if (ct.indexOf("text/") !== 0) {
+          discard();
+          return "HTTP " + resp.status;
+        }
+        return resp.text();
+      })
       .then(function (text) {
+        if (text === null) return;
         snapError.textContent = "";
         var strong = document.createElement("strong");
         strong.textContent = "camera unreachable";
@@ -160,11 +204,56 @@
       .catch(function (err) { el.innerHTML = "<p class='conf-low'>test failed: " + err + "</p>"; });
   });
 
-  var live = document.getElementById("live");
+  // The /live fragment is two blocks (see live.html): .live-status (the
+  // stale/stopped badge + latest readout) and .strip (the filmstrip). Each
+  // lands in its own container and is only swapped in when its markup
+  // actually changed. #live-status is the screen-reader live region: with
+  // aria-atomic it re-announces its whole content on ANY DOM change, so
+  // rewriting the entire panel every 2s — filmstrip included, even when
+  // byte-identical — kept the polite queue full forever. The filmstrip
+  // stays outside the region entirely, and an unchanged status is left
+  // untouched. The fragment's data-state also drives the header's status
+  // pill, so a watch that stops or errors underneath an open page is
+  // reflected there too, not only on the next full reload.
+  var liveStatus = document.getElementById("live-status");
+  var liveStrip = document.getElementById("live-strip");
+  var pill = document.getElementById("status-pill");
+  var statusDetail = document.getElementById("status-detail");
+  var PILL_LED = { running: "led-green", error: "led-error", stopped: "led-red" };
+  function updateStatus(state, message) {
+    if (!pill || !PILL_LED[state]) return;
+    pill.className = "status-pill status-" + state;
+    var led = pill.querySelector(".led");
+    if (led) led.className = "led " + PILL_LED[state];
+    var text = pill.querySelector(".status-text");
+    if (text) text.textContent = state;
+    if (statusDetail) {
+      statusDetail.textContent = message || "";
+      statusDetail.hidden = state !== "error";
+    }
+  }
+  var lastStatus = null, lastStrip = null;
   function poll() {
     fetch(base + "/watch/" + encodeURIComponent(name) + "/live")
       .then(function (resp) { return resp.ok ? resp.text() : null; })
-      .then(function (html) { if (html !== null) live.innerHTML = html; })
+      .then(function (html) {
+        if (html === null) return;
+        var tpl = document.createElement("template");
+        tpl.innerHTML = html;
+        var status = tpl.content.querySelector(".live-status");
+        var strip = tpl.content.querySelector(".strip");
+        var statusHTML = status ? status.innerHTML : html;
+        var stripHTML = strip ? strip.outerHTML : "";
+        if (statusHTML !== lastStatus) {
+          liveStatus.innerHTML = statusHTML;
+          lastStatus = statusHTML;
+        }
+        if (stripHTML !== lastStrip) {
+          liveStrip.innerHTML = stripHTML;
+          lastStrip = stripHTML;
+        }
+        if (status) updateStatus(status.dataset.state, status.dataset.message);
+      })
       .catch(function () {});
   }
   poll();

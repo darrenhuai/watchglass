@@ -64,6 +64,34 @@ func TestSuccessResetsFailureRun(t *testing.T) {
 	}
 }
 
+// A tracker seeded down (a restart carrying over a previous run's verdict)
+// must stay silent on further failures — it is already down, nothing new
+// to report — and emit exactly one "healthy" on the first success, so
+// recovery is reported at the moment the source actually answers.
+func TestSeedDownRecoversOnFirstSuccess(t *testing.T) {
+	tr := New(3)
+	tr.SeedDown()
+	for i := 0; i < 5; i++ {
+		if _, changed := tr.Failure(errors.New("still dead")); changed {
+			t.Fatalf("failure %d after SeedDown must not re-report down", i+1)
+		}
+	}
+	ev, changed := tr.Success()
+	if !changed || ev.State != "healthy" {
+		t.Fatalf("first success after SeedDown = (%+v, %v), want a healthy transition", ev, changed)
+	}
+	if _, changed := tr.Success(); changed {
+		t.Error("second success must not re-fire")
+	}
+	// And the tracker is fully live again afterwards: a fresh run of
+	// threshold failures transitions to down.
+	tr.Failure(errors.New("a"))
+	tr.Failure(errors.New("b"))
+	if _, changed := tr.Failure(errors.New("c")); !changed {
+		t.Error("threshold failures after recovery should transition to down again")
+	}
+}
+
 func TestNewClampsThreshold(t *testing.T) {
 	for _, n := range []int{0, -5} {
 		tr := New(n)

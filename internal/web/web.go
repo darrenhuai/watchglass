@@ -389,10 +389,10 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 }
 
 // errorPageData feeds error.html — must_fix 3: every server-side rejection
-// on watch create/save used to fall straight through to a bare http.Error()
-// text body with no header, no branding, and no link back into the app, a
-// dead end recoverable only via the browser's Back button. This wraps that
-// same message in the normal page chrome instead.
+// on watch create/save/delete used to fall straight through to a bare
+// http.Error() text body with no header, no branding, and no link back into
+// the app, a dead end recoverable only via the browser's Back button. This
+// wraps that same message in the normal page chrome instead.
 type errorPageData struct {
 	Message   string
 	BackURL   string
@@ -607,6 +607,18 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 		Confirm:   confirm,
 		Cooldown:  config.Duration(cooldown),
 	}
+	// The detail form hides Pattern/Op for the types that never read them
+	// (app.js's updateTriggerFields mirrors trigger.New's switch), but a
+	// hidden control still submits, so whatever was left in it would be
+	// persisted unvalidated — config.Validate only compiles Pattern for
+	// ocr_match/numeric — and, invisible in the UI, could never be cleared,
+	// only to break a later hand edit of the type. Drop what the type ignores.
+	switch w.Trigger.Type {
+	case "pixel_change", "ocr_changed":
+		w.Trigger.Pattern, w.Trigger.Op = "", ""
+	case "ocr_match":
+		w.Trigger.Op = ""
+	}
 	return w, nil
 }
 
@@ -753,7 +765,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		s.renderError(w, statusFor(err), err.Error(), "/", "back to all watches")
 		return
 	}
 	s.sup.Stop(name)

@@ -47,7 +47,7 @@ first keyframe needs headroom above that in its poll interval, not below it.
 Use `max_interval` to let a quiet camera settle into a slower poll rate —
 useful here specifically because RTSP grabs aren't free. `health_after`
 governs how many consecutive failed grabs (bad auth, camera reboot, network
-blip) trigger a "stream unreachable" notification; the default of 3 is a
+blip) trigger a "down" notification; the default of 3 is a
 reasonable start for a wired camera on a stable network.
 
 **If your camera can't do RTSP at all** — HomeKit Secure Video, Nest,

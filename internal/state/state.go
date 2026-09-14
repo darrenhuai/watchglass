@@ -86,9 +86,10 @@ func (r *Registry) Drop(watch string) {
 
 // SetHealth records watch's current stream health verdict, overwriting
 // whatever was there before. Called from supervisor.Supervisor.Start's
-// r.OnHealth closure on every edge-triggered transition, and reset to the
-// zero value (healthy) each time a watch (re)starts, since a fresh
-// health.Tracker always begins in the "not down" state.
+// r.OnHealth closure on every edge-triggered transition. A restart never
+// resets it: Start seeds the new runner's health.Tracker with a Down
+// verdict found here, so the verdict (and its Since) survives until a
+// poll actually produces a reading again.
 func (r *Registry) SetHealth(watch string, h Health) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

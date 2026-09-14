@@ -64,8 +64,12 @@ Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
    `choco install tesseract`.
 2. Start with an empty config and run watchglass:
 
-    echo "watches: []" > config.yaml
-    go run ./cmd/watchglass -config config.yaml
+       echo "watches: []" > config.yaml
+       go run ./cmd/watchglass -config config.yaml
+
+   In `cmd.exe`, drop the quotes — `echo watches: [] > config.yaml` — since
+   cmd writes them into the file as-is and the result isn't valid YAML
+   (bash and PowerShell strip them).
 
    `-config` defaults to `config.yaml` in the working directory, so if you
    used that name you can omit the flag. Readings are logged to a SQLite
@@ -108,10 +112,14 @@ its snapshot endpoint: `http://go2rtc-host:1984/api/frame.jpeg?src=cam1`.
 
 ### When a stream dies
 
-After `health_after` consecutive failed grabs (default 3) a watch sends one
-"stream unreachable" notification, and one more when it recovers. It never
-repeats while a camera stays down, and it keeps polling throughout — a
-watcher that silently stopped watching is worse than no watcher.
+After `health_after` consecutive polls with no reading (default 3) — the
+grab failing, or a frame arriving that OCR can't read — a watch sends one
+"down" notification quoting the error, and one more when it recovers. It
+never repeats while a camera stays down, and it keeps polling throughout —
+a watcher that silently stopped watching is worse than no watcher. The
+verdict survives a Save & restart: a watch that was down stays shown as
+down until a poll actually produces a reading again, and recovers exactly
+once when it does.
 
 ### Adaptive polling
 

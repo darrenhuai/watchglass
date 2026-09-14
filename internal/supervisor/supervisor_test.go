@@ -5,11 +5,14 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/trigger"
@@ -255,21 +258,181 @@ func TestHealthRecoversInRegistry(t *testing.T) {
 	t.Fatal("registry never observed recovery")
 }
 
-// A fresh Start must reset any Down verdict left over from a previous run
-// of the same-named watch — otherwise a successful restart into a healthy
-// config would still read as "error" until the new health.Tracker happens
-// to produce its own transition.
-func TestStartResetsStaleHealthFromPreviousRun(t *testing.T) {
+// A Down verdict left over from a previous run of the same-named watch is
+// carried into the new runner and cleared by a REAL "healthy" transition on
+// the first poll that produces a reading — not reset by Start itself. That
+// transition is what every mirror hears: the registry (checked here), and
+// the OnHealth hook, i.e. the MQTT publisher whose retained "offline" would
+// otherwise stay wrong forever after a healthy Save & restart.
+func TestStartHealsStaleDownThroughRealTransition(t *testing.T) {
 	reg := state.New(5)
 	s := New(nil, reg, nil, func(string, ...any) {})
+	var mu sync.Mutex
+	var hooked []string
+	s.OnHealth = func(name string, hev health.Event) {
+		mu.Lock()
+		hooked = append(hooked, name+":"+hev.State)
+		mu.Unlock()
+	}
 	reg.SetHealth("a", state.Health{Down: true, Message: "stale from a previous run"})
 	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
 	if err := s.Start(context.Background(), testWatch("a")); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer s.StopAll()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth("a"); ok && !h.Down {
+			mu.Lock()
+			defer mu.Unlock()
+			if len(hooked) != 1 || hooked[0] != "a:healthy" {
+				t.Errorf("OnHealth hook events = %v, want exactly [a:healthy]", hooked)
+			}
+			if h.Since.IsZero() {
+				t.Error("healed verdict should carry the transition time")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("stale Down verdict was never healed by the first successful poll")
+}
+
+// switchSource serves frames until dead is set, then errors forever.
+type switchSource struct {
+	dead atomic.Bool
+	img  image.Image
+}
+
+func (s *switchSource) Grab(ctx context.Context) (image.Image, error) {
+	if s.dead.Load() {
+		return nil, errors.New("connection refused")
+	}
+	return s.img, nil
+}
+
+func waitHealth(t *testing.T, reg *state.Registry, name string, down bool) state.Health {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth(name); ok && h.Down == down {
+			return h
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h, _ := reg.GetHealth(name)
+	t.Fatalf("health never reached Down=%v: %+v", down, h)
+	return h
+}
+
+// Restart (Save & restart) while the camera is still dead must not turn the
+// watch green for health_after*interval, and "stale since" must not drift
+// forward to the re-detection time while the last real frame hasn't moved.
+func TestRestartKeepsDownVerdictWhileSourceStillDead(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, nil, func(string, ...any) {})
+	var mu sync.Mutex
+	var hooked []health.Event
+	s.OnHealth = func(name string, hev health.Event) {
+		mu.Lock()
+		hooked = append(hooked, hev)
+		mu.Unlock()
+	}
+	src := &switchSource{img: flat()}
+	s.NewSource = func(w config.Watch) (source.Source, error) { return src, nil }
+	w := testWatch("cam")
+	w.HealthAfter = 2
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	waitForSample(t, reg, "cam")
+	src.dead.Store(true)
+	down := waitHealth(t, reg, "cam", true)
+
+	if err := s.Restart(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := reg.GetHealth("cam"); !ok || !h.Down {
+		t.Fatalf("Restart wiped the Down verdict while the source is still dead: %+v", h)
+	}
+	// Give the restarted runner several failing polls (interval 1s, first
+	// tick immediate) and confirm nothing about the verdict moved.
+	time.Sleep(150 * time.Millisecond)
+	if h, _ := reg.GetHealth("cam"); !h.Down || !h.Since.Equal(down.Since) || h.Message != down.Message {
+		t.Errorf("verdict changed across Restart: before=%+v after=%+v", down, h)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hooked) != 1 || hooked[0].State != "down" {
+		t.Errorf("OnHealth hook events = %+v, want exactly the one original down transition", hooked)
+	}
+}
+
+// blockingSource blocks in Grab until ctx is cancelled — a snapshot in
+// flight when Stop fires.
+type blockingSource struct{}
+
+func (blockingSource) Grab(ctx context.Context) (image.Image, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// Stop cancelling a grab mid-flight must never manufacture a Down verdict
+// (with health_after=1 it used to: "context canceled" hit the registry, the
+// OnHealth hook — MQTT offline — and the notifier on every Save & restart).
+func TestStopMidGrabDoesNotTripDown(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, nil, func(string, ...any) {})
+	var mu sync.Mutex
+	var hooked []health.Event
+	s.OnHealth = func(name string, hev health.Event) {
+		mu.Lock()
+		hooked = append(hooked, hev)
+		mu.Unlock()
+	}
+	s.NewSource = func(w config.Watch) (source.Source, error) { return blockingSource{}, nil }
+	w := testWatch("a")
+	w.HealthAfter = 1
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	s.Stop("a")
+	mu.Lock()
+	defer mu.Unlock()
 	if h, ok := reg.GetHealth("a"); ok && h.Down {
-		t.Errorf("Start did not reset stale Down health: %+v", h)
+		t.Errorf("Stop tripped a Down verdict: %+v", h)
+	}
+	if len(hooked) != 0 {
+		t.Errorf("Stop fired health events: %+v", hooked)
+	}
+}
+
+// errEngine models an OCR engine that fails every call.
+type errEngine struct{}
+
+func (errEngine) Recognize(ctx context.Context, img image.Image) (string, error) {
+	return "", errors.New("tesseract: exit status 1")
+}
+
+// Grab succeeding but OCR failing on every tick used to leave the registry
+// with neither a sample nor a verdict — "running" / "no data yet" forever.
+func TestOCRFailureSurfacesAsDownInRegistry(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, errEngine{}, func(string, ...any) {})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
+	w := testWatch("a")
+	w.Interval = config.Duration(30 * time.Millisecond)
+	w.HealthAfter = 2
+	w.Trigger = config.Trigger{Type: "ocr_match", Pattern: "x", Confirm: 1}
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	h := waitHealth(t, reg, "a", true)
+	if !strings.Contains(h.Message, "ocr: tesseract") {
+		t.Errorf("Down message should quote the OCR error, got %q", h.Message)
 	}
 }
 

@@ -66,6 +66,15 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}, nil
 }
 
+// SeedDown starts the health tracker in the down state. The supervisor
+// calls it before Run when the watch's previous incarnation was down, so a
+// restart neither wipes that verdict nor re-reports it: the first poll that
+// produces a reading emits the one real "healthy" transition. Must be
+// called before Run.
+func (r *Runner) SeedDown() {
+	r.health.SeedDown()
+}
+
 // Run polls until ctx is cancelled. Errors are logged, never fatal: a
 // watcher that dies on one bad frame is worse than no watcher.
 func (r *Runner) Run(ctx context.Context) {
@@ -75,7 +84,7 @@ func (r *Runner) Run(ctx context.Context) {
 	defer timer.Stop()
 	for {
 		ev, err := r.Tick(ctx)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			r.logf("watch %s: %v", r.watch.Name, err)
 		}
 		changed := tickChanged(r.watch.Trigger.Type, ev, err, lastReading)
@@ -103,18 +112,13 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 	img, err := r.src.Grab(ctx)
 	if err != nil {
-		if hev, changed := r.health.Failure(err); changed {
-			r.notifyHealth(ctx, hev)
-		}
-		return trigger.Event{}, fmt.Errorf("grab: %w", err)
-	}
-	if hev, changed := r.health.Success(); changed {
-		r.notifyHealth(ctx, hev)
+		return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("grab: %w", err))
 	}
 	crop := imgproc.Crop(img, r.watch.Region)
 
 	var ev trigger.Event
 	if r.watch.Trigger.Type == "pixel_change" {
+		r.pollSucceeded(ctx)
 		if r.prev == nil {
 			r.prev = crop
 			return trigger.Event{}, nil // first frame is the baseline
@@ -126,8 +130,14 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		prepped := imgproc.Apply(crop, r.watch.Preprocess)
 		text, err := r.engine.Recognize(ctx, prepped)
 		if err != nil {
-			return trigger.Event{}, fmt.Errorf("ocr: %w", err)
+			// A frame that arrives but can't be read is still a poll with
+			// no reading: it counts toward the health threshold exactly like
+			// a failed grab, so an engine that fails on every tick (tesseract
+			// crashing, removed after boot, bad tessdata) surfaces as down
+			// instead of as a healthy watch with "no data yet" forever.
+			return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("ocr: %w", err))
 		}
+		r.pollSucceeded(ctx)
 		ev = r.eval.ObserveText(text)
 	}
 
@@ -159,6 +169,29 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		}
 	}
 	return ev, nil
+}
+
+// pollFailed records a poll that produced no reading with the health
+// tracker and hands err back unchanged for Tick to return. A poll that
+// failed only because ctx was cancelled (Stop arriving while a grab or OCR
+// pass is in flight) says nothing about the source, so it is not counted:
+// it must never manufacture a Down transition — and the notification, MQTT
+// "offline", and registry verdict that fan out from one — on the way out.
+func (r *Runner) pollFailed(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	if hev, changed := r.health.Failure(err); changed {
+		r.notifyHealth(ctx, hev)
+	}
+	return err
+}
+
+// pollSucceeded records a poll that produced a reading.
+func (r *Runner) pollSucceeded(ctx context.Context) {
+	if hev, changed := r.health.Success(); changed {
+		r.notifyHealth(ctx, hev)
+	}
 }
 
 // notifyHealth reports a stream up/down transition. Failures to notify are

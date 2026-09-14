@@ -160,7 +160,10 @@ func TestDetailRendersEditor(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	for _, want := range []string{"id=\"stage\"", "id=\"overlay\"", "name=\"ttype\"", "name=\"pp_threshold\"", "/static/app.js"} {
+	for _, want := range []string{"id=\"stage\"", "id=\"overlay\"", "name=\"ttype\"", "name=\"pp_threshold\"", "/static/app.js",
+		// app.js's poll targets: the narrowed live region, the strip
+		// container outside it, and the status pill it keeps in step.
+		"id=\"live\"", "id=\"live-status\"", "aria-live=\"polite\"", "id=\"live-strip\"", "id=\"status-pill\""} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail page missing %s", want)
 		}
@@ -387,6 +390,16 @@ func TestRemoveIOErrorLeavesWatchRunning(t *testing.T) {
 	}
 	if running := s.sup.Running(); len(running) != 1 || running[0] != "printer" {
 		t.Errorf("watch orphan-stopped after failed delete: running = %v, want [printer]", running)
+	}
+	// must_fix 3 applies to delete too: the rejection renders the app's own
+	// error page with a link back, never a bare text/plain http.Error dump.
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html error page", ct)
+	}
+	for _, want := range []string{"watchglass", "all watches", `href="/"`, "config save failed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("delete error page missing %q; body:\n%s", want, body)
+		}
 	}
 }
 
@@ -907,6 +920,210 @@ func TestDetailEnablesOCRTypesWithEngine(t *testing.T) {
 	line := body[idx : idx+120]
 	if strings.Contains(line, "disabled") {
 		t.Errorf("ocr_match must not be disabled when an OCR engine is available: %q", line)
+	}
+}
+
+// With no OCR engine, the watch's CURRENT type must stay enabled even when
+// it is an OCR type: a disabled option is dropped from the form's entry
+// list, so the save would carry no ttype and be rejected as `unknown
+// trigger type ""` — every other field of the watch unsaveable. The other
+// OCR types remain disabled.
+func TestDetailKeepsCurrentOCRTypeEnabledWithoutEngine(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engine = nil
+	s.mu.Lock()
+	s.cfg.Watches[0].Trigger = config.Trigger{Type: "ocr_match", Pattern: "(?i)done"}
+	s.mu.Unlock()
+	_, body := get(t, s.Handler(), "/watch/printer")
+	optionLine := func(value string) string {
+		idx := strings.Index(body, `value="`+value+`" `)
+		if idx == -1 {
+			t.Fatalf("option %q not found; body:\n%s", value, body)
+		}
+		end := strings.Index(body[idx:], "</option>")
+		if end == -1 {
+			t.Fatalf("option %q not closed; body:\n%s", value, body)
+		}
+		return body[idx : idx+end]
+	}
+	cur := optionLine("ocr_match")
+	if !strings.Contains(cur, "selected") || strings.Contains(cur, "disabled") {
+		t.Errorf("current type must be selected and NOT disabled: %q", cur)
+	}
+	if !strings.Contains(cur, "needs tesseract") {
+		t.Errorf("current type should still be annotated: %q", cur)
+	}
+	for _, other := range []string{"ocr_changed", "numeric"} {
+		if line := optionLine(other); !strings.Contains(line, "disabled") {
+			t.Errorf("option %q should stay disabled without an OCR engine: %q", other, line)
+		}
+	}
+	// And the save round-trips: editing only Cooldown keeps ttype intact.
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"ocr_match"}, "pattern": {"(?i)done"},
+		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"45s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if strings.Contains(body, `unknown trigger type ""`) {
+		t.Errorf("save was rejected for a missing ttype; status %d body:\n%s", resp.StatusCode, body)
+	}
+}
+
+// Hidden Pattern/Op controls still submit; for types that never read them
+// the values must not be persisted (invisible in the UI, impossible to
+// clear, and a later hand edit of the type would trip over them).
+func TestSaveDropsPatternAndOpForTypesThatIgnoreThem(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "pattern": {"(?i)stale[unclosed"}, "op": {"gt"},
+		"tthreshold": {"10"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr := got.Watches[0].Trigger; tr.Pattern != "" || tr.Op != "" {
+		t.Errorf("pixel_change persisted hidden pattern/op: %+v", tr)
+	}
+	form.Set("ttype", "ocr_match")
+	form.Set("pattern", "(?i)done")
+	if resp, body := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("ocr_match save status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, _ = config.Load(cfgPath)
+	if tr := got.Watches[0].Trigger; tr.Pattern != "(?i)done" || tr.Op != "" {
+		t.Errorf("ocr_match should keep pattern and drop op: %+v", tr)
+	}
+}
+
+// The Live panel is the third place a stopped watch must not look healthy:
+// the polled fragment carries a stopped marker, no green LED, and the state
+// (data-state) app.js uses to keep the header pill in step.
+func TestLiveFragmentConveysStopped(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "0.0% changed", PNG: pngBytes(t)})
+	if running := s.sup.Running(); len(running) != 0 {
+		t.Fatalf("precondition: expected no running watches, got %v", running)
+	}
+	_, live := get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(live, "stopped") || !strings.Contains(live, `data-state="stopped"`) {
+		t.Errorf("stopped watch's live fragment carries no stopped marker; body:\n%s", live)
+	}
+	if strings.Contains(live, "led-green") {
+		t.Errorf("stopped watch's live fragment still renders led-green; body:\n%s", live)
+	}
+	if !strings.Contains(live, "0.0% changed") {
+		t.Errorf("old readings should still be shown (marked as pre-stop); body:\n%s", live)
+	}
+	// A running watch reports its state the same way, so the pill can flip
+	// back without a reload.
+	wc, _ := s.findWatch("printer")
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	_, live = get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(live, `data-state="running"`) || strings.Contains(live, "stopped") {
+		t.Errorf("running watch's live fragment should carry data-state running and no stopped marker; body:\n%s", live)
+	}
+}
+
+// The stale badge dates staleness from the last real frame, not from the
+// moment the failure threshold tripped, and the readout LED follows the
+// verdict rather than staying green over stale readings.
+func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
+	s, _ := newTestServer(t)
+	// A source that never answers until Stop: the watch counts as running
+	// without ever adding samples or verdicts of its own under the test.
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) { return blockingSource{}, nil }
+	wc, _ := s.findWatch("printer")
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	frameTS := time.Date(2026, 9, 11, 0, 53, 26, 0, time.Local)
+	s.reg.Add("printer", state.Sample{TS: frameTS, Reading: "0.0% changed", PNG: pngBytes(t)})
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading for 2 consecutive polls: grab: refused", Since: frameTS.Add(4 * time.Second)})
+	_, live := get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(live, "stale since 00:53:26") {
+		t.Errorf("stale badge should date from the last frame (00:53:26); body:\n%s", live)
+	}
+	if strings.Contains(live, "led-green") || !strings.Contains(live, "led-error") {
+		t.Errorf("readout LED should follow the error verdict; body:\n%s", live)
+	}
+	// With no frame at all, fall back to the detection time.
+	s.reg.Drop("printer")
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading: refused", Since: frameTS.Add(4 * time.Second)})
+	_, live = get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(live, "stale since 00:53:30") {
+		t.Errorf("with no readings the badge should fall back to Since; body:\n%s", live)
+	}
+}
+
+type blockingSource struct{}
+
+func (blockingSource) Grab(ctx context.Context) (image.Image, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type ocrFailEngine struct{}
+
+func (ocrFailEngine) Recognize(ctx context.Context, img image.Image) (string, error) {
+	return "", errors.New("tesseract: exit status 1: Error opening data file tessdata/eng.traineddata")
+}
+
+// An OCR watch whose grab works but whose OCR fails on every tick must read
+// as error on the dashboard and the detail pill, not as running / "no data
+// yet" forever.
+func TestDashboardShowsErrorWhenOCRFailsEveryTick(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	wc := config.Watch{
+		Name: "printer", Source: "http://unused.invalid/snap.jpg",
+		Interval: config.Duration(30 * time.Millisecond), HealthAfter: 2,
+		Region:  config.Region{X: 0, Y: 0, W: 1, H: 1},
+		Trigger: config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 1},
+	}
+	cfg := &config.Config{Watches: []config.Watch{wc}}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	reg := state.New(5)
+	sup := supervisor.New(nil, reg, ocrFailEngine{}, func(string, ...any) {})
+	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
+	t.Cleanup(sup.StopAll)
+	s, err := New(cfgPath, cfg, sup, reg, ocrFailEngine{}, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h, ok := reg.GetHealth("printer"); ok && h.Down {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, body := get(t, s.Handler(), "/")
+	rowStart := strings.Index(body, `data-label="Last reading"`)
+	if rowStart == -1 {
+		t.Fatalf("Last reading cell not found; body:\n%s", body)
+	}
+	row := body[rowStart:]
+	if strings.Contains(row, "no data yet") || !strings.Contains(row, "led-error") || !strings.Contains(row, "ocr: tesseract") {
+		t.Errorf("dashboard should show the OCR failure as an error; row:\n%s", row[:400])
+	}
+	_, detail := get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(detail, "status-error") {
+		t.Errorf("detail pill should be status-error; body:\n%s", detail)
 	}
 }
 

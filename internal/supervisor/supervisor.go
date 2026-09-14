@@ -104,11 +104,21 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// Always mirror health transitions into the registry (must_fix 1/4: the
 	// web UI derives its running/error/stopped display and the Live panel's
 	// staleness badge from this), regardless of whether an onHealth hook is
-	// also wired (e.g. the MQTT publisher). Reset to healthy first: a fresh
-	// health.Tracker always begins in the "not down" state, so any Down
-	// verdict left over from a watch of the same name that ran before this
-	// Start must not linger and read as still-erroring.
-	s.reg.SetHealth(name, state.Health{})
+	// also wired (e.g. the MQTT publisher).
+	//
+	// A Down verdict left by a previous run of the same-named watch is
+	// carried over by seeding the new runner's tracker with it, never reset
+	// here: resetting would turn a still-dead camera green for
+	// health_after*interval after every Save and move "stale since" forward
+	// on each re-detection, and it would heal only this mirror — the MQTT
+	// health topic (retained "offline") and the notifier only hear
+	// transitions, and a fresh tracker starting healthy never emits one.
+	// Seeded, the first poll that produces a reading emits a real "healthy"
+	// transition to every consumer at once, and Since only moves on genuine
+	// transitions.
+	if h, ok := s.reg.GetHealth(name); ok && h.Down {
+		r.SeedDown()
+	}
 	r.OnHealth = func(hev health.Event) {
 		s.reg.SetHealth(name, state.Health{
 			Down:    hev.State == "down",
