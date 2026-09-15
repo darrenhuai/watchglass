@@ -87,9 +87,9 @@ Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
    clean, pick a trigger type, and **Save**. This is the same drag → test →
    save loop the hero GIF above records — it's the low-friction path, not
    hand-editing YAML. `examples/config.yaml` is still there as copy-paste
-   material for more watches once you've got the hang of it (see the
-   [Web UI](#web-ui) section's warning about what a UI Save does to a
-   hand-edited file first).
+   material for more watches once you've got the hang of it, and a UI Save
+   merges into a hand-edited file rather than rewriting it (see
+   [Web UI](#web-ui)).
 
 ## Sources
 
@@ -187,12 +187,17 @@ tune the preprocessing sliders (grayscale, invert, binarize, upscale) until
 the text comes back clean, then **Save**. The page shows a live strip of
 recent readings so you can verify triggers before trusting them.
 
-> **Save rewrites the whole file.** Clicking **Save** re-marshals all of
-> `config.yaml` from scratch — hand-written comments, field order, and
-> formatting do not survive a UI save, even for watches you never touched.
-> Treat `examples/config.yaml` as copy-paste starting material, not as an
-> annotated template that stays annotated once the UI has saved over it. A
-> comment-preserving writer is tracked as future work.
+> **Save keeps your file.** Clicking **Save** merges the change into
+> `config.yaml` rather than rewriting it: hand-written comments, key order,
+> quoting, anchors, line endings and `- ` placement survive, and a save
+> that changes nothing doesn't touch the file. What the first real change
+> does lose: blank lines may be collapsed, end-of-line comments lose their
+> column alignment, a comment at the end of a block may shift indentation,
+> nested blocks in a 4-space file are re-indented, and a URL inside a
+> flow-style list (`[...]`) comes back quoted. Deleting a watch deletes its
+> own comments with it; a comment block parked above it moves to the next
+> watch. A file that no longer parses (a hand edit left half done) is never
+> overwritten — Save reports the error and leaves it alone.
 
 The UI binds to localhost only by default. `-listen 0.0.0.0:8080` exposes it
 on your network — add an `auth:` block first (below) or put it behind a

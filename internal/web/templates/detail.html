@@ -141,7 +141,7 @@
         <textarea id="f-notify" class="mono" name="notify" rows="3" cols="42">{{range .Watch.Notify}}{{.}}
 {{end}}</textarea>
       </fieldset>
-      <p class="save-warning muted">Saving rewrites the whole of config.yaml — hand-written comments, field order, and formatting will not survive.</p>
+      <p class="save-warning muted">Saving merges this watch into config.yaml — comments, key order and quoting are kept; blank lines may be collapsed and end-of-line comments lose their alignment.</p>
       <div class="form-actions">
         <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
         <input type="submit" value="Save &amp; restart watch" class="btn btn-primary">

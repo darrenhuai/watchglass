@@ -411,10 +411,11 @@ legend {
 .range-field input[type="range"] { flex: 1; }
 .ppt-val { min-width: 34px; text-align: right; font-size: 12px; color: var(--text-dim); }
 
-/* should_fix 5: config.Save() re-marshals the whole file on every save, so
-   hand-written comments/order in a hand-edited config.yaml don't survive
-   the first UI save — this sits permanently near Save rather than as a
-   one-time dismissable warning, since the fact stays true on every save. */
+/* config.Save() merges into config.yaml (internal/config/merge.go), so
+   comments, key order and quoting survive a UI save; what yaml.v3 can't
+   round-trip — blank lines, end-of-line comment alignment — still changes
+   on the first real edit, so this note sits permanently near Save rather
+   than as a one-time dismissable warning. */
 .save-warning { margin-top: var(--space-4); font-size: 12px; }
 
 .form-actions {

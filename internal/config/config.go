@@ -2,7 +2,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net/url"
 	"os"
@@ -67,9 +69,18 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // MarshalYAML writes durations in human-readable form ("5s", "10m") so the
-// config file the web UI saves stays hand-editable.
+// config file the web UI saves stays hand-editable. time.Duration spells an
+// hour "1h0m0s" and a minute "1m0s"; nobody writes those by hand, so the
+// trailing zero units go.
 func (d Duration) MarshalYAML() (any, error) {
-	return time.Duration(d).String(), nil
+	s := time.Duration(d).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s, nil
 }
 
 // Region is a normalized rectangle; all fields are 0.0–1.0.
@@ -337,12 +348,35 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// freshFile is what a config that doesn't exist yet is written as when cfg
+// has nothing to say: the same skeleton the README's quick start writes.
+const freshFile = "watches: []\n"
+
 // Save writes cfg to path atomically (tmp file + rename) so a crash mid-write
-// never truncates the user's config.
+// never truncates the user's config. An existing file is merged into, not
+// re-marshalled (see merge.go), and a save that changes nothing leaves it
+// untouched. A missing file is written from scratch; a file Load could not
+// read (a hand edit left half-done, say) is an error rather than something
+// to overwrite, and the bytes written are read back first, so a save never
+// leaves a file Load rejects.
 func Save(path string, cfg *Config) error {
-	out, err := yaml.Marshal(cfg)
+	raw, err := os.ReadFile(path)
+	fresh := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !fresh {
+		return err
+	}
+	if fresh {
+		raw = nil // merged into an empty mapping: cfg's keys, in cfg's order
+	}
+	out, err := mergeFile(raw, cfg)
 	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+		return err
+	}
+	if out == nil {
+		if !fresh {
+			return nil
+		}
+		out = []byte(freshFile)
 	}
 	tmp := path + ".tmp"
 	// 0o600: the file can hold a plaintext MQTT password (config.MQTT.Password).
