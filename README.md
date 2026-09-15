@@ -309,7 +309,9 @@ issue](https://github.com/darrenhuai/watchglass/issues) and we'll add one.
 Post-v1, roughly in priority order:
 
 - [ ] Home Assistant Add-on — installs as a custom repository today (see
-      `addon/DOCS.md`); official store submission and an armv7 image remain
+      `addon/DOCS.md`); official store submission remains. The image itself
+      is published for amd64, arm64 and arm/v7 (arm/v7 from the next release
+      tag on; `edge` already has it).
 - [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
 - [ ] Native seven-segment decoder
 - [x] Recipes gallery (community configs per device)
