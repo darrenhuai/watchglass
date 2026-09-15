@@ -948,7 +948,9 @@ func TestSaveWritesMissingFileAndRefusesBrokenOne(t *testing.T) {
 	for label, broken := range map[string]string{
 		"unparseable":   "just: [a sequence\n",
 		"not a mapping": "- name: a\n- name: b\n",
-		"typo":          strings.Replace(readFile(t, copyFixture(t)), "    trigger:\n      type: numeric", "    trigger\n      type: numeric", 1),
+		// The fixture is pinned to LF by .gitattributes; normalise anyway so a
+		// CRLF checkout can't leave the surgery unapplied and the file valid.
+		"typo": strings.Replace(strings.ReplaceAll(readFile(t, copyFixture(t)), "\r\n", "\n"), "    trigger:\n      type: numeric", "    trigger\n      type: numeric", 1),
 	} {
 		p := writeTemp(t, broken)
 		if _, err := Load(p); err == nil {

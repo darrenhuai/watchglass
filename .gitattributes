@@ -1,0 +1,2 @@
+# Test fixtures are byte-compared; keep them identical on every checkout.
+internal/config/testdata/* text eol=lf
