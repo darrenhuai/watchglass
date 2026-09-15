@@ -557,7 +557,7 @@ legend {
   border-radius: var(--radius-md);
 }
 #stage img { display: block; max-width: 100%; }
-#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
+#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; touch-action: none; }
 
 .stage-frame {
   position: relative;

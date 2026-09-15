@@ -13,6 +13,14 @@
 
   function sizeCanvas() {
     canvas.hidden = false;
+    // A same-size reload (the periodic snapshot refresh) only needs the
+    // rectangle repainted. Resizing goes through drawRect, which also
+    // rewrites the manual region fields — and would clobber a value the
+    // user is mid-keystroke in.
+    if (canvas.width === img.clientWidth && canvas.height === img.clientHeight) {
+      paint();
+      return;
+    }
     canvas.width = img.clientWidth;
     canvas.height = img.clientHeight;
     drawRect();
@@ -115,6 +123,9 @@
     drawRect();
   });
   canvas.addEventListener("pointerup", function () { drag = null; });
+  // A touch drag the browser turns into a scroll ends in pointercancel, not
+  // pointerup; without this the stale drag would pause the snapshot refresh.
+  canvas.addEventListener("pointercancel", function () { drag = null; });
   img.addEventListener("load", sizeCanvas);
   window.addEventListener("resize", sizeCanvas);
 
@@ -156,7 +167,7 @@
             img.src = snapURL + "?r=" + Date.now();
             return null;
           }
-          return "the camera answered a retry but failed again — it may be overloaded; reload to try once more";
+          return "the camera answered a retry but failed again — it may be overloaded; retrying automatically";
         }
         var ct = resp.headers.get("Content-Type") || "";
         if (ct.indexOf("text/") !== 0) {
@@ -192,6 +203,53 @@
       sizeCanvas();
     }
   }
+
+  // The frame above was fetched once at page load while the Live strip
+  // under it polls every 2s, so the two visibly drifted apart and the page
+  // read as frozen. Refresh it on the watch's own interval, floored at 3s
+  // (each tick is a second camera grab on top of the runner's own) and
+  // capped at an hour (a monthly-poll watch still gets a fresh frame, and
+  // the delay stays inside setInterval's 32-bit range), by
+  // preloading into a detached Image and swapping src only once that has
+  // decoded: the visible frame is never blanked, and a failed preload never
+  // reaches the <img> error path — a lone miss just waits for the next
+  // tick. Two misses in a row is a dead camera rather than a blip, so hand
+  // off to showSnapError then, which puts up the placeholder and its
+  // diagnosis without a reload. Ticks carry on underneath the placeholder,
+  // and the first preload that succeeds clears it again.
+  var DURATION_UNIT = { ms: 1, s: 1000, m: 60000, h: 3600000 };
+  // Go duration syntax as the form shows it ("2s", "500ms", "1m30s");
+  // anything else falls back to 5s.
+  function parseDuration(s) {
+    if (!/^(\d+(\.\d+)?(ms|s|m|h))+$/.test(s)) return 5000;
+    var ms = 0;
+    s.replace(/(\d+(?:\.\d+)?)(ms|s|m|h)/g, function (_, n, u) { ms += n * DURATION_UNIT[u]; });
+    return ms;
+  }
+  var intervalField = form.elements["interval"];
+  var refreshMs = Math.min(Math.max(parseDuration(intervalField ? intervalField.value : ""), 3000), 3600000);
+  var preload = null, misses = 0;
+  function refreshSnap() {
+    // A swap mid-drag would resize the canvas under the pointer; a hidden
+    // tab has nobody looking; a preload still in flight means the camera
+    // is slow, and stacking a second request on it only makes that worse.
+    if (preload || drag || document.visibilityState !== "visible") return;
+    var next = new Image();
+    next.onload = function () {
+      preload = null;
+      misses = 0;
+      if (snapError) snapError.hidden = true;
+      img.hidden = false;
+      img.src = next.src;
+    };
+    next.onerror = function () {
+      preload = null;
+      if (++misses >= 2 && !img.hidden) showSnapError();
+    };
+    next.src = snapURL + "?t=" + Date.now();
+    preload = next;
+  }
+  setInterval(refreshSnap, refreshMs);
 
   document.getElementById("testbtn").addEventListener("click", function () {
     var el = document.getElementById("test-result");
