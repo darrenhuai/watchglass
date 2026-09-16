@@ -55,6 +55,10 @@ watches:
     # more when the stream recovers.
     health_after: 3
     region: {x: 0.3, y: 0.4, w: 0.4, h: 0.15}
+    # A seven-segment LED/LCD readout: the built-in decoder reads it with no
+    # tesseract and no preprocessing. Omit engine (or say tesseract) for
+    # printed text.
+    engine: sevenseg
     trigger:
       type: numeric
       pattern: "([0-9]+\\.[0-9])"

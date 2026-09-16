@@ -3,65 +3,64 @@
 Bench scales, multimeters, thermometers, older gauges — a lot of lab and
 shop instruments still show their reading on a seven-segment LED or LCD
 display: digits built from a handful of straight bars rather than a normal
-font's continuous strokes. **Be honest with yourself about accuracy going
-in**: tesseract's OCR models are trained on regular print, and true
-seven-segment glyphs (a "0" is six disconnected bars with gaps, not a solid
-loop) confuse it more than printed text does. This recipe is the current
-best-effort approach, not a solved problem — a dedicated seven-segment
-decoder (geometry-based, not a general OCR font model) is on the project
-roadmap and should do meaningfully better once it exists.
+font's continuous strokes. Tesseract reads those badly (a "0" is six
+disconnected bars with gaps, not a solid loop), which is why watchglass has
+a decoder built for them: set `engine: sevenseg` on the watch and the
+digits are read by geometry — find the bars, check the seven segment
+positions of each cell — with no font model, no external binary, and no
+preprocessing to tune. This recipe is that setup.
 
-## Preprocessing walkthrough
+## What the decoder does
 
-Do this in the web UI's calibration loop: open the watch, drag a region
-around *just the digits* (exclude units, labels, decorative text), and hit
-**Test this region** after every slider change so you're tuning against a
-live OCR result, not guessing. The sliders build on each other, so go in
-this order:
+- Works out the polarity itself: lit red/green/blue digits on a dark face
+  and dark digits on a light LCD both read as-is. Leave `preprocess` off
+  unless a test shows you need it.
+- Copes with the gaps real displays leave between bars, with glow around
+  lit LEDs, with the unlit "ghost" segments most LED displays show, and
+  with any digit size from a ~40px-tall crop up.
+- Reads `0`-`9`, a leading `-`, and the decimal point, joined into one
+  string: `23.5`, `-8.0`, `1234`. A glyph whose bars spell no digit comes
+  back as `?`.
+- **Test this region** shows one chip per glyph with its confidence (how
+  far every segment sat from the on/off line): a clean read scores near
+  100, a glyph with a half-lit or half-hidden bar scores low. Anything
+  below 60 shows red — that's the digit to worry about.
 
-1. **`grayscale: true`** — flattens color first. Colored LED/LCD faces
-   (red, green, blue digit displays are all common) otherwise leave you
-   fighting channel noise before you've even gotten to contrast.
-2. **`invert: true`** if the display is bright digits on a dark
-   background — most LED and backlit LCD readouts are. Tesseract expects
-   dark text on a light background; inverting flips the crop so segments
-   read like ink on paper instead of the reverse.
-3. **Binarize** (the `threshold` field in YAML) — binarize once the
-   polarity is right. Start around 120–160 and slide until the glow around
-   each lit segment collapses to a crisp edge with no soft halo. This
-   matters more here than for any other recipe: an LED segment's glow
-   radius is often wider than the gap to its neighbor, so too low a value
-   fuses adjacent segments (or whole digits) into a blob no OCR model can
-   read.
-4. **`upscale: 2`–`4`** — instrument readouts are usually a small patch of
-   the frame. Nearest-neighbor upscaling hands tesseract more pixels to
-   tell a segment from the 1-pixel gap next to it.
+## Set it up in the web UI
+
+1. Add the watch, open it, and drag a rectangle around *just the digits*.
+   Leave out units, labels, the decimal-point-only annunciators some meters
+   have, and any bezel — a bright frame edge inside the crop looks like a
+   bar. Include the whole height of the digits with a little margin; a
+   crop that clips the top or bottom bar changes what the digits look like.
+2. In the Trigger fieldset set **Engine** to `sevenseg` and the Type to
+   `numeric` (or `ocr_changed` if you just want to know the reading moved).
+3. Hit **Test this region**. You should see the reading and one chip per
+   glyph. If a digit reads `?` or scores low, the usual causes are in
+   [Caveats](#caveats) below.
+4. Set Pattern, Op and Threshold, and **Save**.
 
 ## Watches config
 
 ```yaml
 watches:
-  # Primary: numeric trigger with a generous pattern and low confirm.
+  # Primary: read the number, fire above a limit.
   - name: lab-scale-reading
     source: http://192.168.1.80/snapshot.jpg
     interval: 5s
     region: {x: 0.40, y: 0.35, w: 0.22, h: 0.10}
-    preprocess:
-      grayscale: true
-      invert: true
-      threshold: 140
-      upscale: 3
+    engine: sevenseg
     trigger:
       type: numeric
-      pattern: "([0-9]{1,4}(?:\\.[0-9]+)?)"   # generous: 1-4 digits, optional full decimal
+      pattern: "([0-9.]+)"   # the reading, sign dropped; use "(-?[0-9.]+)" for a signed one
       op: gt
       threshold: 500
-      confirm: 1
+      confirm: 2
       cooldown: 1m
     notify:
       - ntfy://ntfy.sh/example-lab-scale
 
-  # Fallback: skip OCR entirely, just detect that the reading changed.
+  # Fallback: skip reading entirely, just detect that the display changed.
   - name: lab-scale-any-change
     source: http://192.168.1.80/snapshot.jpg
     interval: 5s
@@ -74,61 +73,61 @@ watches:
       - ntfy://ntfy.sh/example-lab-scale
 ```
 
+A watch with no `engine:` line still uses tesseract; nothing changes for
+your other watches. A sevenseg watch also starts on a box that has no
+tesseract installed.
+
 ## Tuning notes
 
-`confirm: 1` on the numeric watch is a deliberate trade, not an oversight.
-The trigger only advances toward "stable" when a poll's OCR text exactly
-matches the previous poll's — a seven-segment misread (one glitchy digit
-one time in ten) makes that exact-match bar hard to clear at any `confirm`
-above 1 or 2, and a legitimately changing reading (the whole point of a
-scale or gauge) resets the count just as often. Trade a *slightly* higher
-chance of firing on a single OCR glitch for actually firing at all, and
-lean on `cooldown` to absorb a stray false trigger instead. Raise `confirm`
-only if you've watched the reading strip and seen the same glitch repeat.
+`pattern: "([0-9.]+)"` takes the digits and decimal point and ignores a
+leading `-` and any `?`. That's deliberate: a `numeric` trigger with no
+match simply doesn't fire that poll, so a `?` in the reading (a glyph the
+decoder couldn't make a digit of) is skipped rather than parsed into a
+wrong number. If you need the sign, use `"(-?[0-9.]+)"`. If a stray `?`
+lands in the middle of a reading — `2?.5` — the pattern grabs `5` on its
+own; a stricter pattern that pins the digit count you expect, say
+`"^([0-9]{2,3}\\.[0-9])$"`, refuses such a poll outright.
 
-The `pattern` here is intentionally loose — `[0-9]{1,4}` with an optional
-decimal — because a stricter pattern that assumes a fixed digit count will
-simply fail to match on any poll where one digit misreads as a letter or
-drops a segment, and a `numeric` trigger with no match just doesn't fire
-that poll (it doesn't error). Looser patterns fail less often; they also
-occasionally let garbage through, which is what `confirm` and `cooldown`
-exist to filter.
+`confirm: 2` is a reasonable default here where the printed-text recipes
+go higher: the decoder is deterministic, so a display that isn't changing
+produces the identical string poll after poll, and two matching polls are
+enough to rule out a frame caught mid-refresh. A reading that changes every
+poll (a scale settling) never reaches "stable" at any `confirm`, which is
+the intended behaviour: it fires once the value holds.
 
-Get the decimal part of the pattern right, not just the integer part: an
-earlier version of this pattern used `\.?[0-9]?` — an optional dot followed
-by *at most one* digit — which silently truncates any reading with two or
-more decimal digits ("500.36" extracts as 500.3, not 500.36). That's a
-value close enough to the real one to look plausible in a notification but
-wrong enough to misfire near a threshold, and nothing about it looks like
-an error — the trigger fires normally, just on the wrong number. The
-pattern above, `(?:\.[0-9]+)?`, captures every digit after the dot instead
-of just the first.
-
-`pixel_change` is the honest fallback when you don't actually need the
-number, just to know something changed — it compares raw pixels, so
-`preprocess` doesn't apply to it at all (preprocessing is OCR-only; pixel
-triggers always diff the untouched crop). No font model, no misreads, just
-"this many pixels flipped." Use it as watch #2 on the same region so you
-have a signal that keeps working even when the numeric watch is between
-misreads.
+Leave `preprocess` alone to start. The decoder binarizes the crop itself
+and picks the polarity, so `invert` and `threshold` add nothing on a clean
+display. Two of the sliders can still help: `upscale: 2` when the digits
+are tiny in the frame (under ~40px tall), and `threshold` when the display
+is so washed out — direct sunlight, an overexposed camera — that the
+automatic split lands in the wrong place. Watch the crop preview: you want
+crisp bars and a dark (or light) empty face, nothing in between.
 
 ## Caveats
 
-- Expect a real error rate. Similar-looking digit pairs (8/0, 1/7, 6/8 at
-  low resolution) are the common failure mode — don't wire this straight to
-  anything where a wrong reading is dangerous or costly.
-- Viewing angle matters more for seven-segment displays than for text LCDs:
-  a segment can go fully invisible off-axis, not just blurry. Mount the
-  camera as close to head-on as you can.
-- There's no dedicated seven-segment decoder in watchglass today (it's on
-  the roadmap) — everything above is tuning a general-purpose OCR engine to
-  do a job it wasn't built for. Treat any given set of preprocessing values
-  here as a starting point for your specific instrument, camera, and
-  lighting, not a value to copy verbatim and trust.
-- The value a `numeric` trigger fires on is whatever your `pattern`'s
-  capture group extracted, not necessarily what the display actually shows
-  — a pattern that's too narrow silently truncates or drops digits (as
-  above), and one that's too loose can grab a stray digit from a unit
-  label or neighboring reading in the same crop. Watch the reading strip
-  against the physical display for a while after any pattern change, not
-  just once, before trusting the extracted value near a threshold.
+- **Slant.** Many seven-segment fonts are italic, and a camera off to the
+  side skews the digits further. The decoder expects upright bars; a mild
+  slant reads fine, a strong one starts losing the side segments. Mount
+  the camera as close to head-on as you can — for these displays a bar
+  can go fully invisible off-axis, not just blurry.
+- **Neighbouring marks.** A colon between two digit groups (a clock's
+  `12:34`) is recognised and kept out of the digits, but degree signs,
+  unit annunciators (`kg`, `°C`, `HOLD`) and the small "battery" glyphs
+  many meters show inside the digit row are not, and the decoder returns
+  `?` for some and ignores others. Crop what you can, and for a clock an
+  `ocr_match` on `[0-9:]+` is steadier than a `numeric` watch.
+- **Blank leading digits** are simply absent: a four-position display
+  showing ` 23.5` reads `23.5`, and the unlit ghost segments in the empty
+  position are ignored. A display that shows leading zeros reads them
+  (`023.5`), which `numeric` parses fine.
+- **Segment fonts vary.** `6`, `7` and `9` come with and without their
+  optional bar and both spellings read; a `1` is placed at the right of
+  its cell; a `4` with an open top reads as `4`. A font with unusual
+  proportions — very fat bars, or digits wider than they are tall — is
+  outside what the decoder expects and will show up as low confidence or
+  `?` in the test panel.
+- **Fired on what the pattern extracted.** As with every `numeric` watch,
+  the value it compares is whatever the capture group produced, not what
+  the display physically shows. Watch the reading strip against the real
+  display for a while after any change to the region or pattern before
+  trusting a threshold near the values you care about.

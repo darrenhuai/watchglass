@@ -1,0 +1,21 @@
+# watchglass demo rig config — watches the fake seven-segment display
+# (fakecam.py --frames examples/demo/frames-sevenseg) with the built-in
+# decoder, no tesseract needed.
+# Run: go run ./cmd/watchglass -config examples/demo/config-sevenseg.yaml -db demo.db -listen 127.0.0.1:8123
+# See examples/demo/README.md.
+watches:
+  - name: demo-scale
+    source: http://127.0.0.1:8100/snapshot.jpg
+    interval: 2s
+    # The four-digit readout in the generated frames (640x240 canvas, digits
+    # in the band x:95-545 y:45-195). Normalized to 0.0-1.0 of the frame.
+    region: {x: 0.14, y: 0.14, w: 0.72, h: 0.72}
+    engine: sevenseg
+    trigger:
+      type: numeric
+      pattern: "([0-9.]+)"
+      op: gt
+      threshold: 25   # frames read 23.5 .. 25.3, so this fires on the last two
+      confirm: 1
+      cooldown: 30s
+    notify: []

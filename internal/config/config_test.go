@@ -1433,7 +1433,7 @@ func TestSchemaRefusesUnmergeableFields(t *testing.T) {
 	}
 	// And the real Config passes: schema is built at init, so reaching
 	// here is the proof; the paths it found are the ones Load reads.
-	for _, p := range []string{"history_days", "auth.password", "mqtt.broker", "watches.name", "watches.region.x", "watches.trigger.cooldown", "watches.preprocess.upscale", "watches.notify"} {
+	for _, p := range []string{"history_days", "auth.password", "mqtt.broker", "watches.name", "watches.region.x", "watches.trigger.cooldown", "watches.preprocess.upscale", "watches.engine", "watches.notify"} {
 		if schema.types[p] == nil {
 			t.Errorf("schema lacks %s", p)
 		}
@@ -1492,7 +1492,9 @@ func mutate(r *rand.Rand, c *Config, step int) {
 		return
 	}
 	w := &c.Watches[r.Intn(len(c.Watches))]
-	switch r.Intn(16) {
+	switch r.Intn(17) {
+	case 16:
+		w.Engine = pick("", "tesseract", "sevenseg")
 	case 0:
 		w.Interval = dur(pick("1s", "2s", "5s", "10s", "30s", "1m", "90s"))
 		if w.MaxInterval != 0 && w.MaxInterval < w.Interval {
@@ -1638,5 +1640,79 @@ func TestSaveRoundTripsUnderRandomMutation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateEngine(t *testing.T) {
+	watch := func(engine string) *Config {
+		return &Config{Watches: []Watch{{
+			Name: "a", Source: "http://x/snap.jpg", Region: Region{W: 1, H: 1},
+			Trigger: Trigger{Type: "numeric", Op: "gt", Threshold: 25, Pattern: "([0-9.]+)"},
+			Engine:  engine,
+		}}}
+	}
+	for _, ok := range []string{"", "tesseract", "sevenseg"} {
+		cfg := watch(ok)
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("engine %q: unexpected error %v", ok, err)
+		}
+		if cfg.Watches[0].Engine != ok {
+			t.Errorf("engine %q rewritten to %q by Validate", ok, cfg.Watches[0].Engine)
+		}
+	}
+	for _, bad := range []string{"bogus", "SevenSeg", "seven-seg", " tesseract"} {
+		err := watch(bad).Validate()
+		if err == nil {
+			t.Errorf("engine %q: expected an error", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "engine") || !strings.Contains(err.Error(), bad) {
+			t.Errorf("engine %q: error %q should name the field and the value", bad, err)
+		}
+	}
+	// pixel_change watches carry the field too; it is validated regardless
+	// of type so a later type switch never trips over it.
+	px := watch("bogus")
+	px.Watches[0].Trigger = Trigger{Type: "pixel_change", Threshold: 10}
+	if err := px.Validate(); err == nil {
+		t.Error("a bad engine on a pixel_change watch must still be rejected")
+	}
+}
+
+func TestEngineLoadsAndSavesThroughYAML(t *testing.T) {
+	p := writeTemp(t, `watches:
+  - name: scale
+    source: http://cam.local/snap.jpg
+    region: {x: 0.1, y: 0.2, w: 0.5, h: 0.1}
+    engine: sevenseg
+    trigger:
+      type: numeric
+      op: gt
+      threshold: 25
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Watches[0].Engine != "sevenseg" {
+		t.Fatalf("engine = %q", cfg.Watches[0].Engine)
+	}
+	// Clearing it back to the default drops the key from the file rather
+	// than writing engine: "".
+	cfg.Watches[0].Engine = ""
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if strings.Contains(string(raw), "engine") {
+		t.Errorf("default engine should not be written:\n%s", raw)
+	}
+	cfg.Watches[0].Engine = "sevenseg"
+	if err := Save(p, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(p)
+	if !strings.Contains(string(raw), "engine: sevenseg") {
+		t.Errorf("engine not written back:\n%s", raw)
 	}
 }

@@ -23,6 +23,8 @@ Frame selection:
   * --bind ADDR: interface to listen on (default 127.0.0.1). Use 0.0.0.0
     to feed a watchglass running in a container, which reaches the host
     at host.docker.internal:<port> rather than 127.0.0.1.
+  * --frames DIR: serve frame_0.png .. frame_5.png from DIR instead of
+    ./frames — ./frames-sevenseg is the seven-segment display rig.
 
 Only GET /snapshot.jpg is served; anything else is a 404. stdlib only.
 """
@@ -36,10 +38,10 @@ FRAMES_DIR = Path(__file__).parent / "frames"
 FRAME_COUNT = 6
 
 
-def load_frames():
+def load_frames(frames_dir=FRAMES_DIR):
     frames = []
     for i in range(FRAME_COUNT):
-        path = FRAMES_DIR / f"frame_{i}.png"
+        path = Path(frames_dir) / f"frame_{i}.png"
         frames.append(path.read_bytes())
     return frames
 
@@ -88,9 +90,11 @@ def main():
                          help="serve this frame forever (for scripted recordings)")
     parser.add_argument("--bind", default="127.0.0.1",
                          help="interface to listen on (default 127.0.0.1; 0.0.0.0 for containers)")
+    parser.add_argument("--frames", default=FRAMES_DIR, type=Path,
+                         help="directory holding frame_0.png .. frame_5.png (default ./frames)")
     args = parser.parse_args()
 
-    frames = load_frames()
+    frames = load_frames(args.frames)
     start = time.time()
     handler = make_handler(frames, start, args.period, args.once_complete, args.hold)
     server = ThreadingHTTPServer((args.bind, args.port), handler)
@@ -98,7 +102,7 @@ def main():
     mode = (f"hold frame_{args.hold}" if args.hold is not None
             else "once-complete" if args.once_complete else "looping")
     print(f"fakecam: serving http://{args.bind}:{args.port}/snapshot.jpg "
-          f"(period={args.period}s, mode={mode})", file=sys.stderr)
+          f"(period={args.period}s, mode={mode}, frames={args.frames})", file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

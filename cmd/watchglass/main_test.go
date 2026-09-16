@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/supervisor"
@@ -59,7 +60,7 @@ func (c *logCollector) snapshot() []string {
 // test doesn't anticipate) could still reach this loop.
 func TestStartWatchesSurvivesPerWatchFailure(t *testing.T) {
 	reg := state.New(5)
-	sup := supervisor.New(nil, reg, nil, func(string, ...any) {})
+	sup := supervisor.New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	sup.NewSource = func(w config.Watch) (source.Source, error) { return fakeStartSource{}, nil }
 	t.Cleanup(sup.StopAll)
 
@@ -98,5 +99,42 @@ func TestStartWatchesSurvivesPerWatchFailure(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected an ERROR log naming the failed watch and its cause; got: %v", logs.snapshot())
+	}
+}
+
+type stubEngine struct{}
+
+func (stubEngine) Recognize(ctx context.Context, img image.Image) (string, error) { return "", nil }
+
+// The boot check refuses a config whose OCR watches have no engine to run
+// on — tesseract missing and the watch not on the built-in decoder — and
+// accepts sevenseg watches and pixel_change watches regardless.
+func TestCheckEngines(t *testing.T) {
+	px := config.Watch{Name: "px", Trigger: config.Trigger{Type: "pixel_change", Threshold: 10}}
+	lcd := config.Watch{Name: "lcd", Trigger: config.Trigger{Type: "ocr_match", Pattern: "x"}}
+	scale := config.Watch{Name: "scale", Engine: "sevenseg", Trigger: config.Trigger{Type: "numeric", Op: "gt"}}
+	explicit := config.Watch{Name: "explicit", Engine: "tesseract", Trigger: config.Trigger{Type: "ocr_changed"}}
+
+	noTess := ocr.Engines{SevenSeg: ocr.NewSevenSeg()}
+	if err := checkEngines([]config.Watch{px, scale}, noTess); err != nil {
+		t.Errorf("pixel_change + sevenseg without tesseract: %v", err)
+	}
+	err := checkEngines([]config.Watch{px, scale, lcd}, noTess)
+	if err == nil {
+		t.Fatal("ocr_match without tesseract must be refused")
+	}
+	if !strings.Contains(err.Error(), `watch "lcd" needs OCR but tesseract is not on PATH`) {
+		t.Errorf("error = %q, want the watch named and the old wording", err)
+	}
+	if err := checkEngines([]config.Watch{explicit}, noTess); err == nil {
+		t.Error("engine: tesseract spelled out must still be refused without tesseract")
+	}
+
+	withTess := ocr.Engines{Tesseract: stubEngine{}, SevenSeg: ocr.NewSevenSeg()}
+	if err := checkEngines([]config.Watch{px, scale, lcd, explicit}, withTess); err != nil {
+		t.Errorf("with tesseract every watch is fine: %v", err)
+	}
+	if err := checkEngines(nil, ocr.Engines{}); err != nil {
+		t.Errorf("no watches: %v", err)
 	}
 }

@@ -16,8 +16,9 @@ generic camera recipe if you're not sure which one applies to you.
   temperature trigger read off a remote console, tuned for KVM links that
   drop the occasional frame.
 - [Lab instrument seven-segment readout](lab-instrument-seven-segment.md) —
-  the preprocessing walkthrough for LED/LCD digit displays, and an honest
-  look at where general-purpose OCR still struggles with that font.
+  LED/LCD digit displays on the built-in seven-segment decoder
+  (`engine: sevenseg`, no tesseract): region, config, and what still
+  trips it up.
 
 ## Don't see your screen?
 

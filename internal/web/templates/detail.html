@@ -57,6 +57,11 @@
       <input type="hidden" name="h" value="{{.Watch.Region.H}}">
       <fieldset>
         <legend>Trigger</legend>
+        {{/* The OCR types are locked only while the watch would read them
+             with a tesseract that isn't there; the built-in seven-segment
+             decoder runs them without it. app.js re-derives the lock from
+             data-needs-tesseract as the Engine select changes. */}}
+        {{$locked := and (not .TesseractAvailable) (ne .Watch.Engine "sevenseg")}}
         <div class="field-row">
           <label for="f-ttype">Type</label>
           <select id="f-ttype" name="ttype">
@@ -68,13 +73,20 @@
                  an existing OCR watch would be unsaveable on a box without
                  tesseract. Kept enabled, it saves as before and the restart
                  error says honestly that the type needs an OCR engine. */}}
-            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and (not .EngineAvailable) (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}}>ocr_match{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
-            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and (not .EngineAvailable) (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}}>ocr_changed{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
-            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and (not .EngineAvailable) (ne .Watch.Trigger.Type "numeric")}}disabled{{end}}>numeric{{if not .EngineAvailable}} (needs tesseract){{end}}</option>
+            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>ocr_match{{if $locked}} (needs tesseract){{end}}</option>
+            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>ocr_changed{{if $locked}} (needs tesseract){{end}}</option>
+            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>numeric{{if $locked}} (needs tesseract){{end}}</option>
           </select>
         </div>
-        {{if not .EngineAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — OCR-based trigger types (ocr_match, ocr_changed, numeric) {{if eq .Watch.Trigger.Type "pixel_change"}}are disabled{{else}}won't run (this watch's current type stays selectable so its other fields can still be saved){{end}} until it's installed.</p>{{end}}
+        {{if not .TesseractAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — {{if $locked}}OCR-based trigger types (ocr_match, ocr_changed, numeric) {{if eq .Watch.Trigger.Type "pixel_change"}}are disabled{{else}}won't run (this watch's current type stays selectable so its other fields can still be saved){{end}} until it's installed. The seven-segment decoder works without it: a digit display can switch Engine to sevenseg instead.{{else}}text OCR is unavailable; {{if eq .Watch.Trigger.Type "pixel_change"}}the OCR trigger types will use the seven-segment decoder, which works without it{{else}}this watch reads with the seven-segment decoder, which works without it{{end}}.{{end}}</p>{{end}}
         <p id="ttype-help" class="muted trigger-note"></p>
+        <div class="field-row" id="row-engine">
+          <label for="f-engine">Engine</label>
+          <select id="f-engine" name="engine" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}">
+            <option value="tesseract" {{if ne .Watch.Engine "sevenseg"}}selected{{end}}>tesseract — text (needs tesseract on PATH)</option>
+            <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits (built in)</option>
+          </select>
+        </div>
         <div class="field-row field-row-wide" id="row-pattern">
           <label for="f-pattern">Pattern</label>
           <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete">

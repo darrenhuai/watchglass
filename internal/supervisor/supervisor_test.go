@@ -5,6 +5,8 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"image/png"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/health"
+	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/trigger"
@@ -69,7 +72,7 @@ func flat() image.Image {
 }
 
 func newSup(reg *state.Registry) *Supervisor {
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
 	return s
 }
@@ -181,7 +184,7 @@ func TestExternalCancelRemovesFromRunning(t *testing.T) {
 }
 
 func TestStartFailsOnBadSource(t *testing.T) {
-	s := New(nil, state.New(5), nil, func(string, ...any) {})
+	s := New(nil, state.New(5), ocr.Engines{}, func(string, ...any) {})
 	// Default factory: an unsupported scheme must fail at Start.
 	w := testWatch("bad")
 	w.Source = "ftp://cam/x"
@@ -199,7 +202,7 @@ func TestStartFailsOnBadSource(t *testing.T) {
 // its running/error/stopped status without any extra plumbing.
 func TestHealthMirroredIntoRegistryOnFailure(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	s.NewSource = func(w config.Watch) (source.Source, error) { return flakySource{}, nil }
 	w := testWatch("a")
 	w.HealthAfter = 2
@@ -227,7 +230,7 @@ func TestHealthMirroredIntoRegistryOnFailure(t *testing.T) {
 // source comes back, with no user action required.
 func TestHealthRecoversInRegistry(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	src := &countingSource{fail: 3, img: flat()}
 	s.NewSource = func(w config.Watch) (source.Source, error) { return src, nil }
 	w := testWatch("a")
@@ -266,7 +269,7 @@ func TestHealthRecoversInRegistry(t *testing.T) {
 // otherwise stay wrong forever after a healthy Save & restart.
 func TestStartHealsStaleDownThroughRealTransition(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	var mu sync.Mutex
 	var hooked []string
 	s.OnHealth = func(name string, hev health.Event) {
@@ -330,7 +333,7 @@ func waitHealth(t *testing.T, reg *state.Registry, name string, down bool) state
 // forward to the re-detection time while the last real frame hasn't moved.
 func TestRestartKeepsDownVerdictWhileSourceStillDead(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	var mu sync.Mutex
 	var hooked []health.Event
 	s.OnHealth = func(name string, hev health.Event) {
@@ -383,7 +386,7 @@ func (blockingSource) Grab(ctx context.Context) (image.Image, error) {
 // OnHealth hook — MQTT offline — and the notifier on every Save & restart).
 func TestStopMidGrabDoesNotTripDown(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, nil, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
 	var mu sync.Mutex
 	var hooked []health.Event
 	s.OnHealth = func(name string, hev health.Event) {
@@ -420,7 +423,7 @@ func (errEngine) Recognize(ctx context.Context, img image.Image) (string, error)
 // with neither a sample nor a verdict — "running" / "no data yet" forever.
 func TestOCRFailureSurfacesAsDownInRegistry(t *testing.T) {
 	reg := state.New(5)
-	s := New(nil, reg, errEngine{}, func(string, ...any) {})
+	s := New(nil, reg, ocr.Engines{Tesseract: errEngine{}}, func(string, ...any) {})
 	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: flat()}, nil }
 	w := testWatch("a")
 	w.Interval = config.Duration(30 * time.Millisecond)
@@ -459,4 +462,70 @@ func TestSupervisorThreadsEventHook(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("event hook never fired")
 	}
+}
+
+func fixtureImage(t *testing.T) image.Image {
+	t.Helper()
+	f, err := os.Open("../ocr/testdata/sevenseg-23.5.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+// A sevenseg watch needs no tesseract: with an Engines that has none, a
+// numeric watch on a seven-segment display starts, reads the digits and
+// feeds the registry.
+func TestStartSevenSegWatchWithoutTesseract(t *testing.T) {
+	reg := state.New(5)
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: fixtureImage(t)}, nil }
+	w := testWatch("scale")
+	w.Interval = config.Duration(30 * time.Millisecond)
+	w.Engine = "sevenseg"
+	w.Trigger = config.Trigger{Type: "numeric", Pattern: "([0-9.]+)", Op: "gt", Threshold: 25, Confirm: 1}
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.StopAll()
+	waitForSample(t, reg, "scale")
+	latest, _ := reg.Latest("scale")
+	if latest.Reading != "23.5" {
+		t.Errorf("reading = %q, want 23.5", latest.Reading)
+	}
+}
+
+// The default engine is still tesseract, and its absence is still a Start
+// error for OCR watches — with the wording main has always printed.
+func TestStartOCRWatchWithoutTesseractErrors(t *testing.T) {
+	s := newSup(state.New(5))
+	w := testWatch("lcd")
+	w.Trigger = config.Trigger{Type: "ocr_match", Pattern: "x"}
+	err := s.Start(context.Background(), w)
+	if err == nil {
+		t.Fatal("expected an error without tesseract")
+	}
+	if !strings.Contains(err.Error(), `watch "lcd"`) || !strings.Contains(err.Error(), "tesseract is not on PATH") {
+		t.Errorf("error = %q", err)
+	}
+	if len(s.Running()) != 0 {
+		t.Errorf("running = %v", s.Running())
+	}
+}
+
+// pixel_change never resolves an engine, so a bad engine name (which
+// Validate would have rejected anyway) cannot stop it from starting.
+func TestStartPixelChangeIgnoresEngine(t *testing.T) {
+	s := newSup(state.New(5))
+	w := testWatch("px")
+	w.Engine = "sevenseg"
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	s.StopAll()
 }

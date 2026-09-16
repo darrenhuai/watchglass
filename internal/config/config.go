@@ -122,8 +122,13 @@ type Watch struct {
 	HealthAfter int        `yaml:"health_after,omitempty"`
 	Region      Region     `yaml:"region"`
 	Preprocess  Preprocess `yaml:"preprocess,omitempty"`
-	Trigger     Trigger    `yaml:"trigger"`
-	Notify      []string   `yaml:"notify"`
+	// Engine picks which text recognizer the OCR trigger types read the
+	// crop with: "tesseract" (the default, also spelled "") for text, or
+	// "sevenseg" for the built-in seven-segment digit decoder, which needs
+	// no external binary. pixel_change watches never read it.
+	Engine  string   `yaml:"engine,omitempty"`
+	Trigger Trigger  `yaml:"trigger"`
+	Notify  []string `yaml:"notify"`
 }
 
 type Config struct {
@@ -140,6 +145,9 @@ type Config struct {
 var validTypes = map[string]bool{
 	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true,
 }
+
+// validEngines are the Watch.Engine spellings; "" is tesseract.
+var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true}
 
 // validWatchName rejects names that would make a watch unaddressable
 // through the web UI's own routes (/watch/{name}, /watch/{name}/save, ...):
@@ -273,6 +281,12 @@ func (c *Config) Validate() error {
 		}
 		if !validTypes[w.Trigger.Type] {
 			return fmt.Errorf("watch %q: unknown trigger type %q", w.Name, w.Trigger.Type)
+		}
+		// Checked for every type, not only the OCR ones: a stale value on a
+		// pixel_change watch would otherwise surface only when the type is
+		// switched later, and "" stays "" so the default is never written.
+		if !validEngines[w.Engine] {
+			return fmt.Errorf("watch %q: unknown engine %q (expected tesseract or sevenseg)", w.Name, w.Engine)
 		}
 		if nonFinite(w.Trigger.Threshold) {
 			return fmt.Errorf("watch %q: trigger threshold must be finite", w.Name)

@@ -48,6 +48,36 @@ swap `config.yaml`'s trigger for the commented-out `ocr_match` block — it
 needs `tesseract` on PATH (`apt install tesseract-ocr` / `choco install
 tesseract`); without it watchglass refuses to start a non-pixel watch.
 
+## Seven-segment display rig
+
+`frames-sevenseg/frame_0.png` .. `frame_5.png` are six 640x240 frames of a
+four-position red LED readout climbing `23.5`, `23.7`, `24.1`, `24.6`,
+`25.0`, `25.3`, with the leading position unlit — hexagonal bars, real gaps
+between bars, the unlit ghost segments every LED display shows, a decimal
+point, LED glow and soft edges, the way a bench scale or thermometer looks
+to a camera. Like the printer frames they were generated once with a
+throwaway Pillow script (palettised to keep them small) and committed as-is;
+the script is not part of the repo.
+
+Serve them instead of the printer frames:
+
+```
+python examples/demo/fakecam.py --frames examples/demo/frames-sevenseg
+```
+
+and run watchglass against the matching config:
+
+```
+go run ./cmd/watchglass -config examples/demo/config-sevenseg.yaml -db demo.db -listen 127.0.0.1:8123
+```
+
+`config-sevenseg.yaml` is a `numeric` watch with `engine: sevenseg`, the
+built-in seven-segment decoder — no tesseract needed, no preprocessing
+either. Open http://127.0.0.1:8123/watch/demo-scale, hit **Test this
+region** to see the four glyphs and their confidences, and watch the
+readout climb; the trigger (`op: gt`, `threshold: 25`) fires when the
+frames reach `25.0`.
+
 ## Cleanup
 
 ```

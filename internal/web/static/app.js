@@ -322,8 +322,10 @@
   // reads (config.Validate and runner.Tick's own switches are the source of
   // truth this mirrors) and no explanation of what each Type does.
   var ttypeSel = form.elements["ttype"];
+  var engineSel = form.elements["engine"];
   var rowPattern = document.getElementById("row-pattern");
   var rowOp = document.getElementById("row-op");
+  var rowEngine = document.getElementById("row-engine");
   var fsPreprocess = document.getElementById("fs-preprocess");
   var ttypeHelp = document.getElementById("ttype-help");
   var TRIGGER_HELP = {
@@ -332,17 +334,41 @@
     ocr_changed: "Fires whenever the region's recognized text changes to a new stable value.",
     numeric: "Extracts a number from the region's text (Pattern, optional) and fires when it crosses Threshold using Op."
   };
+  // Without tesseract the server locks the OCR types (data-needs-tesseract)
+  // for a watch on the tesseract engine; the built-in seven-segment decoder
+  // runs them fine, so switching Engine to sevenseg unlocks them here
+  // without a round trip. On such a box the Engine row also stays visible
+  // for a pixel_change watch — it's the only way to reach the OCR types at
+  // all. The saved type is never locked (see the template).
+  var tesseractPresent = !engineSel || engineSel.dataset.tesseract !== "0";
+  var savedType = ttypeSel ? ttypeSel.value : "";
+  function syncTypeOptions() {
+    if (!ttypeSel) return;
+    var seven = !!engineSel && engineSel.value === "sevenseg";
+    Array.prototype.forEach.call(ttypeSel.options, function (o) {
+      if (o.dataset.needsTesseract !== "1") return;
+      // The selected option is never disabled: a disabled selected option is
+      // left out of the form, and the save would carry no ttype at all.
+      o.disabled = !seven && o.value !== ttypeSel.value;
+      o.textContent = o.value + (seven ? "" : " (needs tesseract)");
+    });
+  }
   function updateTriggerFields() {
     if (!ttypeSel) return;
     var t = ttypeSel.value;
     if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
     if (rowOp) rowOp.hidden = t !== "numeric";
+    if (rowEngine) rowEngine.hidden = t === "pixel_change" && tesseractPresent;
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
   }
   if (ttypeSel) {
     ttypeSel.addEventListener("change", updateTriggerFields);
     updateTriggerFields();
+  }
+  if (engineSel) {
+    engineSel.addEventListener("change", syncTypeOptions);
+    syncTypeOptions();
   }
 
   var range = form.elements["pp_threshold"];

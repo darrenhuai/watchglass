@@ -44,17 +44,17 @@ type Supervisor struct {
 	running map[string]*handle
 	store   *history.Store
 	reg     *state.Registry
-	engine  ocr.Engine
+	engines ocr.Engines
 	logf    func(string, ...any)
 }
 
-func New(store *history.Store, reg *state.Registry, engine ocr.Engine, logf func(string, ...any)) *Supervisor {
+func New(store *history.Store, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) *Supervisor {
 	return &Supervisor{
 		NewSource: source.For,
 		running:   map[string]*handle{},
 		store:     store,
 		reg:       reg,
-		engine:    engine,
+		engines:   engines,
 		logf:      logf,
 	}
 }
@@ -79,7 +79,17 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	if err != nil {
 		return fmt.Errorf("watch %q: source: %w", w.Name, err)
 	}
-	r, err := runner.New(w, src, s.engine, notifier, s.store, s.logf)
+	// pixel_change compares raw pixels and never resolves an engine, so a
+	// missing tesseract can't keep it from starting; every other type gets
+	// the engine the watch names — tesseract unless it says sevenseg.
+	var engine ocr.Engine
+	if w.Trigger.Type != "pixel_change" {
+		engine, err = s.engines.For(w.Engine)
+		if err != nil {
+			return fmt.Errorf("watch %q %w", w.Name, err)
+		}
+	}
+	r, err := runner.New(w, src, engine, notifier, s.store, s.logf)
 	if err != nil {
 		return err
 	}

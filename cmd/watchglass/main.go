@@ -78,15 +78,12 @@ func run(configPath, dbPath, listen, basePath string) error {
 		}
 	}()
 
-	var engine ocr.Engine
+	engines := ocr.Engines{SevenSeg: ocr.NewSevenSeg()}
 	if _, err := exec.LookPath("tesseract"); err == nil {
-		engine = ocr.NewTesseract()
+		engines.Tesseract = ocr.NewTesseract()
 	}
-	for _, w := range cfg.Watches {
-		if w.Trigger.Type != "pixel_change" && engine == nil {
-			return fmt.Errorf("watch %q needs OCR but tesseract is not on PATH; "+
-				"install it (e.g. apt install tesseract-ocr / choco install tesseract)", w.Name)
-		}
+	if err := checkEngines(cfg.Watches, engines); err != nil {
+		return err
 	}
 
 	needsFFmpegWatch := ""
@@ -118,7 +115,7 @@ func run(configPath, dbPath, listen, basePath string) error {
 			pub.Close()
 		}
 	}()
-	sup := supervisor.New(store, reg, engine, log.Printf)
+	sup := supervisor.New(store, reg, engines, log.Printf)
 	defer sup.StopAll()
 
 	// ws is declared here, before Connect, and assigned only after web.New
@@ -201,7 +198,7 @@ func run(configPath, dbPath, listen, basePath string) error {
 
 	startWatches(ctx, sup, cfg.Watches, log.Printf)
 
-	ws, err = web.New(configPath, cfg, sup, reg, engine, log.Printf)
+	ws, err = web.New(configPath, cfg, sup, reg, engines, log.Printf)
 	if err != nil {
 		return err
 	}
@@ -235,6 +232,23 @@ func run(configPath, dbPath, listen, basePath string) error {
 	log.Printf("web UI on http://%s", listen)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// checkEngines is the boot-time refusal for a config that can't run: every
+// OCR watch must resolve its engine — tesseract on PATH, or the built-in
+// seven-segment decoder — before anything starts, so a missing binary is
+// one clear error at launch rather than N watches failing in the log.
+// pixel_change watches never read an engine and are skipped.
+func checkEngines(watches []config.Watch, engines ocr.Engines) error {
+	for _, w := range watches {
+		if w.Trigger.Type == "pixel_change" {
+			continue
+		}
+		if _, err := engines.For(w.Engine); err != nil {
+			return fmt.Errorf("watch %q %w", w.Name, err)
+		}
 	}
 	return nil
 }

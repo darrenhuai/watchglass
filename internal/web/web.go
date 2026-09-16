@@ -77,12 +77,12 @@ type Server struct {
 	applyMu sync.Mutex
 	sup     *supervisor.Supervisor
 	reg     *state.Registry
-	engine  ocr.Engine
+	engines ocr.Engines
 	tmpl    *template.Template
 	logf    func(string, ...any)
 }
 
-func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *state.Registry, engine ocr.Engine, logf func(string, ...any)) (*Server, error) {
+func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) (*Server, error) {
 	s := &Server{
 		NewSource: source.For,
 		RunCtx:    context.Background(),
@@ -90,7 +90,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		cfg:       cfg,
 		sup:       sup,
 		reg:       reg,
-		engine:    engine,
+		engines:   engines,
 		logf:      logf,
 	}
 	// "u" closes over s rather than capturing BasePath by value: New builds
@@ -362,11 +362,13 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 type detailData struct {
 	Watch  config.Watch
 	Status watchStatus
-	// EngineAvailable is false when the server started with no OCR engine on
+	// TesseractAvailable is false when the server started with no tesseract on
 	// PATH — should_fix 2: the detail page uses it to disable/annotate the
 	// OCR-only trigger types in the Type dropdown instead of only failing
 	// after Save writes a config whose restart is already known to fail.
-	EngineAvailable bool
+	// The built-in seven-segment decoder is always present, so the template
+	// only locks those types while the watch's engine is tesseract.
+	TesseractAvailable bool
 	// Base carries BasePath into the page so app.js can prefix the fetch
 	// URLs it builds client-side (the "u" FuncMap func only covers
 	// server-rendered links) — see the #stage data-base attribute in
@@ -381,10 +383,10 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "detail.html", detailData{
-		Watch:           wc,
-		Status:          s.statusFor(wc.Name, s.isRunning(wc.Name)),
-		EngineAvailable: s.engine != nil,
-		Base:            s.BasePath,
+		Watch:              wc,
+		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
+		TesseractAvailable: s.engines.Tesseract != nil,
+		Base:               s.BasePath,
 	})
 }
 
@@ -519,8 +521,16 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := testResult{Crop: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()))}
-	switch e := s.engine.(type) {
-	case nil:
+	// The form's engine wins over the saved one so the decoder can be tried
+	// before saving; a request without the field (curl, an older client)
+	// reads with whatever the watch is configured for.
+	engName := r.FormValue("engine")
+	if engName == "" {
+		engName = wc.Engine
+	}
+	engine, err := s.engines.For(engName)
+	switch {
+	case errors.Is(err, ocr.ErrNoTesseract):
 		// should_fix 3: pixel_change never uses OCR, so the tesseract-missing
 		// note is noise (and reads as an error) on the most common first test
 		// a new user runs. r.FormValue("ttype") is the type currently
@@ -529,15 +539,20 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		// request that, unlike the UI, doesn't send ttype at all) falls back
 		// to showing the note, matching the pre-fix behavior for that case.
 		if r.FormValue("ttype") != "pixel_change" {
-			res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only."
+			res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only. " +
+				"The seven-segment decoder (engine: sevenseg) needs no tesseract."
 		}
-	case ocr.DetailedEngine:
-		res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
+	case err != nil:
+		res.Note = fmt.Sprintf("OCR engine: %v", err)
 	default:
-		res.Text, err = e.Recognize(ctx, prepped)
-	}
-	if err != nil {
-		res.Note = fmt.Sprintf("OCR failed: %v", err)
+		if e, ok := engine.(ocr.DetailedEngine); ok {
+			res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
+		} else {
+			res.Text, err = engine.Recognize(ctx, prepped)
+		}
+		if err != nil {
+			res.Note = fmt.Sprintf("OCR failed: %v", err)
+		}
 	}
 	s.render(w, "testresult.html", res)
 }
@@ -595,6 +610,22 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 	w := base
 	w.Region = region
 	w.Preprocess = prep
+	// A client that omits the field (curl, a script, a stale page) keeps the
+	// saved engine; the detail form always sends it. Resetting a sevenseg
+	// watch to tesseract on a box without it would stop the watch and drop
+	// the engine line from the file in one go.
+	if _, ok := r.Form["engine"]; ok {
+		w.Engine = r.FormValue("engine")
+	} else {
+		w.Engine = base.Engine
+	}
+	// The Engine select always submits a value, so a watch that never said
+	// which engine would gain engine: tesseract in the file on its first
+	// save. "" is how the default is spelled; "tesseract" is kept only
+	// where the file already spelled it out.
+	if w.Engine == "tesseract" && base.Engine != "tesseract" {
+		w.Engine = ""
+	}
 	w.Interval = config.Duration(interval)
 	w.MaxInterval = config.Duration(maxInterval)
 	w.HealthAfter = healthAfter

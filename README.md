@@ -61,8 +61,9 @@ Installs to `$(go env GOPATH)/bin` (`$HOME/go/bin` by default).
 ## Quick start
 
 1. Install [tesseract](https://github.com/tesseract-ocr/tesseract) (only
-   needed for OCR triggers): `apt install tesseract-ocr` or
-   `choco install tesseract`.
+   needed for OCR triggers reading text; seven-segment digit displays use
+   the built-in decoder instead — see [OCR engines](#ocr-engines)):
+   `apt install tesseract-ocr` or `choco install tesseract`.
 2. Start with an empty config and run watchglass:
 
        echo "watches: []" > config.yaml
@@ -184,8 +185,11 @@ watchglass serves a local dashboard while it runs — open http://127.0.0.1:8080
 Add a watch, open it, drag a rectangle over the part of the screen you care
 about, and hit **Test this region** to see exactly what the OCR engine reads —
 tune the preprocessing sliders (grayscale, invert, binarize, upscale) until
-the text comes back clean, then **Save**. The page shows a live strip of
-recent readings so you can verify triggers before trusting them.
+the text comes back clean, then **Save**. For a seven-segment digit display
+pick `sevenseg` in the **Engine** select instead and skip the sliders; the
+test panel then shows one chip per digit with its confidence (see
+[OCR engines](#ocr-engines)). The page shows a live strip of recent readings
+so you can verify triggers before trusting them.
 
 > **Save keeps your file.** Clicking **Save** merges the change into
 > `config.yaml` rather than rewriting it: hand-written comments, key order,
@@ -296,6 +300,43 @@ text; set `pattern` to a regex to extract a specific value instead — if the
 regex has a capture group, that group's text is parsed rather than the whole
 match.
 
+### OCR engines
+
+The three OCR triggers read the region with one of two engines, chosen per
+watch with `engine:`:
+
+| engine | reads | needs |
+|---|---|---|
+| `tesseract` (default) | printed text — LCD menus, console output, status lines | the `tesseract` binary on PATH |
+| `sevenseg` | seven-segment digits — bench scales, multimeters, thermometers, clocks | nothing; built in |
+
+`sevenseg` is a geometry decoder, not a font model: it binarizes the crop,
+works out the polarity itself (lit LED on dark and dark LCD on light both
+read with no `preprocess` settings), finds each digit's bars and checks the
+seven segment positions of every cell. It returns the digits joined —
+`23.5`, `-8.0`, `1234` — a `-` sign and decimal point included, and marks a
+glyph whose bars spell no digit as `?`. **Test this region** shows one chip
+per glyph with its confidence, so you can see which digit is marginal
+before trusting a threshold. Crop tightly around the digits (leave units
+and labels out), and keep the camera close to head-on; the decoder expects
+upright digits and does not correct a slanted view.
+
+```yaml
+  - name: bench-scale
+    source: http://192.168.1.80/snapshot.jpg
+    region: {x: 0.40, y: 0.35, w: 0.22, h: 0.10}
+    engine: sevenseg
+    trigger:
+      type: numeric
+      pattern: "([0-9.]+)"
+      op: gt
+      threshold: 500
+```
+
+A watch without `engine:` keeps using tesseract, so nothing changes for
+existing configs; a sevenseg watch starts fine on a box that has no
+tesseract at all.
+
 ## Recipes
 
 Seeded, copy-paste `watches:` configs for common gear live in
@@ -312,7 +353,8 @@ Post-v1, roughly in priority order:
       `addon/DOCS.md`); official store submission remains. The image itself
       is published for amd64, arm64 and arm/v7.
 - [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
-- [ ] Native seven-segment decoder
+- [x] Native seven-segment decoder (`engine: sevenseg`, see
+      [OCR engines](#ocr-engines))
 - [x] Recipes gallery (community configs per device)
 - [ ] Template matching triggers ("this icon appeared")
 - [ ] Multi-region compound conditions ("A matches AND B > 200")

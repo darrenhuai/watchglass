@@ -62,10 +62,10 @@ func newTestServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	reg := state.New(5)
-	sup := supervisor.New(nil, reg, fakeDetailed{}, func(string, ...any) {})
+	sup := supervisor.New(nil, reg, ocr.Engines{Tesseract: fakeDetailed{}}, func(string, ...any) {})
 	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
 	t.Cleanup(sup.StopAll)
-	s, err := New(cfgPath, cfg, sup, reg, fakeDetailed{}, t.Logf)
+	s, err := New(cfgPath, cfg, sup, reg, ocr.Engines{Tesseract: fakeDetailed{}}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestTestRegionRejectsBadRegion(t *testing.T) {
 
 func TestTestRegionWithoutEngineShowsCropOnly(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.engine = nil
+	s.engines.Tesseract = nil
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}}
 	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
 	if resp.StatusCode != 200 {
@@ -222,7 +222,7 @@ func TestTestRegionWithoutEngineShowsCropOnly(t *testing.T) {
 // new user runs against a pixel_change watch.
 func TestTestRegionPixelChangeSuppressesTesseractNote(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.engine = nil
+	s.engines.Tesseract = nil
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"pixel_change"}}
 	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
 	if resp.StatusCode != 200 {
@@ -240,7 +240,7 @@ func TestTestRegionPixelChangeSuppressesTesseractNote(t *testing.T) {
 // showing the note, matching pre-fix behavior — only pixel_change is exempt.
 func TestTestRegionOCRTypeKeepsTesseractNote(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.engine = nil
+	s.engines.Tesseract = nil
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"ocr_match"}}
 	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
 	if resp.StatusCode != 200 {
@@ -852,10 +852,10 @@ func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := state.New(5)
-	sup := supervisor.New(nil, reg, nil, func(string, ...any) {}) // nil: no OCR engine
+	sup := supervisor.New(nil, reg, ocr.Engines{}, func(string, ...any) {}) // no tesseract
 	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
 	t.Cleanup(sup.StopAll)
-	s, err := New(cfgPath, cfg, sup, reg, nil, t.Logf)
+	s, err := New(cfgPath, cfg, sup, reg, ocr.Engines{}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -895,7 +895,7 @@ func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
 // be written in the first place.
 func TestDetailDisablesOCRTypesWithoutEngine(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.engine = nil
+	s.engines.Tesseract = nil
 	_, body := get(t, s.Handler(), "/watch/printer")
 	for _, want := range []string{`value="ocr_match" `, `value="ocr_changed" `, `value="numeric" `} {
 		idx := strings.Index(body, want)
@@ -930,7 +930,7 @@ func TestDetailEnablesOCRTypesWithEngine(t *testing.T) {
 // OCR types remain disabled.
 func TestDetailKeepsCurrentOCRTypeEnabledWithoutEngine(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.engine = nil
+	s.engines.Tesseract = nil
 	s.mu.Lock()
 	s.cfg.Watches[0].Trigger = config.Trigger{Type: "ocr_match", Pattern: "(?i)done"}
 	s.mu.Unlock()
@@ -1095,10 +1095,10 @@ func TestDashboardShowsErrorWhenOCRFailsEveryTick(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := state.New(5)
-	sup := supervisor.New(nil, reg, ocrFailEngine{}, func(string, ...any) {})
+	sup := supervisor.New(nil, reg, ocr.Engines{Tesseract: ocrFailEngine{}}, func(string, ...any) {})
 	sup.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
 	t.Cleanup(sup.StopAll)
-	s, err := New(cfgPath, cfg, sup, reg, ocrFailEngine{}, t.Logf)
+	s, err := New(cfgPath, cfg, sup, reg, ocr.Engines{Tesseract: ocrFailEngine{}}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,5 +1139,193 @@ func TestTestRegionRejectsNonFiniteFloats(t *testing.T) {
 		if resp.StatusCode != 400 {
 			t.Errorf("region %v: status = %d, want 400; body: %s", bad, resp.StatusCode, body)
 		}
+	}
+}
+
+func fixtureSource(t *testing.T) source.Source {
+	t.Helper()
+	f, err := os.Open("../ocr/testdata/sevenseg-23.5.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &fakeSource{img: img}
+}
+
+// optionLine returns the <option value="v" ...> ... </option> markup for
+// the select option with that value.
+func optionLine(t *testing.T, body, value string) string {
+	t.Helper()
+	idx := strings.Index(body, `value="`+value+`"`)
+	if idx == -1 {
+		t.Fatalf("option %q not found; body:\n%s", value, body)
+	}
+	end := strings.Index(body[idx:], "</option>")
+	if end == -1 {
+		t.Fatalf("option %q not closed; body:\n%s", value, body)
+	}
+	return body[idx : idx+end]
+}
+
+func TestDetailRendersEngineSelect(t *testing.T) {
+	s, _ := newTestServer(t)
+	_, body := get(t, s.Handler(), "/watch/printer")
+	for _, want := range []string{`id="f-engine"`, `name="engine"`, `id="row-engine"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page missing %s", want)
+		}
+	}
+	if line := optionLine(t, body, "tesseract"); !strings.Contains(line, "selected") {
+		t.Errorf("tesseract must be selected for the default engine: %q", line)
+	}
+	if line := optionLine(t, body, "sevenseg"); strings.Contains(line, "selected") {
+		t.Errorf("sevenseg must not be selected for the default engine: %q", line)
+	} else if !strings.Contains(line, "seven-segment") {
+		t.Errorf("sevenseg option should say what it is: %q", line)
+	}
+
+	s.mu.Lock()
+	s.cfg.Watches[0].Engine = "sevenseg"
+	s.mu.Unlock()
+	_, body = get(t, s.Handler(), "/watch/printer")
+	if line := optionLine(t, body, "sevenseg"); !strings.Contains(line, "selected") {
+		t.Errorf("saved sevenseg engine must render selected: %q", line)
+	}
+	if line := optionLine(t, body, "tesseract"); strings.Contains(line, "selected") {
+		t.Errorf("tesseract must not be selected when sevenseg is saved: %q", line)
+	}
+}
+
+// Without tesseract the OCR trigger types are only locked while the engine
+// is tesseract: a sevenseg watch can switch between them freely, and the
+// note tells the user the decoder is the way around a missing tesseract.
+func TestDetailSevenSegUnlocksOCRTypesWithoutTesseract(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engines.Tesseract = nil
+	_, body := get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(body, "seven-segment decoder") {
+		t.Errorf("tesseract-missing note should mention the seven-segment decoder; body:\n%s", body)
+	}
+	if line := optionLine(t, body, "ocr_match"); !strings.Contains(line, "disabled") {
+		t.Errorf("ocr_match should stay locked for a tesseract watch without tesseract: %q", line)
+	}
+	s.mu.Lock()
+	s.cfg.Watches[0].Engine = "sevenseg"
+	s.mu.Unlock()
+	_, body = get(t, s.Handler(), "/watch/printer")
+	for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
+		if line := optionLine(t, body, typ); strings.Contains(line, "disabled") || strings.Contains(line, "needs tesseract") {
+			t.Errorf("%s must be usable with the sevenseg engine and no tesseract: %q", typ, line)
+		}
+	}
+}
+
+func TestSaveRoundTripsEngine(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"numeric"}, "pattern": {"([0-9.]+)"}, "op": {"gt"}, "engine": {"sevenseg"},
+		"tthreshold": {"25"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Watches[0].Engine != "sevenseg" {
+		t.Errorf("engine = %q after save, want sevenseg", got.Watches[0].Engine)
+	}
+	if running := s.sup.Running(); len(running) != 1 {
+		t.Errorf("watch not running after save: %v", running)
+	}
+	// Back to tesseract: the default is spelled by omission, so the file
+	// loses the key rather than gaining engine: tesseract.
+	form.Set("engine", "tesseract")
+	if resp, body := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Watches[0].Engine != "" {
+		t.Errorf("engine = %q after switching back, want the default (empty)", got.Watches[0].Engine)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(raw), "engine") {
+		t.Errorf("default engine should not be written to the file:\n%s", raw)
+	}
+	// An unknown engine is rejected before anything is persisted.
+	form.Set("engine", "bogus")
+	if resp, _ := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 400 {
+		t.Errorf("bogus engine: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// Test this region with the sevenseg engine shows the decoder's digits and
+// one confidence chip per glyph — without ever touching tesseract.
+func TestTestRegionSevenSegDecodesDigits(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engines.Tesseract = nil
+	s.NewSource = func(w config.Watch) (source.Source, error) { return fixtureSource(t), nil }
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"numeric"}, "engine": {"sevenseg"}}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "23.5") {
+		t.Errorf("fragment should show the decoded reading; body:\n%s", body)
+	}
+	if strings.Contains(body, "tesseract") {
+		t.Errorf("sevenseg test must not mention tesseract; body:\n%s", body)
+	}
+	if n := strings.Count(body, "word-chip"); n != 4 {
+		t.Errorf("want 4 glyph chips (2 3 . 5), got %d; body:\n%s", n, body)
+	}
+	if strings.Contains(body, "conf-low") {
+		t.Errorf("a clean fixture should decode with every glyph above the 60 line; body:\n%s", body)
+	}
+}
+
+// A request that does not say which engine (older clients, curl) uses the
+// watch's configured one; the form's choice wins over the saved one so the
+// user can try the decoder before saving.
+func TestTestRegionEngineFallsBackToWatchConfig(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.NewSource = func(w config.Watch) (source.Source, error) { return fixtureSource(t), nil }
+	s.mu.Lock()
+	s.cfg.Watches[0].Engine = "sevenseg"
+	s.mu.Unlock()
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}}
+	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, "23.5") {
+		t.Errorf("no engine field: should use the watch's sevenseg engine; body:\n%s", body)
+	}
+	form.Set("engine", "tesseract")
+	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, "PRINT COMPLETE") || strings.Contains(body, "23.5") {
+		t.Errorf("engine=tesseract in the form must override the saved sevenseg; body:\n%s", body)
+	}
+}
+
+func TestTestRegionTesseractNoteMentionsSevenSeg(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.engines.Tesseract = nil
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"ocr_match"}, "engine": {"tesseract"}}
+	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, "tesseract") || !strings.Contains(body, "seven-segment") {
+		t.Errorf("note should say tesseract is missing and that the seven-segment decoder needs none; body:\n%s", body)
+	}
+	form.Set("engine", "bogus")
+	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if resp.StatusCode != 200 || !strings.Contains(body, "bogus") {
+		t.Errorf("unknown engine should be reported in the fragment, status %d; body:\n%s", resp.StatusCode, body)
 	}
 }
