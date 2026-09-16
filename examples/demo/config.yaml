@@ -18,7 +18,8 @@ watches:
 
     # Swap the block above for this one to fire on the actual text instead
     # of raw pixel motion (the "OCR really read it" money shot in the launch
-    # GIF). Requires tesseract on PATH — see README.md.
+    # GIF). Requires tesseract on PATH, or `engine: rapidocr` with a Python
+    # that has `pip install rapidocr onnxruntime` — see README.md.
     # trigger:
     #   type: ocr_match
     #   pattern: "(?i)print complete"

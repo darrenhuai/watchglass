@@ -46,7 +46,9 @@ The beats to record, using this rig instead of a real printer:
 For the OCR money-shot (matching the actual text, not just pixel motion),
 swap `config.yaml`'s trigger for the commented-out `ocr_match` block — it
 needs `tesseract` on PATH (`apt install tesseract-ocr` / `choco install
-tesseract`); without it watchglass refuses to start a non-pixel watch.
+tesseract`), or `engine: rapidocr` with a Python that has `pip install
+rapidocr onnxruntime`; without one of them watchglass refuses to start a
+non-pixel watch.
 
 ## Seven-segment display rig
 
