@@ -117,6 +117,11 @@ cooldown while something is jammed.
   false reads, more so than for a printed-paper or e-ink display. Test at
   the actual lighting conditions you care about (workshop lights off at
   night is a common miss), not just once at setup time.
+- If tesseract keeps misreading the LCD's font even with the preprocessing
+  tuned — thin or stylised glyphs, a low-contrast panel — set
+  `engine: rapidocr` on both watches (see "OCR engines" in the README): a
+  neural OCR model that copes with harder text, at the cost of a Python
+  install and a few seconds per read.
 - A firmware update that changes the touchscreen's layout, font, or wording
   will silently break the region and pattern — nothing here detects that
   for you. Glance at the web UI's live reading strip occasionally after an

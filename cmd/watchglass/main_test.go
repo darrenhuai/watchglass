@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"sort"
@@ -136,5 +137,27 @@ func TestCheckEngines(t *testing.T) {
 	}
 	if err := checkEngines(nil, ocr.Engines{}); err != nil {
 		t.Errorf("no watches: %v", err)
+	}
+
+	// rapidocr watches need the detected Python engine the same way
+	// tesseract watches need the binary; the error wraps ErrNoRapidOCR so
+	// the message says how to install it.
+	rapid := config.Watch{Name: "lcd-hard", Engine: "rapidocr", Trigger: config.Trigger{Type: "ocr_match", Pattern: "x"}}
+	err = checkEngines([]config.Watch{px, scale, rapid}, noTess)
+	if err == nil {
+		t.Fatal("engine: rapidocr without a detected Python must be refused")
+	}
+	if !errors.Is(err, ocr.ErrNoRapidOCR) {
+		t.Errorf("error = %v, want ErrNoRapidOCR wrapped", err)
+	}
+	if !strings.Contains(err.Error(), `watch "lcd-hard" needs the rapidocr engine`) {
+		t.Errorf("error = %q, want the watch named and the rapidocr wording", err)
+	}
+	withRapid := ocr.Engines{RapidOCR: stubEngine{}, SevenSeg: ocr.NewSevenSeg()}
+	if err := checkEngines([]config.Watch{px, scale, rapid}, withRapid); err != nil {
+		t.Errorf("with rapidocr detected the watch is fine: %v", err)
+	}
+	if err := checkEngines([]config.Watch{lcd}, withRapid); err == nil {
+		t.Error("rapidocr present must not stand in for a missing tesseract")
 	}
 }

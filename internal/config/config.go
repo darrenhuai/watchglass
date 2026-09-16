@@ -123,9 +123,11 @@ type Watch struct {
 	Region      Region     `yaml:"region"`
 	Preprocess  Preprocess `yaml:"preprocess,omitempty"`
 	// Engine picks which text recognizer the OCR trigger types read the
-	// crop with: "tesseract" (the default, also spelled "") for text, or
+	// crop with: "tesseract" (the default, also spelled "") for text,
 	// "sevenseg" for the built-in seven-segment digit decoder, which needs
-	// no external binary. pixel_change watches never read it.
+	// no external binary, or "rapidocr" for printed text tesseract
+	// struggles with (needs a Python with the rapidocr package).
+	// pixel_change watches never read it.
 	Engine  string   `yaml:"engine,omitempty"`
 	Trigger Trigger  `yaml:"trigger"`
 	Notify  []string `yaml:"notify"`
@@ -147,7 +149,7 @@ var validTypes = map[string]bool{
 }
 
 // validEngines are the Watch.Engine spellings; "" is tesseract.
-var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true}
+var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true, "rapidocr": true}
 
 // validWatchName rejects names that would make a watch unaddressable
 // through the web UI's own routes (/watch/{name}, /watch/{name}/save, ...):
@@ -286,7 +288,7 @@ func (c *Config) Validate() error {
 		// pixel_change watch would otherwise surface only when the type is
 		// switched later, and "" stays "" so the default is never written.
 		if !validEngines[w.Engine] {
-			return fmt.Errorf("watch %q: unknown engine %q (expected tesseract or sevenseg)", w.Name, w.Engine)
+			return fmt.Errorf("watch %q: unknown engine %q (expected tesseract, sevenseg or rapidocr)", w.Name, w.Engine)
 		}
 		if nonFinite(w.Trigger.Threshold) {
 			return fmt.Errorf("watch %q: trigger threshold must be finite", w.Name)

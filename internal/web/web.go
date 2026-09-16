@@ -369,6 +369,10 @@ type detailData struct {
 	// The built-in seven-segment decoder is always present, so the template
 	// only locks those types while the watch's engine is tesseract.
 	TesseractAvailable bool
+	// RapidOCRAvailable is false when boot found no Python with the rapidocr
+	// package — the same lock/annotation as TesseractAvailable, applied
+	// while the watch's engine is rapidocr.
+	RapidOCRAvailable bool
 	// Base carries BasePath into the page so app.js can prefix the fetch
 	// URLs it builds client-side (the "u" FuncMap func only covers
 	// server-rendered links) — see the #stage data-base attribute in
@@ -386,6 +390,7 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		Watch:              wc,
 		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		TesseractAvailable: s.engines.Tesseract != nil,
+		RapidOCRAvailable:  s.engines.RapidOCR != nil,
 		Base:               s.BasePath,
 	})
 }
@@ -541,6 +546,12 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("ttype") != "pixel_change" {
 			res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only. " +
 				"The seven-segment decoder (engine: sevenseg) needs no tesseract."
+		}
+	case errors.Is(err, ocr.ErrNoRapidOCR):
+		// Same suppression as above: a pixel_change test never reads OCR.
+		if r.FormValue("ttype") != "pixel_change" {
+			res.Note = "RapidOCR isn't available (no python3/python with the rapidocr package on PATH — " +
+				"pip install rapidocr onnxruntime) — showing the preprocessed crop only."
 		}
 	case err != nil:
 		res.Note = fmt.Sprintf("OCR engine: %v", err)

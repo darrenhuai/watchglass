@@ -28,6 +28,7 @@ func main() {
 	dbPath := flag.String("db", "watchglass.db", "path to sqlite history database")
 	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; no auth yet)")
 	basePath := flag.String("base-path", "", "URL path prefix for links/redirects when running behind a reverse proxy that strips it (e.g. /watchglass); empty (default) leaves the UI unprefixed")
+	python := flag.String("python", "", "Python interpreter for engine: rapidocr (default: first of python3, python on PATH that imports rapidocr)")
 	flag.Parse()
 
 	bp, err := normalizeBasePath(*basePath)
@@ -36,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(*configPath, *dbPath, *listen, bp); err != nil {
+	if err := run(*configPath, *dbPath, *listen, bp, *python); err != nil {
 		fmt.Fprintln(os.Stderr, "watchglass:", err)
 		os.Exit(1)
 	}
@@ -58,7 +59,7 @@ func normalizeBasePath(bp string) (string, error) {
 	return strings.TrimSuffix(bp, "/"), nil
 }
 
-func run(configPath, dbPath, listen, basePath string) error {
+func run(configPath, dbPath, listen, basePath, python string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -81,6 +82,18 @@ func run(configPath, dbPath, listen, basePath string) error {
 	engines := ocr.Engines{SevenSeg: ocr.NewSevenSeg()}
 	if _, err := exec.LookPath("tesseract"); err == nil {
 		engines.Tesseract = ocr.NewTesseract()
+	}
+	// rapidocr is a Python package, so being on PATH proves nothing (on
+	// Windows python3 is usually the Store stub): the probe imports it.
+	// Bounded so a wedged interpreter can't hold up boot.
+	detectCtx, cancelDetect := context.WithTimeout(context.Background(), 15*time.Second)
+	rapid, err := ocr.DetectRapidOCR(detectCtx, python)
+	cancelDetect()
+	if err != nil {
+		log.Printf("rapidocr: unavailable (%v)", err)
+	} else {
+		engines.RapidOCR = rapid
+		log.Printf("rapidocr: using %s", rapid.Python)
 	}
 	if err := checkEngines(cfg.Watches, engines); err != nil {
 		return err
@@ -237,8 +250,9 @@ func run(configPath, dbPath, listen, basePath string) error {
 }
 
 // checkEngines is the boot-time refusal for a config that can't run: every
-// OCR watch must resolve its engine — tesseract on PATH, or the built-in
-// seven-segment decoder — before anything starts, so a missing binary is
+// OCR watch must resolve its engine — tesseract on PATH, a Python with
+// rapidocr, or the built-in seven-segment decoder — before anything
+// starts, so a missing binary is
 // one clear error at launch rather than N watches failing in the log.
 // pixel_change watches never read an engine and are skipped.
 func checkEngines(watches []config.Watch, engines ocr.Engines) error {

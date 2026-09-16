@@ -73,3 +73,38 @@ func TestEnginesForRejectsUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestEnginesForRapidOCR(t *testing.T) {
+	var e Engines
+	got, err := e.For("rapidocr")
+	if err == nil {
+		t.Fatalf("For(rapidocr) with none detected returned %#v, want an error", got)
+	}
+	if !errors.Is(err, ErrNoRapidOCR) {
+		t.Errorf("For(rapidocr) error is not ErrNoRapidOCR: %v", err)
+	}
+	for _, want := range []string{"rapidocr", "pip install rapidocr onnxruntime", "python3", "-python"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("For(rapidocr) error %q should mention %q", err, want)
+		}
+	}
+	rapid := stubEngine{out: "rapid"}
+	e.RapidOCR = rapid
+	if got, err := e.For("rapidocr"); err != nil || got != rapid {
+		t.Errorf("For(rapidocr) = %#v, %v; want the rapidocr engine", got, err)
+	}
+	// rapidocr being present changes nothing for the other spellings.
+	if _, err := e.For(""); !errors.Is(err, ErrNoTesseract) {
+		t.Errorf("For(\"\") with only rapidocr set = %v, want ErrNoTesseract", err)
+	}
+}
+
+func TestEnginesForUnknownListsAllThree(t *testing.T) {
+	_, err := Engines{}.For("bogus")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "tesseract, sevenseg, rapidocr") {
+		t.Errorf("error %q should list all three engines", err)
+	}
+}

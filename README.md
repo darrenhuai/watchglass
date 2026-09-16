@@ -302,13 +302,14 @@ match.
 
 ### OCR engines
 
-The three OCR triggers read the region with one of two engines, chosen per
-watch with `engine:`:
+The three OCR triggers read the region with one of three engines, chosen
+per watch with `engine:`:
 
 | engine | reads | needs |
 |---|---|---|
 | `tesseract` (default) | printed text — LCD menus, console output, status lines | the `tesseract` binary on PATH |
 | `sevenseg` | seven-segment digits — bench scales, multimeters, thermometers, clocks | nothing; built in |
+| `rapidocr` | printed text the tesseract path struggles with — low-contrast LCDs, small or stylised fonts, odd angles (PaddleOCR PP-OCR mobile models via RapidOCR) | `python3`/`python` on PATH with `pip install rapidocr onnxruntime` |
 
 `sevenseg` is a geometry decoder, not a font model: it binarizes the crop,
 works out the polarity itself (lit LED on dark and dark LCD on light both
@@ -337,6 +338,32 @@ A watch without `engine:` keeps using tesseract, so nothing changes for
 existing configs; a sevenseg watch starts fine on a box that has no
 tesseract at all.
 
+`rapidocr` runs the PaddleOCR PP-OCR models in their small CPU form,
+driven through the [RapidOCR](https://github.com/RapidAI/RapidOCR)
+Python package. watchglass never links it: each read spawns a Python
+interpreter, feeds it the crop and reads JSON back, so the binary stays
+static and the engine is optional. At boot watchglass looks for `python3`,
+then `python`, and keeps the first that can `import rapidocr, onnxruntime`
+(`-python /path/to/python` picks one explicitly, e.g. a venv); the log says
+which it found or why it didn't. Note that `pip install rapidocr` alone is
+not enough — the `onnxruntime` package is the inference runtime. Every read
+starts an interpreter and loads the models, which costs about 2–4 s on a
+desktop CPU and more on a Pi, so give a rapidocr watch an `interval` of
+10 s or longer. The Docker image and the Home Assistant add-on don't ship
+Python or the models; for now `rapidocr` is for bare-metal and venv
+installs.
+
+```yaml
+  - name: printer-lcd
+    source: http://192.168.1.55/snapshot.jpg
+    interval: 15s
+    region: {x: 0.20, y: 0.35, w: 0.60, h: 0.15}
+    engine: rapidocr
+    trigger:
+      type: ocr_match
+      pattern: "(?i)print complete"
+```
+
 ## Recipes
 
 Seeded, copy-paste `watches:` configs for common gear live in
@@ -352,7 +379,8 @@ Post-v1, roughly in priority order:
 - [ ] Home Assistant Add-on — installs as a custom repository today (see
       `addon/DOCS.md`); official store submission remains. The image itself
       is published for amd64, arm64 and arm/v7.
-- [ ] RapidOCR engine (PP-OCRv5-mobile) for hard text
+- [x] RapidOCR engine (`engine: rapidocr`, PaddleOCR PP-OCR mobile models
+      via the RapidOCR package)
 - [x] Native seven-segment decoder (`engine: sevenseg`, see
       [OCR engines](#ocr-engines))
 - [x] Recipes gallery (community configs per device)

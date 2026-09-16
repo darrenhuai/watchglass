@@ -334,23 +334,35 @@
     ocr_changed: "Fires whenever the region's recognized text changes to a new stable value.",
     numeric: "Extracts a number from the region's text (Pattern, optional) and fires when it crosses Threshold using Op."
   };
-  // Without tesseract the server locks the OCR types (data-needs-tesseract)
-  // for a watch on the tesseract engine; the built-in seven-segment decoder
-  // runs them fine, so switching Engine to sevenseg unlocks them here
-  // without a round trip. On such a box the Engine row also stays visible
-  // for a pixel_change watch — it's the only way to reach the OCR types at
-  // all. The saved type is never locked (see the template).
+  // Without tesseract (or rapidocr) the server locks the OCR types
+  // (data-needs-tesseract / data-needs-rapidocr) for a watch on that
+  // engine; the built-in seven-segment decoder runs them fine, so
+  // switching Engine unlocks them here without a round trip. The Engine
+  // row also stays visible for a pixel_change watch on a box without
+  // tesseract, and whenever the selected engine is missing (a rapidocr
+  // watch on a box without rapidocr) — with every OCR type locked it's the
+  // only way to reach them at all. The saved type is never locked (see the
+  // template).
   var tesseractPresent = !engineSel || engineSel.dataset.tesseract !== "0";
+  var rapidPresent = !engineSel || engineSel.dataset.rapidocr !== "0";
   var savedType = ttypeSel ? ttypeSel.value : "";
+  // engineMissing names the external engine the selected Engine needs but
+  // the box lacks, or "" when the selection can run.
+  function engineMissing() {
+    var e = engineSel ? engineSel.value : "";
+    if (e === "sevenseg") return "";
+    if (e === "rapidocr") return rapidPresent ? "" : "rapidocr";
+    return tesseractPresent ? "" : "tesseract";
+  }
   function syncTypeOptions() {
     if (!ttypeSel) return;
-    var seven = !!engineSel && engineSel.value === "sevenseg";
+    var missing = engineMissing();
     Array.prototype.forEach.call(ttypeSel.options, function (o) {
-      if (o.dataset.needsTesseract !== "1") return;
+      if (o.dataset.needsTesseract !== "1" && o.dataset.needsRapidocr !== "1") return;
       // The selected option is never disabled: a disabled selected option is
       // left out of the form, and the save would carry no ttype at all.
-      o.disabled = !seven && o.value !== ttypeSel.value;
-      o.textContent = o.value + (seven ? "" : " (needs tesseract)");
+      o.disabled = missing !== "" && o.value !== ttypeSel.value;
+      o.textContent = o.value + (missing ? " (needs " + missing + ")" : "");
     });
   }
   function updateTriggerFields() {
@@ -358,7 +370,7 @@
     var t = ttypeSel.value;
     if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
     if (rowOp) rowOp.hidden = t !== "numeric";
-    if (rowEngine) rowEngine.hidden = t === "pixel_change" && tesseractPresent;
+    if (rowEngine) rowEngine.hidden = t === "pixel_change" && tesseractPresent && engineMissing() === "";
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
   }

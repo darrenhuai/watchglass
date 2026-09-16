@@ -57,7 +57,8 @@ watches:
     region: {x: 0.3, y: 0.4, w: 0.4, h: 0.15}
     # A seven-segment LED/LCD readout: the built-in decoder reads it with no
     # tesseract and no preprocessing. Omit engine (or say tesseract) for
-    # printed text.
+    # printed text; say rapidocr for printed text tesseract misreads (needs
+    # python with `pip install rapidocr onnxruntime`; ~3 s per read).
     engine: sevenseg
     trigger:
       type: numeric

@@ -1651,7 +1651,7 @@ func TestValidateEngine(t *testing.T) {
 			Engine:  engine,
 		}}}
 	}
-	for _, ok := range []string{"", "tesseract", "sevenseg"} {
+	for _, ok := range []string{"", "tesseract", "sevenseg", "rapidocr"} {
 		cfg := watch(ok)
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("engine %q: unexpected error %v", ok, err)
@@ -1660,7 +1660,7 @@ func TestValidateEngine(t *testing.T) {
 			t.Errorf("engine %q rewritten to %q by Validate", ok, cfg.Watches[0].Engine)
 		}
 	}
-	for _, bad := range []string{"bogus", "SevenSeg", "seven-seg", " tesseract"} {
+	for _, bad := range []string{"bogus", "SevenSeg", "seven-seg", " tesseract", "RapidOCR", "rapid-ocr"} {
 		err := watch(bad).Validate()
 		if err == nil {
 			t.Errorf("engine %q: expected an error", bad)

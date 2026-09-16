@@ -58,10 +58,16 @@
       <fieldset>
         <legend>Trigger</legend>
         {{/* The OCR types are locked only while the watch would read them
-             with a tesseract that isn't there; the built-in seven-segment
-             decoder runs them without it. app.js re-derives the lock from
-             data-needs-tesseract as the Engine select changes. */}}
-        {{$locked := and (not .TesseractAvailable) (ne .Watch.Engine "sevenseg")}}
+             with an external engine that isn't there — tesseract for a
+             tesseract watch, rapidocr for a rapidocr watch; the built-in
+             seven-segment decoder runs them without either. app.js
+             re-derives the lock from data-needs-tesseract /
+             data-needs-rapidocr as the Engine select changes. */}}
+        {{$onTess := or (eq .Watch.Engine "") (eq .Watch.Engine "tesseract")}}
+        {{$onRapid := eq .Watch.Engine "rapidocr"}}
+        {{$tessLocked := and (not .TesseractAvailable) $onTess}}
+        {{$locked := or $tessLocked (and (not .RapidOCRAvailable) $onRapid)}}
+        {{$needs := ""}}{{if $locked}}{{if $onRapid}}{{$needs = " (needs rapidocr)"}}{{else}}{{$needs = " (needs tesseract)"}}{{end}}{{end}}
         <div class="field-row">
           <label for="f-ttype">Type</label>
           <select id="f-ttype" name="ttype">
@@ -73,18 +79,24 @@
                  an existing OCR watch would be unsaveable on a box without
                  tesseract. Kept enabled, it saves as before and the restart
                  error says honestly that the type needs an OCR engine. */}}
-            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>ocr_match{{if $locked}} (needs tesseract){{end}}</option>
-            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>ocr_changed{{if $locked}} (needs tesseract){{end}}</option>
-            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}>numeric{{if $locked}} (needs tesseract){{end}}</option>
+            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_match{{$needs}}</option>
+            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_changed{{$needs}}</option>
+            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>numeric{{$needs}}</option>
           </select>
         </div>
-        {{if not .TesseractAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — {{if $locked}}OCR-based trigger types (ocr_match, ocr_changed, numeric) {{if eq .Watch.Trigger.Type "pixel_change"}}are disabled{{else}}won't run (this watch's current type stays selectable so its other fields can still be saved){{end}} until it's installed. The seven-segment decoder works without it: a digit display can switch Engine to sevenseg instead.{{else}}text OCR is unavailable; {{if eq .Watch.Trigger.Type "pixel_change"}}the OCR trigger types will use the seven-segment decoder, which works without it{{else}}this watch reads with the seven-segment decoder, which works without it{{end}}.{{end}}</p>{{end}}
+        {{/* The tesseract note's locked branch is gated on the tesseract
+             lock alone: a rapidocr watch locked by a missing rapidocr is
+             not unlocked by installing tesseract, so it gets the short
+             sentence plus the rapidocr note below. */}}
+        {{if not .TesseractAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — {{if $tessLocked}}OCR-based trigger types (ocr_match, ocr_changed, numeric) {{if eq .Watch.Trigger.Type "pixel_change"}}are disabled{{else}}won't run (this watch's current type stays selectable so its other fields can still be saved){{end}} until it's installed. The seven-segment decoder works without it: a digit display can switch Engine to sevenseg instead.{{else}}text OCR is unavailable; {{if eq .Watch.Trigger.Type "pixel_change"}}the OCR trigger types will use {{if $onRapid}}rapidocr{{else}}the seven-segment decoder{{end}}, which works without it{{else if $onRapid}}this watch reads with rapidocr, which works without it{{else}}this watch reads with the seven-segment decoder, which works without it{{end}}.{{end}}</p>{{end}}
+        {{if and $onRapid (not .RapidOCRAvailable)}}<p class="muted trigger-note">rapidocr isn't available on this box (python with the rapidocr package) — pip install rapidocr onnxruntime, or switch Engine.</p>{{end}}
         <p id="ttype-help" class="muted trigger-note"></p>
         <div class="field-row" id="row-engine">
           <label for="f-engine">Engine</label>
-          <select id="f-engine" name="engine" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}">
-            <option value="tesseract" {{if ne .Watch.Engine "sevenseg"}}selected{{end}}>tesseract — text (needs tesseract on PATH)</option>
+          <select id="f-engine" name="engine" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}" data-rapidocr="{{if .RapidOCRAvailable}}1{{else}}0{{end}}">
+            <option value="tesseract" {{if $onTess}}selected{{end}}>tesseract — text (needs tesseract on PATH)</option>
             <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits (built in)</option>
+            <option value="rapidocr" {{if $onRapid}}selected{{end}}>rapidocr — printed text, hard cases (needs python + rapidocr)</option>
           </select>
         </div>
         <div class="field-row field-row-wide" id="row-pattern">
