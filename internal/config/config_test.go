@@ -1408,6 +1408,46 @@ func TestSaveHoistsCommentOffFilledList(t *testing.T) {
 	}
 }
 
+// TestSaveEmptyingCommentedListKeepsFileLoadable: a list whose comment sits
+// on its key ("watches: # mine", which is also what saving into
+// "watches: [] # mine" leaves) used to come out as the key and a bare "[]"
+// at column 0 once its last item went, a file that doesn't parse, so
+// deleting the last watch failed. The empty list goes back on the key's
+// line with the comment after it.
+func TestSaveEmptyingCommentedListKeepsFileLoadable(t *testing.T) {
+	const watch = "  - name: a\n    source: http://x/s.jpg\n    region: {x: 0, y: 0, w: 1, h: 1}\n    trigger: {type: pixel_change, threshold: 10}\n"
+	for label, tc := range map[string]struct{ yml, want string }{
+		"watches":         {"watches: # mine\n" + watch, "watches: [] # mine\n"},
+		"watches, header": {"# head\nwatches: # mine\n" + watch, "# head\nwatches: [] # mine\n"},
+		"compact":         {"watches: # mine\n- name: a\n  source: http://x/s.jpg\n  region: {x: 0, y: 0, w: 1, h: 1}\n  trigger: {type: pixel_change, threshold: 10}\n", "watches: [] # mine\n"},
+	} {
+		after := roundTrip(t, tc.yml, func(c *Config) { c.Watches = nil })
+		if after != tc.want {
+			t.Errorf("%s: emptied list = %q, want %q", label, after, tc.want)
+		}
+	}
+	// The same through the path the UI takes: add a watch to a commented
+	// empty list, then delete it again.
+	p := writeTemp(t, "watches: [] # mine\n")
+	cfg := loadOrFatal(t, p)
+	cfg.Watches = []Watch{{Name: "a", Source: "http://x/s.jpg", Region: Region{W: 1, H: 1}, Trigger: Trigger{Type: "pixel_change", Threshold: 10}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	saveOrFatal(t, p, cfg)
+	cfg = loadOrFatal(t, p)
+	cfg.Watches = nil
+	saveOrFatal(t, p, cfg)
+	if got := readFile(t, p); got != "watches: [] # mine\n" {
+		t.Errorf("add then delete = %q", got)
+	}
+	// A notify list emptied inside a watch that stays.
+	after := roundTrip(t, "watches:\n  - name: a\n    source: http://x/s.jpg\n    region: {x: 0, y: 0, w: 1, h: 1}\n    trigger: {type: pixel_change, threshold: 10}\n    notify: # alerts\n      - ntfy://ntfy.sh/z\n  - name: b\n    source: http://x/b.jpg\n    region: {x: 0, y: 0, w: 1, h: 1}\n    trigger: {type: ocr_changed}\n", func(c *Config) { c.Watches[0].Notify = nil })
+	if strings.Contains(after, "ntfy") || !strings.Contains(after, "# alerts") {
+		t.Errorf("emptied notify list lost its comment or kept the item:\n%s", after)
+	}
+}
+
 // TestSchemaRefusesUnmergeableFields: a Config field the merge could not
 // keep correct fails at init, with the field named, not at the first save.
 func TestSchemaRefusesUnmergeableFields(t *testing.T) {

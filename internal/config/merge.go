@@ -507,11 +507,23 @@ func shadows(inh map[string]*yaml.Node, key, path string) bool {
 
 // hoistLineComment moves an end-of-line comment off a block collection,
 // which yaml.v3 would print after the next "- " of the enclosing list,
-// onto its key: "notify: # comment" above the items.
+// onto its key: "notify: # comment" above the items. It also undoes that
+// when the collection has been emptied: yaml.v3 prints an empty block
+// collection under a commented key as "[]" alone at column 0 on the next
+// line, which does not parse, so the empty value goes back on the key's
+// line as flow, comment after it: "watches: [] # comment".
 func hoistLineComment(k, v *yaml.Node) {
-	if (v.Kind == yaml.MappingNode || v.Kind == yaml.SequenceNode) && v.Style&yaml.FlowStyle == 0 && len(v.Content) > 0 && v.LineComment != "" {
+	if (v.Kind != yaml.MappingNode && v.Kind != yaml.SequenceNode) || v.Style&yaml.FlowStyle != 0 {
+		return
+	}
+	switch {
+	case len(v.Content) > 0 && v.LineComment != "":
 		k.LineComment = joinComments(k.LineComment, v.LineComment)
 		v.LineComment = ""
+	case len(v.Content) == 0 && k.LineComment != "":
+		v.Style |= yaml.FlowStyle
+		v.LineComment = joinComments(k.LineComment, v.LineComment)
+		k.LineComment = ""
 	}
 }
 
