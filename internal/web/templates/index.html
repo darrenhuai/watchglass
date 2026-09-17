@@ -4,10 +4,11 @@
     <h1>Watches</h1>
     <p class="muted">Camera-fed regions under observation.</p>
   </div>
-  <span class="count-chip mono">{{len .}} total</span>
+  <span class="count-chip mono">{{len .Rows}} total</span>
 </div>
+{{template "flash" .Flash}}
 <div class="panel panel-table">
-{{if len .}}
+{{if len .Rows}}
 <table class="watch-table">
   <thead>
     <tr>
@@ -19,7 +20,7 @@
     </tr>
   </thead>
   <tbody>
-  {{range .}}
+  {{range .Rows}}
     <tr>
       <td class="cell-name" data-label="Name"><a href="{{u "/watch/"}}{{.Watch.Name}}">{{.Watch.Name}}</a></td>
       <td data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
@@ -28,16 +29,16 @@
         <span class="reading-wrap{{if eq .Status.State "error"}} reading-wrap-error{{end}}">
         {{if eq .Status.State "stopped"}}
           <span class="led led-stopped" aria-hidden="true"></span>
-          <span class="tag">stopped</span>
+          <span class="tag">Stopped</span>
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
-          <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{.Status.Message}}</span></span>
+          <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span></span>
         {{else if .Has}}
           <span class="led {{if .Latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
           <span class="reading-body"><span class="mono{{if .Latest.Fired}} fired{{end}}">{{.Latest.Reading}}</span>{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}</span>
         {{else}}
           <span class="led led-off" aria-hidden="true"></span>
-          <span class="reading-pending">no data yet</span>
+          <span class="reading-pending">No readings yet</span>
         {{end}}
         </span>
       </td>
@@ -57,15 +58,31 @@
 </div>
 {{end}}
 </div>
-<h2>Add a watch</h2>
-<form class="panel form-inline-add" method="post" action="{{u "/watch/new"}}">
-  <div class="field">
-    <label for="new-name">Name</label>
-    <input id="new-name" name="name" placeholder="printer-lcd" required>
+<h2 id="add-heading">Add a watch</h2>
+{{/* A rejected create comes back here: the typed values stay, the problem
+     sits under its field, and focus goes to the first field to fix. */}}
+{{$nameErr := .Form.Err "name"}}{{$srcErr := .Form.Err "source"}}{{$otherErr := .Form.Err ""}}
+<form class="panel form-inline-add{{if .Form.Errors}} has-errors{{end}}" method="post" action="{{u "/watch/new"}}" aria-labelledby="add-heading">
+  {{with .Form.Failure}}
+  <div class="form-alert form-alert-inline" role="alert" tabindex="-1" autofocus>
+    <p class="form-alert-title">{{.Title}}</p>
+    <p class="form-alert-text">{{.Message}}</p>
+    {{with .Detail}}<details class="tech-detail">
+      <summary>Technical detail</summary>
+      <p class="tech-raw mono">{{.}}</p>
+    </details>{{end}}
   </div>
-  <div class="field field-grow">
+  {{end}}
+  {{with $otherErr}}<p class="form-error" role="alert">{{.}}</p>{{end}}
+  <div class="field{{if $nameErr}} field-invalid{{end}}">
+    <label for="new-name">Name</label>
+    <input id="new-name" name="name" placeholder="printer-lcd" required value="{{.Form.Val "name" ""}}" spellcheck="false"{{if $nameErr}} aria-invalid="true" aria-describedby="err-name" autofocus{{end}}>
+    {{with $nameErr}}<p id="err-name" class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field field-grow{{if $srcErr}} field-invalid{{end}}">
     <label for="new-source">Source URL</label>
-    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg" required>
+    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg" required value="{{.Form.Val "source" ""}}" spellcheck="false"{{if $srcErr}} aria-invalid="true" aria-describedby="err-source"{{if not $nameErr}} autofocus{{end}}{{end}}>
+    {{with $srcErr}}<p id="err-source" class="field-error">{{.}}</p>{{end}}
   </div>
   <button type="submit" class="btn btn-primary">Create</button>
 </form>

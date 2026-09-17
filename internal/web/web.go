@@ -16,6 +16,8 @@ import (
 	"image/png"
 	"math"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,8 +104,10 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"b64png": func(b []byte) template.URL {
 			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
 		},
-		"dur": func(d config.Duration) string { return time.Duration(d).String() },
-		"u":   func(p string) string { return s.BasePath + p },
+		"dur":       func(d config.Duration) string { return time.Duration(d).String() },
+		"u":         func(p string) string { return s.BasePath + p },
+		"pageTitle": pageTitle,
+		"shortErr":  summarizeErr,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -115,6 +119,11 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(assets))
+	// Browsers still probe /favicon.ico whatever the page links; send them
+	// to the SVG instead of answering every new tab with a 404.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s.BasePath+"/static/favicon.svg", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /watch/new", s.create)
 	mux.HandleFunc("GET /watch/{name}", s.detail)
@@ -236,7 +245,20 @@ func (s *Server) statusFor(name string, running bool) watchStatus {
 	return watchStatus{State: "running"}
 }
 
+// indexData feeds index.html: the watch rows, a one-shot confirmation
+// after a create/delete redirect, and — when a create was rejected — the
+// add form's submitted values and field errors.
+type indexData struct {
+	Rows  []indexRow
+	Flash *flash
+	Form  formState
+}
+
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	s.renderIndex(w, r, http.StatusOK, formState{})
+}
+
+func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int, form formState) {
 	s.mu.Lock()
 	watches := append([]config.Watch(nil), s.cfg.Watches...)
 	s.mu.Unlock()
@@ -250,7 +272,11 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			Status: s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		})
 	}
-	s.render(w, "index.html", rows)
+	data := indexData{Rows: rows, Form: form}
+	if r.Method == http.MethodGet {
+		data.Flash = s.takeFlash(w, r)
+	}
+	s.renderStatus(w, status, "index.html", data)
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
@@ -263,12 +289,12 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	src, err := s.NewSource(wc)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("source: %v", err), http.StatusBadRequest)
+		sourceError(w, err)
 		return
 	}
 	img, err := src.Grab(ctx)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusBadGateway)
+		grabError(w, err)
 		return
 	}
 	var buf bytes.Buffer
@@ -300,7 +326,24 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sourceError and grabError answer /snapshot and /test when no frame could
+// be had. The body is text/plain in two parts: a one-line summary for
+// people, then the full error chain. app.js shows the first line and keeps
+// the rest behind a "Technical detail" disclosure, always via textContent:
+// the chain echoes the source URL, which is user input.
+func sourceError(w http.ResponseWriter, err error) {
+	http.Error(w, friendlyConfigError(err).Msg+"\n"+err.Error(), http.StatusBadRequest)
+}
+
+func grabError(w http.ResponseWriter, err error) {
+	http.Error(w, summarizeErr(err.Error())+"\n"+err.Error(), http.StatusBadGateway)
+}
+
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	s.renderStatus(w, http.StatusOK, name, data)
+}
+
+func (s *Server) renderStatus(w http.ResponseWriter, status int, name string, data any) {
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		s.logf("render %s: %v", name, err)
@@ -308,14 +351,184 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	buf.WriteTo(w)
 }
+
+// pageTitle names each page in the tab, history and bookmarks. A watch's
+// state leads the detail title so a failing watch is visible in a tab
+// strip; app.js keeps that prefix current as the watch changes state.
+func pageTitle(data any) string {
+	const app = "watchglass"
+	switch d := data.(type) {
+	case indexData:
+		return "Watches · " + app
+	case detailData:
+		prefix := ""
+		if d.Status.State == "error" || d.Status.State == "stopped" {
+			prefix = "[" + d.Status.State + "] "
+		}
+		return prefix + d.Watch.Name + " · " + app
+	case errorPageData:
+		return d.Title + " · " + app
+	}
+	return app
+}
+
+// flash is a one-shot confirmation carried across the redirect that ends a
+// successful save, create or delete. Kind is "saved", "created" or
+// "deleted"; Subject is the watch name, or the time for "saved". Reason is
+// set only on a create that was written but whose watch didn't start, which
+// turns the confirmation into a warning. File is the config file's base
+// name (the -config flag can point anywhere), filled in when it is read.
+type flash struct {
+	Kind    string
+	Subject string
+	Reason  string
+	File    string
+}
+
+// flashReasonMax keeps the cookie well under browser size limits; a start
+// failure's summary is one sentence, so this only trims pathological ones.
+const flashReasonMax = 300
+
+const flashCookie = "wg_flash"
+
+// setFlash stores the confirmation in a short-lived cookie rather than a
+// query parameter, so the redirect Location stays the plain page URL and a
+// reload or a shared link never repeats it.
+func (s *Server) setFlash(w http.ResponseWriter, kind, subject, reason string) {
+	v := kind + "|" + subject
+	if reason != "" {
+		if r := []rune(reason); len(r) > flashReasonMax {
+			reason = string(r[:flashReasonMax-1]) + "…"
+		}
+		v += "|" + reason
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     flashCookie,
+		Value:    url.QueryEscape(v),
+		Path:     s.BasePath + "/",
+		MaxAge:   60,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// takeFlash reads and clears the confirmation. It must run before the
+// response headers are written.
+func (s *Server) takeFlash(w http.ResponseWriter, r *http.Request) *flash {
+	c, err := r.Cookie(flashCookie)
+	if err != nil {
+		return nil
+	}
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: s.BasePath + "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	v, err := url.QueryUnescape(c.Value)
+	if err != nil {
+		return nil
+	}
+	parts := strings.SplitN(v, "|", 3)
+	if len(parts) < 2 {
+		return nil
+	}
+	f := &flash{Kind: parts[0], Subject: parts[1], File: s.configFile()}
+	if len(parts) == 3 {
+		f.Reason = parts[2]
+	}
+	switch f.Kind {
+	case "saved", "deleted":
+		f.Reason = ""
+		return f
+	case "created":
+		return f
+	}
+	return nil
+}
+
+// configFile is the config file's base name for user-facing copy.
+func (s *Server) configFile() string {
+	if s.cfgPath == "" {
+		return "the config file"
+	}
+	return filepath.Base(s.cfgPath)
+}
+
+// formState carries a rejected form back into its page, so a typo costs
+// one correction instead of every edit: Values holds what was typed into
+// the free-text fields (an invalid duration can't live in a config.Watch),
+// Errors the problems in form order.
+type formState struct {
+	Values map[string]string
+	Errors []fieldError
+	// Failure is set when the input was fine but the config file couldn't
+	// be written: the form comes back with everything still typed in, so
+	// retrying is one click once the file is writable again.
+	Failure *writeFailure
+}
+
+// writeFailure explains a save or create that couldn't be written.
+type writeFailure struct {
+	Title   string // what didn't happen, e.g. "Couldn't save printer"
+	Message string // the state things are in now
+	Detail  string // the raw error chain, behind a disclosure
+}
+
+// Val is the submitted text for field name, or fallback on a fresh page.
+func (f formState) Val(name, fallback string) string {
+	if v, ok := f.Values[name]; ok {
+		return v
+	}
+	return fallback
+}
+
+// Err is the error for field name, or "".
+func (f formState) Err(name string) string {
+	for _, e := range f.Errors {
+		if e.Field == name {
+			return e.Msg
+		}
+	}
+	return ""
+}
+
+// fieldAnchors maps a form field to the element the error summary's link
+// for it jumps to.
+var fieldAnchors = map[string]string{
+	"name":         "new-name",
+	"source":       "new-source",
+	"region":       "stage",
+	"ttype":        "f-ttype",
+	"engine":       "f-engine",
+	"pattern":      "f-pattern",
+	"op":           "f-op",
+	"tthreshold":   "f-threshold",
+	"confirm":      "f-confirm",
+	"cooldown":     "f-cooldown",
+	"interval":     "f-interval",
+	"max_interval": "f-maxinterval",
+	"health_after": "f-health",
+	"pp_threshold": "f-binarize",
+	"pp_upscale":   "f-upscale",
+	"notify":       "f-notify",
+}
+
+// Anchor is "" for an error that belongs to no single field.
+func (e fieldError) Anchor() string { return fieldAnchors[e.Field] }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	src := strings.TrimSpace(r.FormValue("source"))
-	if name == "" || src == "" {
-		s.renderError(w, http.StatusBadRequest, "name and source are required", "/", "back to all watches")
+	// A rejected create comes back to the list with the add form still
+	// filled in and the problem next to its field, not to a separate page.
+	form := formState{Values: map[string]string{"name": r.FormValue("name"), "source": r.FormValue("source")}}
+	if name == "" {
+		form.Errors = append(form.Errors, fieldError{"name", "Enter a name for the watch."})
+	}
+	if src == "" {
+		form.Errors = append(form.Errors, fieldError{"source", "Enter the camera's source URL."})
+	}
+	if len(form.Errors) > 0 {
+		s.renderIndex(w, r, http.StatusBadRequest, form)
 		return
 	}
 	nw := config.Watch{
@@ -332,7 +545,17 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		s.renderError(w, statusFor(err), err.Error(), "/", "back to all watches")
+		if errors.Is(err, errSaveFailed) {
+			form.Failure = &writeFailure{
+				Title:   "Couldn't create the watch",
+				Message: "watchglass couldn't write " + s.configFile() + ", so nothing was created. Make the file writable, then press Create again.",
+				Detail:  err.Error(),
+			}
+			s.renderIndex(w, r, http.StatusInternalServerError, form)
+			return
+		}
+		form.Errors = append(form.Errors, friendlyConfigError(err))
+		s.renderIndex(w, r, http.StatusBadRequest, form)
 		return
 	}
 	// Start from the canonical, post-Validate watch rather than nw:
@@ -348,14 +571,21 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		s.logf("ERROR: create %s: watch vanished immediately after persisting; starting with pre-validation config", name)
 		canonical = nw
 	}
+	startReason := ""
 	if err := s.sup.Start(s.RunCtx, canonical); err != nil {
 		// The watch is already persisted to config.yaml (the redirect below
-		// reflects that), but it did not start. The detail page's
-		// running/stopped badge will show the true state to the user; log
-		// loudly here too so it doesn't slip by unnoticed in server logs.
+		// reflects that), but it did not start. The detail page's stopped
+		// pill shows the state, and the flash turns into a warning with the
+		// reason rather than a plain "Created"; log loudly here too so it
+		// doesn't slip by unnoticed in server logs.
 		s.logf("ERROR: create %s: watch saved to config.yaml but failed to start: %v", name, err)
+		startReason = friendlyStartError(err)
+		if !strings.HasSuffix(startReason, ".") {
+			startReason += "."
+		}
 	}
 	s.notifyConfigChanged()
+	s.setFlash(w, "created", name, startReason)
 	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
 }
 
@@ -378,6 +608,14 @@ type detailData struct {
 	// server-rendered links) — see the #stage data-base attribute in
 	// detail.html.
 	Base string
+	// ConfigFile is the config file's base name, for copy that names it.
+	ConfigFile string
+	// Flash is the confirmation after a save or create redirect.
+	Flash *flash
+	// Form is set when a save was rejected: the page is re-rendered with
+	// what was submitted (Watch holds every field that parsed) and the
+	// field errors, and nothing was written.
+	Form formState
 }
 
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
@@ -386,37 +624,45 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, "detail.html", detailData{
+	data := s.detailFor(wc)
+	data.Flash = s.takeFlash(w, r)
+	s.render(w, "detail.html", data)
+}
+
+func (s *Server) detailFor(wc config.Watch) detailData {
+	return detailData{
 		Watch:              wc,
 		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		TesseractAvailable: s.engines.Tesseract != nil,
 		RapidOCRAvailable:  s.engines.RapidOCR != nil,
 		Base:               s.BasePath,
-	})
+		ConfigFile:         s.configFile(),
+	}
 }
 
-// errorPageData feeds error.html — must_fix 3: every server-side rejection
-// on watch create/save/delete used to fall straight through to a bare
-// http.Error() text body with no header, no branding, and no link back into
-// the app, a dead end recoverable only via the browser's Back button. This
-// wraps that same message in the normal page chrome instead.
+// errorPageData feeds error.html, which is only for failures a form can't
+// fix in place: a saved watch didn't restart, a delete failed, a watch
+// vanished mid-save. (An unwritable config file on save or create re-renders
+// the form instead, with everything still typed in.) (must_fix 3: these used to be bare http.Error
+// text bodies with no way back into the app.)
 type errorPageData struct {
-	Message   string
+	Title   string // the h1: what didn't happen, e.g. "Couldn't save printer"
+	Message string // one or two sentences: what state things are in now
+	Reason  string // the cause in plain words, when there is one
+	Detail  string // the raw error chain, behind a disclosure
+	// BackURL is relative to "/"; renderError prefixes BasePath.
 	BackURL   string
 	BackLabel string
 }
 
-// renderError writes status and message as a styled, on-brand error page
-// (app header + a link back to backURL) instead of a bare http.Error() text
-// body. backURL is relative to "/" and gets BasePath-prefixed like every
-// other link the UI writes. Falls back to http.Error if the template itself
-// fails to render, matching s.render's own failure handling.
-func (s *Server) renderError(w http.ResponseWriter, status int, message, backURL, backLabel string) {
+// renderError writes a styled, on-brand error page. Falls back to
+// http.Error if the template itself fails to render, matching s.render.
+func (s *Server) renderError(w http.ResponseWriter, status int, data errorPageData) {
 	var buf bytes.Buffer
-	data := errorPageData{Message: message, BackURL: s.BasePath + backURL, BackLabel: backLabel}
+	data.BackURL = s.BasePath + data.BackURL
 	if err := s.tmpl.ExecuteTemplate(&buf, "error.html", data); err != nil {
 		s.logf("render error.html: %v", err)
-		http.Error(w, message, status)
+		http.Error(w, data.Title+": "+data.Message, status)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -430,14 +676,14 @@ func parseRegion(r *http.Request) (config.Region, error) {
 	f := func(name string) (float64, error) {
 		v, err := strconv.ParseFloat(r.FormValue(name), 64)
 		if err != nil {
-			return 0, fmt.Errorf("region %s: %w", name, err)
+			return 0, fmt.Errorf("region %s must be a number between 0 and 1", strings.ToUpper(name))
 		}
 		// strconv.ParseFloat happily accepts "NaN"/"Inf"/"-Inf" as valid
 		// floats, and NaN in particular sails through every plain
 		// comparison the bounds check below performs, so it must be
 		// rejected explicitly here.
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("region %s: must be finite", name)
+			return 0, fmt.Errorf("region %s must be a number between 0 and 1", strings.ToUpper(name))
 		}
 		return v, nil
 	}
@@ -456,7 +702,7 @@ func parseRegion(r *http.Request) (config.Region, error) {
 		return reg, err
 	}
 	if reg.W <= 0 || reg.H <= 0 || reg.X < 0 || reg.Y < 0 || reg.X+reg.W > 1 || reg.Y+reg.H > 1 {
-		return reg, fmt.Errorf("region out of bounds: %+v", reg)
+		return reg, errors.New("region must fit inside the frame: X and Y at least 0, W and H above 0, X+W and Y+H at most 1")
 	}
 	return reg, nil
 }
@@ -470,14 +716,14 @@ func parsePreprocess(r *http.Request) (config.Preprocess, error) {
 	if v := r.FormValue("pp_threshold"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 255 {
-			return p, fmt.Errorf("preprocess threshold must be 0-255")
+			return p, fmt.Errorf("binarize must be a whole number from 0 to 255")
 		}
 		p.Threshold = n
 	}
 	if v := r.FormValue("pp_upscale"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 4 {
-			return p, fmt.Errorf("preprocess upscale must be 0-4")
+			return p, fmt.Errorf("upscale must be off, 2x, 3x or 4x")
 		}
 		p.Upscale = n
 	}
@@ -497,26 +743,28 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Error bodies here are text/plain (see grabError); app.js renders a
+	// non-OK answer as text, never as markup.
 	region, err := parseRegion(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
 	prep, err := parsePreprocess(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	src, err := s.NewSource(wc)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("source: %v", err), http.StatusBadRequest)
+		sourceError(w, err)
 		return
 	}
 	img, err := src.Grab(ctx)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusBadGateway)
+		grabError(w, err)
 		return
 	}
 	prepped := imgproc.Apply(imgproc.Crop(img, region), prep)
@@ -568,59 +816,28 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "testresult.html", res)
 }
 
-// parseWatchForm builds an updated copy of base from the detail form.
-func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
-	region, err := parseRegion(r)
-	if err != nil {
-		return base, err
-	}
-	prep, err := parsePreprocess(r)
-	if err != nil {
-		return base, err
-	}
-	interval, err := time.ParseDuration(r.FormValue("interval"))
-	if err != nil {
-		return base, fmt.Errorf("interval: %w", err)
-	}
-	cooldown := time.Duration(0)
-	if v := r.FormValue("cooldown"); v != "" {
-		if cooldown, err = time.ParseDuration(v); err != nil {
-			return base, fmt.Errorf("cooldown: %w", err)
-		}
-	}
-	confirm := 0
-	if v := r.FormValue("confirm"); v != "" {
-		if confirm, err = strconv.Atoi(v); err != nil {
-			return base, fmt.Errorf("confirm: %w", err)
-		}
-	}
-	threshold := 0.0
-	if v := r.FormValue("tthreshold"); v != "" {
-		if threshold, err = strconv.ParseFloat(v, 64); err != nil {
-			return base, fmt.Errorf("threshold: %w", err)
-		}
-	}
-	maxInterval := time.Duration(0)
-	if v := r.FormValue("max_interval"); v != "" {
-		if maxInterval, err = time.ParseDuration(v); err != nil {
-			return base, fmt.Errorf("max_interval: %w", err)
-		}
-	}
-	healthAfter := 0
-	if v := r.FormValue("health_after"); v != "" {
-		if healthAfter, err = strconv.Atoi(v); err != nil {
-			return base, fmt.Errorf("health_after: %w", err)
-		}
-	}
-	var notifyURLs []string
-	for _, line := range strings.Split(r.FormValue("notify"), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			notifyURLs = append(notifyURLs, line)
-		}
-	}
+// durationPhrase is the hint each duration field's parse error ends with,
+// in the same words as the field's title attribute in detail.html.
+var durationPhrase = map[string]string{
+	"interval":     "Use a number with a unit, for example 5s, 1m30s or 2h.",
+	"cooldown":     "Use for example 30s or 5m, or 0 for none.",
+	"max_interval": "Use for example 10m, or leave it empty to turn it off.",
+}
+
+// parseWatchForm builds an updated copy of base from the detail form. It
+// reads every field and reports every problem, in form order, rather than
+// stopping at the first: the save handler re-renders the form with all of
+// them marked. Fields that failed keep base's value in the returned watch.
+func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldError) {
+	var errs []fieldError
+	fail := func(field, msg string) { errs = append(errs, fieldError{field, msg}) }
 	w := base
-	w.Region = region
-	w.Preprocess = prep
+
+	if region, err := parseRegion(r); err != nil {
+		fail("region", upperFirst(err.Error())+". Drag on the snapshot to draw it again.")
+	} else {
+		w.Region = region
+	}
 	// A client that omits the field (curl, a script, a stale page) keeps the
 	// saved engine; the detail form always sends it. Resetting a sevenseg
 	// watch to tesseract on a box without it would stop the watch and drop
@@ -637,18 +854,79 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 	if w.Engine == "tesseract" && base.Engine != "tesseract" {
 		w.Engine = ""
 	}
-	w.Interval = config.Duration(interval)
-	w.MaxInterval = config.Duration(maxInterval)
-	w.HealthAfter = healthAfter
-	w.Notify = notifyURLs
-	w.Trigger = config.Trigger{
-		Type:      r.FormValue("ttype"),
-		Pattern:   r.FormValue("pattern"),
-		Op:        r.FormValue("op"),
-		Threshold: threshold,
-		Confirm:   confirm,
-		Cooldown:  config.Duration(cooldown),
+	// An empty numeric field means 0 (Validate applies the defaults), as
+	// before; an unparseable one keeps base's value alongside its error.
+	trig := config.Trigger{
+		Type:    r.FormValue("ttype"),
+		Pattern: r.FormValue("pattern"),
+		Op:      r.FormValue("op"),
 	}
+	if v := strings.TrimSpace(r.FormValue("tthreshold")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil {
+			fail("tthreshold", "Threshold must be a number.")
+			trig.Threshold = base.Trigger.Threshold
+		} else {
+			trig.Threshold = f
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("confirm")); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			fail("confirm", "Confirm must be a whole number, 1 or more.")
+			trig.Confirm = base.Trigger.Confirm
+		} else {
+			trig.Confirm = n
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("cooldown")); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			fail("cooldown", fmt.Sprintf("Cooldown %q isn't a duration. %s", v, durationPhrase["cooldown"]))
+			trig.Cooldown = base.Trigger.Cooldown
+		} else {
+			trig.Cooldown = config.Duration(d)
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("interval")); v == "" {
+		fail("interval", "Enter an interval. "+durationPhrase["interval"])
+	} else if d, err := time.ParseDuration(v); err != nil {
+		fail("interval", fmt.Sprintf("Interval %q isn't a duration. %s", v, durationPhrase["interval"]))
+	} else {
+		w.Interval = config.Duration(d)
+	}
+	w.MaxInterval = 0
+	if v := strings.TrimSpace(r.FormValue("max_interval")); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			fail("max_interval", fmt.Sprintf("Max interval %q isn't a duration. %s", v, durationPhrase["max_interval"]))
+			w.MaxInterval = base.MaxInterval
+		} else {
+			w.MaxInterval = config.Duration(d)
+		}
+	}
+	w.HealthAfter = 0
+	if v := strings.TrimSpace(r.FormValue("health_after")); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			fail("health_after", "Health after must be a whole number of failed polls.")
+			w.HealthAfter = base.HealthAfter
+		} else {
+			w.HealthAfter = n
+		}
+	}
+	if prep, err := parsePreprocess(r); err != nil {
+		field := "pp_threshold"
+		if strings.HasPrefix(err.Error(), "upscale") {
+			field = "pp_upscale"
+		}
+		fail(field, upperFirst(err.Error())+".")
+	} else {
+		w.Preprocess = prep
+	}
+	var notifyURLs []string
+	for _, line := range strings.Split(r.FormValue("notify"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			notifyURLs = append(notifyURLs, line)
+		}
+	}
+	w.Notify = notifyURLs
+	w.Trigger = trig
 	// The detail form hides Pattern/Op for the types that never read them
 	// (app.js's updateTriggerFields mirrors trigger.New's switch), but a
 	// hidden control still submits, so whatever was left in it would be
@@ -661,7 +939,17 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, error) {
 	case "ocr_match":
 		w.Trigger.Op = ""
 	}
-	return w, nil
+	return w, errs
+}
+
+// watchFormValues is what the detail form's free-text fields held when it
+// was submitted, shown back verbatim on a rejected save.
+func watchFormValues(r *http.Request) map[string]string {
+	v := map[string]string{}
+	for _, k := range []string{"tthreshold", "confirm", "cooldown", "interval", "max_interval", "health_after"} {
+		v[k] = r.FormValue(k)
+	}
+	return v
 }
 
 // statusFor maps a mutateConfig error to its HTTP status: config.Save I/O
@@ -734,6 +1022,9 @@ func (s *Server) notifyConfigChanged() {
 	s.OnConfigChanged(watches)
 }
 
+// errWatchVanished is a save racing a delete of the same watch.
+var errWatchVanished = errors.New("watch vanished")
+
 func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	base, ok := s.findWatch(name)
@@ -741,30 +1032,67 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	backURL, backLabel := "/watch/"+name, "back to "+name
-	updated, err := parseWatchForm(base, r)
-	if err != nil {
-		s.renderError(w, http.StatusBadRequest, err.Error(), backURL, backLabel)
+	backURL, backLabel := "/watch/"+name, "Back to "+name
+	// A rejected save re-renders the form with what was submitted and every
+	// problem marked next to its field (status 400); nothing is written.
+	rejected := func(updated config.Watch, errs []fieldError) {
+		data := s.detailFor(updated)
+		data.Form = formState{Values: watchFormValues(r), Errors: errs}
+		s.renderStatus(w, http.StatusBadRequest, "detail.html", data)
+	}
+	updated, ferrs := parseWatchForm(base, r)
+	if len(ferrs) > 0 {
+		rejected(updated, ferrs)
 		return
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
-	err = s.mutateConfig(func(c *config.Config) error {
+	err := s.mutateConfig(func(c *config.Config) error {
 		for i := range c.Watches {
 			if c.Watches[i].Name == name {
 				c.Watches[i] = updated
 				return nil
 			}
 		}
-		return fmt.Errorf("watch %q vanished", name)
+		return errWatchVanished
 	})
-	if err != nil {
-		s.renderError(w, statusFor(err), err.Error(), backURL, backLabel)
+	switch {
+	case errors.Is(err, errSaveFailed):
+		// Nothing is wrong with the input, so the form comes back exactly as
+		// submitted with the failure above it (never history.back(), which
+		// can't be trusted to restore typed text).
+		data := s.detailFor(updated)
+		kept := "the watch keeps running with its previous settings"
+		if !s.isRunning(name) {
+			kept = "the watch keeps its previous settings"
+		}
+		data.Form = formState{Values: watchFormValues(r), Failure: &writeFailure{
+			Title:   "Couldn't save " + name,
+			Message: "watchglass couldn't write " + s.configFile() + ", so nothing was saved and " + kept + ". Your changes are still below; make the file writable, then save again.",
+			Detail:  err.Error(),
+		}}
+		s.renderStatus(w, http.StatusInternalServerError, "detail.html", data)
+		return
+	case errors.Is(err, errWatchVanished):
+		s.renderError(w, http.StatusNotFound, errorPageData{
+			Title:     "Couldn't save " + name,
+			Message:   "This watch was deleted while you were editing it, so there was nothing to save.",
+			BackURL:   "/",
+			BackLabel: "All watches",
+		})
+		return
+	case err != nil:
+		rejected(updated, []fieldError{friendlyConfigError(err)})
 		return
 	}
 	canonical, ok := s.findWatch(name)
 	if !ok {
-		s.renderError(w, http.StatusInternalServerError, fmt.Sprintf("watch %q vanished after save", name), "/", "back to all watches")
+		s.renderError(w, http.StatusInternalServerError, errorPageData{
+			Title:     "Couldn't save " + name,
+			Message:   "The watch disappeared right after it was saved.",
+			BackURL:   "/",
+			BackLabel: "All watches",
+		})
 		return
 	}
 	if err := s.sup.Restart(s.RunCtx, canonical); err != nil {
@@ -774,12 +1102,19 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		// even though config.yaml now holds the new config — s.isRunning
 		// will correctly read false and the dashboard/detail page will show
 		// it stopped, not a stale healthy LED. Say so explicitly here too.
-		msg := fmt.Sprintf("saved, but restart failed: %v — the watch is now stopped; fix the config and save again", err)
-		s.logf("ERROR: save %s: %s", name, msg)
-		s.renderError(w, http.StatusInternalServerError, msg, backURL, backLabel)
+		s.logf("ERROR: save %s: saved, but restart failed: %v — the watch is now stopped", name, err)
+		s.renderError(w, http.StatusInternalServerError, errorPageData{
+			Title:     "Saved, but the watch didn't restart",
+			Message:   "The new settings are in " + s.configFile() + ", but " + name + " is stopped until you fix this and save again.",
+			Reason:    friendlyStartError(err),
+			Detail:    err.Error(),
+			BackURL:   backURL,
+			BackLabel: backLabel,
+		})
 		return
 	}
 	s.notifyConfigChanged()
+	s.setFlash(w, "saved", time.Now().Format("15:04:05"), "")
 	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
 }
 
@@ -807,11 +1142,22 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		s.renderError(w, statusFor(err), err.Error(), "/", "back to all watches")
+		msg := "watchglass couldn't write " + s.configFile() + ", so " + name + " wasn't deleted and keeps running."
+		if !errors.Is(err, errSaveFailed) {
+			msg = "The rest of " + s.configFile() + " didn't validate, so " + name + " wasn't deleted and keeps running."
+		}
+		s.renderError(w, statusFor(err), errorPageData{
+			Title:     "Couldn't delete " + name,
+			Message:   msg,
+			Detail:    err.Error(),
+			BackURL:   "/",
+			BackLabel: "All watches",
+		})
 		return
 	}
 	s.sup.Stop(name)
 	s.reg.Drop(name)
 	s.notifyConfigChanged()
+	s.setFlash(w, "deleted", name, "")
 	http.Redirect(w, r, s.BasePath+"/", http.StatusSeeOther)
 }

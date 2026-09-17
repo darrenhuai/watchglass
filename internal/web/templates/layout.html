@@ -4,7 +4,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>watchglass</title>
+<title>{{pageTitle .}}</title>
+<link rel="icon" type="image/svg+xml" href="{{u "/static/favicon.svg"}}">
 <link rel="stylesheet" href="{{u "/static/style.css"}}">
 </head>
 <body>
@@ -22,3 +23,18 @@
 </body>
 </html>
 {{end}}
+
+{{/* One-shot confirmation after a save/create/delete redirect (a *flash;
+     renders nothing when nil). A create whose watch didn't start (Reason
+     set) is a warning, not a success. */}}
+{{define "flash"}}{{with .}}{{if .Reason}}
+<p class="flash flash-warn" role="alert">
+  <span class="led led-error flash-led" aria-hidden="true"></span>
+  <span class="flash-text">Created <strong class="mono">{{.Subject}}</strong> in {{.File}}, but it didn't start. {{.Reason}} It stays stopped until you fix this and save.</span>
+</p>
+{{else}}
+<p class="flash" role="status">
+  <svg class="flash-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <span class="flash-text">{{if eq .Kind "saved"}}Saved to {{.File}} and restarted the watch <span class="flash-meta mono">{{.Subject}}</span>{{else if eq .Kind "created"}}Created <strong class="mono">{{.Subject}}</strong>. Drag on the snapshot to choose the region to watch, then save.{{else}}Deleted <strong class="mono">{{.Subject}}</strong>{{end}}</span>
+</p>
+{{end}}{{end}}{{end}}

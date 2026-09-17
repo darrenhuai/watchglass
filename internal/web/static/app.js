@@ -140,15 +140,62 @@
   // camera could otherwise bounce forever between a failed <img> load and
   // a successful diagnostic fetch, hammering it once per round trip.
   var snapRetried = false;
+  // Error bodies from /snapshot and /test are text/plain: a one-line summary,
+  // a newline, then the full error chain (web.go grabError). Everything
+  // below builds DOM nodes and sets textContent: the chain echoes the
+  // source URL, which is user input, so it must never reach innerHTML.
+  function splitError(text) {
+    text = (text || "").replace(/\s+$/, "");
+    var i = text.indexOf("\n");
+    if (i < 0) return { summary: text, raw: "" };
+    var raw = text.slice(i + 1).trim();
+    var summary = text.slice(0, i).trim();
+    return { summary: summary, raw: raw === summary ? "" : raw };
+  }
+  function el(tag, className, text) {
+    var n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function techDetail(raw) {
+    var d = el("details", "tech-detail");
+    d.appendChild(el("summary", null, "Technical detail"));
+    d.appendChild(el("p", "tech-raw mono", raw));
+    return d;
+  }
+  // The placeholder's cause (summary + raw chain) for the last failed
+  // snapshot. While the watch is in the error state the header above the
+  // stage already says the same thing, so the placeholder then shows only
+  // its heading; syncSnapCause re-renders when the header shows or hides.
+  var snapCause = null, snapCauseHeader = null;
+  function headerShowsError() {
+    var header = document.getElementById("status-detail");
+    return !!header && !header.hidden;
+  }
+  function syncSnapCause() {
+    if (!snapError || !snapCause) return;
+    var shown = headerShowsError();
+    if (shown === snapCauseHeader) return;
+    snapCauseHeader = shown;
+    var old = snapError.querySelectorAll(".snap-cause, .tech-detail");
+    for (var i = 0; i < old.length; i++) old[i].remove();
+    if (shown) return;
+    snapError.appendChild(el("p", "snap-cause", snapCause.summary || "No further detail available."));
+    if (snapCause.raw) snapError.appendChild(techDetail(snapCause.raw));
+  }
   function showSnapError() {
     img.hidden = true;
+    snapCause = null;
     // The never-sized canvas (300x150 by default) would otherwise sit on top
     // of the placeholder, catching a text-select drag across the error
     // message as a region drag. sizeCanvas unhides it once an image loads.
     canvas.hidden = true;
     if (!snapError) return;
     snapError.hidden = false;
-    snapError.textContent = "camera unreachable — checking why…";
+    snapError.textContent = "";
+    snapError.appendChild(el("strong", null, "No image from the camera"));
+    snapError.appendChild(el("p", "snap-cause", "Checking why…"));
     fetch(snapURL)
       .then(function (resp) {
         // Whenever the body isn't read as text below, cancel it: an
@@ -167,27 +214,28 @@
             img.src = snapURL + "?r=" + Date.now();
             return null;
           }
-          return "the camera answered a retry but failed again — it may be overloaded; retrying automatically";
+          return "The camera answered a retry but failed again. It may be overloaded; retrying automatically.";
         }
         var ct = resp.headers.get("Content-Type") || "";
         if (ct.indexOf("text/") !== 0) {
           discard();
-          return "HTTP " + resp.status;
+          return "watchglass answered HTTP " + resp.status;
         }
         return resp.text();
       })
       .then(function (text) {
         if (text === null) return;
         snapError.textContent = "";
-        var strong = document.createElement("strong");
-        strong.textContent = "camera unreachable";
-        var detail = document.createElement("div");
-        detail.className = "mono";
-        detail.textContent = text || "no further detail available";
-        snapError.appendChild(strong);
-        snapError.appendChild(detail);
+        snapError.appendChild(el("strong", null, "No image from the camera"));
+        snapCause = splitError(text);
+        snapCauseHeader = null;
+        syncSnapCause();
       })
-      .catch(function () { snapError.textContent = "camera unreachable"; });
+      .catch(function () {
+        snapError.textContent = "";
+        snapError.appendChild(el("strong", null, "No image from the camera"));
+        snapError.appendChild(el("p", "snap-cause", "watchglass didn't answer. Is it still running?"));
+      });
   }
   img.addEventListener("error", showSnapError);
   // A same-host /snapshot request against a dead source can 502 fast enough
@@ -251,15 +299,41 @@
   }
   setInterval(refreshSnap, refreshMs);
 
+  // Only a successful text/html answer (testresult.html, escaped by
+  // html/template) is inserted as markup. An error body is plain text that
+  // can echo user input, and is always rendered as text.
+  function renderTestError(box, text) {
+    var e = splitError(text);
+    box.textContent = "";
+    var wrap = el("div", "test-error");
+    var head = el("p", "test-error-title");
+    var led = el("span", "led led-error");
+    led.setAttribute("aria-hidden", "true");
+    head.appendChild(led);
+    head.appendChild(el("span", null, "Test failed"));
+    wrap.appendChild(head);
+    wrap.appendChild(el("p", "test-error-summary", e.summary));
+    if (e.raw) wrap.appendChild(techDetail(e.raw));
+    box.appendChild(wrap);
+  }
   document.getElementById("testbtn").addEventListener("click", function () {
-    var el = document.getElementById("test-result");
-    el.innerHTML = "<p class='muted'>testing…</p>";
+    var box = document.getElementById("test-result");
+    box.textContent = "";
+    box.appendChild(el("p", "muted", "Testing…"));
     fetch(base + "/watch/" + encodeURIComponent(name) + "/test", {
       method: "POST",
       body: new URLSearchParams(new FormData(form))
-    }).then(function (resp) { return resp.text(); })
-      .then(function (html) { el.innerHTML = html; })
-      .catch(function (err) { el.innerHTML = "<p class='conf-low'>test failed: " + err + "</p>"; });
+    }).then(function (resp) {
+      return resp.text().then(function (t) {
+        var html = (resp.headers.get("Content-Type") || "").indexOf("text/html") === 0;
+        return { ok: resp.ok, html: html, text: t, status: resp.status };
+      });
+    }).then(function (r) {
+      if (r.ok && r.html) { box.innerHTML = r.text; return; }
+      renderTestError(box, r.text.trim() || "watchglass answered HTTP " + r.status + ".");
+    }).catch(function () {
+      renderTestError(box, "watchglass didn't answer. Is it still running?");
+    });
   });
 
   // The /live fragment is two blocks (see live.html): .live-status (the
@@ -278,16 +352,27 @@
   var pill = document.getElementById("status-pill");
   var statusDetail = document.getElementById("status-detail");
   var PILL_LED = { running: "led-green", error: "led-error", stopped: "led-stopped" };
-  function updateStatus(state, message) {
+  // The tab title leads with a failing or stopped state (pageTitle in
+  // web.go), so it follows the pill.
+  var baseTitle = document.title.replace(/^\[(error|stopped)\] /, "");
+  function updateStatus(state, summary, message) {
     if (!pill || !PILL_LED[state]) return;
     pill.className = "status-pill status-" + state;
     var led = pill.querySelector(".led");
     if (led) led.className = "led " + PILL_LED[state];
     var text = pill.querySelector(".status-text");
     if (text) text.textContent = state;
+    var title = (state === "error" || state === "stopped" ? "[" + state + "] " : "") + baseTitle;
+    if (document.title !== title) document.title = title;
     if (statusDetail) {
-      statusDetail.textContent = message || "";
+      // Only the text nodes change, so an opened "Technical detail" stays
+      // open across polls.
+      var sum = statusDetail.querySelector(".status-summary");
+      var raw = statusDetail.querySelector(".tech-raw");
+      if (sum && sum.textContent !== (summary || "")) sum.textContent = summary || "";
+      if (raw && raw.textContent !== (message || "")) raw.textContent = message || "";
       statusDetail.hidden = state !== "error";
+      syncSnapCause();
     }
   }
   var lastStatus = null, lastStrip = null;
@@ -310,7 +395,7 @@
           liveStrip.innerHTML = stripHTML;
           lastStrip = stripHTML;
         }
-        if (status) updateStatus(status.dataset.state, status.dataset.message);
+        if (status) updateStatus(status.dataset.state, status.dataset.summary, status.dataset.message);
       })
       .catch(function () {});
   }
@@ -381,6 +466,40 @@
   if (engineSel) {
     engineSel.addEventListener("change", syncTypeOptions);
     syncTypeOptions();
+  }
+
+  // Save & restart: show that it's working while the POST and the restart
+  // run, and don't take a second click. Disabled a tick later so the
+  // submission itself isn't cancelled. A page restored from the
+  // back/forward cache (Back from an error page) gets the button back.
+  var saveBtn = form.querySelector("button[type=submit]");
+  if (saveBtn) {
+    var saveLabel = saveBtn.textContent;
+    form.addEventListener("submit", function () {
+      saveBtn.textContent = "Saving…";
+      saveBtn.setAttribute("aria-busy", "true");
+      setTimeout(function () { saveBtn.disabled = true; }, 0);
+    });
+    window.addEventListener("pageshow", function (e) {
+      if (!e.persisted) return;
+      saveBtn.textContent = saveLabel;
+      saveBtn.removeAttribute("aria-busy");
+      saveBtn.disabled = false;
+    });
+  }
+  // A rejected save lands with the error summary focused (autofocus), so
+  // it is read out; jump links in it move focus to the field they name.
+  var formErrors = document.getElementById("form-errors");
+  if (formErrors) {
+    if (document.activeElement !== formErrors) formErrors.focus();
+    formErrors.addEventListener("click", function (e) {
+      var a = e.target.closest("a[href^='#']");
+      var target = a && document.getElementById(a.getAttribute("href").slice(1));
+      if (!target) return;
+      e.preventDefault();
+      target.scrollIntoView({ block: "center" });
+      if (target.focus) target.focus({ preventScroll: true });
+    });
   }
 
   var range = form.elements["pp_threshold"];

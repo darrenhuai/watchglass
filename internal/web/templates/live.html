@@ -2,13 +2,17 @@
      .strip into the page separately, each only when its markup changed, so
      the screen-reader live region (#live-status in detail.html) announces a
      real status change and never the filmstrip or a byte-identical
-     re-render. data-state/data-message let the poll keep the page header's
-     status pill in step without a reload. */}}
-<div class="live-status" data-state="{{.Status.State}}" data-message="{{.Status.Message}}">
+     re-render. data-state/data-summary/data-message let the poll keep the
+     page header's status pill and error line in step without a reload.
+     The badges only say how old what's below is; the error itself is shown
+     once, under the page title. "Error" is not always a camera (an OCR
+     pass can fail too), so the no-readings badge doesn't guess a cause. */}}
+<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-message="{{.Status.Message}}">
 {{if eq .Status.State "error"}}
-<p class="stale-badge">stale since {{if .Recent}}{{(index .Recent 0).TS.Format "15:04:05"}}{{else}}{{.Status.Since.Format "15:04:05"}}{{end}}</p>
+{{if .Recent}}<p class="stale-badge">Stale — last good reading <span class="mono">{{(index .Recent 0).TS.Format "15:04:05"}}</span></p>
+{{else}}<p class="stale-badge">Failing since <span class="mono">{{.Status.Since.Format "15:04:05"}}</span></p>{{end}}
 {{else if eq .Status.State "stopped"}}
-<p class="stale-badge stale-badge-stopped">stopped — not polling{{if .Recent}}; readings below are from before it stopped{{end}}</p>
+<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}} — readings below are from before it stopped{{end}}</p>
 {{end}}
 {{if .Recent}}
 {{$latest := index .Recent 0}}
@@ -19,7 +23,7 @@
   <span class="readout-ts mono muted">{{$latest.TS.Format "15:04:05"}}</span>
 </div>
 {{else}}
-<p class="muted">No readings yet.</p>
+<p class="muted">No readings yet</p>
 {{end}}
 </div>
 {{if .Recent}}

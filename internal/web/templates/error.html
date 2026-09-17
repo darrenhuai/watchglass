@@ -1,7 +1,23 @@
 {{template "head" .}}
-<div class="panel error-panel">
-  <h1>Couldn't do that</h1>
-  <p class="error-message mono">{{.Message}}</p>
-  <p><a href="{{.BackURL}}">&larr; {{.BackLabel}}</a></p>
+{{/* Only for failures a form can't fix in place (a saved watch that
+     didn't restart, a failed delete, a watch deleted mid-save). Rejected
+     input and an unwritable config file on save/create come back on their
+     own form instead, with everything still typed in. */}}
+<div class="detail-head error-head">
+  <a class="back-link" href="{{.BackURL}}">&larr; {{.BackLabel}}</a>
+  <h1>{{.Title}}</h1>
 </div>
+<section class="panel error-panel" aria-labelledby="error-message">
+  <p id="error-message" class="error-message"><span class="led led-error" aria-hidden="true"></span><span>{{.Message}}</span></p>
+  {{with .Reason}}<p class="error-reason"><span class="error-reason-label">Reason</span> {{.}}</p>{{end}}
+  {{with .Detail}}
+  <details class="tech-detail">
+    <summary>Technical detail</summary>
+    <p class="tech-raw mono">{{.}}</p>
+  </details>
+  {{end}}
+  <div class="error-actions">
+    <a class="btn btn-primary" href="{{.BackURL}}">{{.BackLabel}}</a>
+  </div>
+</section>
 {{template "foot" .}}

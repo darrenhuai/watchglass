@@ -404,7 +404,8 @@ func TestRemoveIOErrorLeavesWatchRunning(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("Content-Type = %q, want text/html error page", ct)
 	}
-	for _, want := range []string{"watchglass", "all watches", `href="/"`, "config save failed"} {
+	for _, want := range []string{"<title>Couldn&#39;t delete printer · watchglass</title>", "<h1>Couldn&#39;t delete printer</h1>",
+		"keeps running", "&larr; All watches", `href="/"`, "Technical detail", "config save failed"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("delete error page missing %q; body:\n%s", want, body)
 		}
@@ -777,7 +778,7 @@ func TestIndexShowsErrorWhenHealthDown(t *testing.T) {
 	if !strings.Contains(body, "connection refused") {
 		t.Errorf("dashboard must surface the health error text, not stay neutral; body:\n%s", body)
 	}
-	if strings.Contains(body, "no data yet") {
+	if strings.Contains(body, "No readings yet") {
 		t.Errorf("erroring watch must not read the same as a brand-new one; body:\n%s", body)
 	}
 }
@@ -794,19 +795,31 @@ func TestDetailAndLiveShowErrorStatus(t *testing.T) {
 	s.reg.SetHealth("printer", state.Health{Down: true, Message: "stream unreachable: refused", Since: time.Now()})
 
 	_, body := get(t, s.Handler(), "/watch/printer")
-	if !strings.Contains(body, "status-error") || !strings.Contains(body, "stream unreachable: refused") {
-		t.Errorf("detail status pill missing error state/message; body:\n%s", body)
+	// The header leads with the summary and keeps the full chain one
+	// disclosure away, once.
+	for _, want := range []string{"status-error", `<p class="status-summary">Connection refused</p>`,
+		`<p class="tech-raw mono">stream unreachable: refused</p>`, "<title>[error] printer · watchglass</title>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page missing %q; body:\n%s", want, body)
+		}
+	}
+	if n := strings.Count(body, "stream unreachable: refused"); n != 1 {
+		t.Errorf("the raw error chain should appear once on the detail page, got %d", n)
 	}
 
 	_, body = get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(body, "stale since") || !strings.Contains(body, `data-message="stream unreachable: refused"`) {
-		t.Errorf("live fragment missing stale-since badge or the message for the header; body:\n%s", body)
+	if !strings.Contains(body, `<p class="stale-badge">Failing since`) ||
+		!strings.Contains(body, `data-summary="Connection refused"`) || !strings.Contains(body, `data-message="stream unreachable: refused"`) {
+		t.Errorf("live fragment missing the failing-since badge or the summary/message for the header; body:\n%s", body)
 	}
 	// The message is shown once, under the page title (#status-detail); the
-	// badge only dates the staleness instead of repeating it.
-	badge := body[strings.Index(body, "stale since"):]
+	// badge only dates the failure instead of repeating it.
+	badge := body[strings.Index(body, `<p class="stale-badge">`):]
 	if badge = badge[:strings.Index(badge, "</p>")]; strings.Contains(badge, "refused") {
 		t.Errorf("stale badge repeats the error message: %q", badge)
+	}
+	if strings.Contains(body, "stale since") {
+		t.Errorf("a watch with no readings has nothing stale; body:\n%s", body)
 	}
 }
 
@@ -821,31 +834,130 @@ func TestCreateRejectionRendersAppChrome(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
-	for _, want := range []string{"watchglass", "all watches", "duplicate watch name"} {
+	// A rejected create is the index again: the add form keeps what was
+	// typed and the problem sits under the field it concerns.
+	for _, want := range []string{"<title>Watches · watchglass</title>", `class="watch-table"`,
+		`value="printer"`, `value="http://x/snap.jpg"`,
+		`aria-invalid="true" aria-describedby="err-name" autofocus`,
+		`<p id="err-name" class="field-error">A watch named &#34;printer&#34; already exists.</p>`} {
 		if !strings.Contains(body, want) {
-			t.Errorf("error page missing %q; body:\n%s", want, body)
+			t.Errorf("rejected create missing %q; body:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "<pre>") {
-		t.Errorf("error page should not be a bare http.Error() dump; body:\n%s", body)
+	for _, unwanted := range []string{"<pre>", "duplicate watch name", `err-source`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("rejected create should not contain %q; body:\n%s", unwanted, body)
+		}
 	}
 }
 
-func TestSaveRejectionRendersAppChromeWithBackLink(t *testing.T) {
-	s, _ := newTestServer(t)
+func TestCreateRejectionMapsEachFieldAndKeepsValues(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	cases := []struct {
+		name, source, field, want string
+	}{
+		{"", "http://x/a.jpg", "name", "Enter a name for the watch."},
+		{"cam", "  ", "source", "Enter the camera&#39;s source URL."},
+		{"kitchen/oven", "http://x/a.jpg", "name", "Names can&#39;t contain /, ?, # or control characters."},
+		{"cam", "ftp://cam/x", "source", "That source isn&#39;t supported. It must start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:."},
+		{"cam", "ffmpeg:", "source", "An ffmpeg: source needs its input arguments"},
+	}
+	for _, c := range cases {
+		resp, body := postForm(t, s.Handler(), "/watch/new", url.Values{"name": {c.name}, "source": {c.source}})
+		if resp.StatusCode != 400 {
+			t.Errorf("%q/%q: status = %d, want 400", c.name, c.source, resp.StatusCode)
+		}
+		if !strings.Contains(body, `<p id="err-`+c.field+`" class="field-error">`+c.want) {
+			t.Errorf("%q/%q: want %s error %q; body:\n%s", c.name, c.source, c.field, c.want, body)
+		}
+	}
+	if got, _ := config.Load(cfgPath); len(got.Watches) != 1 {
+		t.Errorf("rejected creates must not write: watches = %d, want 1", len(got.Watches))
+	}
+}
+
+// A rejected save is the detail form again, with what was submitted still in
+// it and the problem marked on its field; one typo never costs every edit.
+func TestSaveRejectionRerendersFormWithFieldErrors(t *testing.T) {
+	s, cfgPath := newTestServer(t)
 	form := url.Values{
-		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"x": {"0.1"}, "y": {"0.2"}, "w": {"0.3"}, "h": {"0.4"},
 		"ttype": {"ocr_match"}, "pattern": {"("}, // invalid regex
-		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"},
+		"tthreshold": {"0"}, "confirm": {"2"}, "cooldown": {"7s"}, "interval": {"5s"},
 	}
 	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
 	if resp.StatusCode != 400 {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	for _, want := range []string{"watchglass", "back to printer", `href="/watch/printer"`} {
+	for _, want := range []string{
+		`id="watchform"`, `action="/watch/printer/save"`, "&larr; All watches",
+		`<div id="form-errors" class="form-alert" role="alert" tabindex="-1" autofocus>`,
+		"Not saved. One field needs a fix:", `<a href="#f-pattern">Pattern isn&#39;t a valid regular expression: missing closing ): (.`,
+		`name="pattern" value="("`, `aria-describedby="err-pattern"`, `<p id="err-pattern" class="field-error">`,
+		`name="cooldown" value="7s"`, `name="x" value="0.1"`, `<option value="ocr_match" selected`,
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("error page missing %q; body:\n%s", want, body)
+			t.Errorf("rejected save missing %q; body:\n%s", want, body)
 		}
+	}
+	if got, _ := config.Load(cfgPath); got.Watches[0].Trigger.Type != "pixel_change" {
+		t.Error("a rejected save must not modify the config file")
+	}
+}
+
+// Every unparseable field is reported at once, verbatim, in form order.
+func TestSaveRejectionReportsEveryParseError(t *testing.T) {
+	s, _ := newTestServer(t)
+	form := url.Values{
+		"x": {"0.8"}, "y": {"0"}, "w": {"0.5"}, "h": {"1"}, // off the right edge
+		"ttype": {"pixel_change"}, "tthreshold": {"10"}, "confirm": {"1"},
+		"cooldown": {"soon"}, "interval": {"abc"}, "max_interval": {"later"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	wants := []string{
+		`<a href="#stage">Region must fit inside the frame`,
+		`<a href="#f-cooldown">Cooldown &#34;soon&#34; isn&#39;t a duration.`,
+		`<a href="#f-interval">Interval &#34;abc&#34; isn&#39;t a duration. Use a number with a unit, for example 5s, 1m30s or 2h.`,
+		`<a href="#f-maxinterval">Max interval &#34;later&#34; isn&#39;t a duration.`,
+	}
+	last := -1
+	for _, want := range wants {
+		i := strings.Index(body, want)
+		if i < 0 {
+			t.Errorf("rejected save missing %q; body:\n%s", want, body)
+			continue
+		}
+		if i < last {
+			t.Errorf("%q is out of form order", want)
+		}
+		last = i
+	}
+	for _, want := range []string{"4 fields need a fix", `name="interval" value="abc"`, `name="max_interval" value="later"`, `id="err-region"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rejected save missing %q", want)
+		}
+	}
+}
+
+// A config.Validate rejection (the form parsed, the values don't hold)
+// lands on the right field too, with the config package's wording
+// translated.
+func TestSaveValidateRejectionMarksField(t *testing.T) {
+	s, _ := newTestServer(t)
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"pixel_change"}, "tthreshold": {"10"}, "confirm": {"1"}, "interval": {"0.5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if !strings.Contains(body, `<p id="err-interval" class="field-error">Interval must be at least 1s, for example 5s or 1m30s.</p>`) ||
+		!strings.Contains(body, `name="interval" value="0.5s"`) || strings.Contains(body, "watch &#34;printer&#34;") {
+		t.Errorf("sub-second interval should be marked on Interval in plain words; body:\n%s", body)
 	}
 }
 
@@ -887,8 +999,15 @@ func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
 	if resp.StatusCode != 500 {
 		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(body, "restart failed") || !strings.Contains(body, "watchglass") {
-		t.Errorf("error page missing restart-failure message or app chrome; body:\n%s", body)
+	for _, want := range []string{"<h1>Saved, but the watch didn&#39;t restart</h1>", "printer is stopped until you fix this and save again",
+		`<span class="error-reason-label">Reason</span> This trigger type reads text with tesseract, and tesseract isn&#39;t installed.`,
+		"&larr; Back to printer", `href="/watch/printer"`, "Technical detail"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("restart-failure page missing %q; body:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Back to your edits") {
+		t.Error("the settings were saved, so there are no unsaved edits to go back to")
 	}
 	if running := s.sup.Running(); len(running) != 0 {
 		t.Errorf("watch should be stopped after a failed restart, got running = %v", running)
@@ -1065,7 +1184,7 @@ func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
 	s.reg.Add("printer", state.Sample{TS: frameTS, Reading: "0.0% changed", PNG: pngBytes(t)})
 	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading for 2 consecutive polls: grab: refused", Since: frameTS.Add(4 * time.Second)})
 	_, live := get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(live, "stale since 00:53:26") {
+	if !strings.Contains(live, `Stale — last good reading <span class="mono">00:53:26</span>`) {
 		t.Errorf("stale badge should date from the last frame (00:53:26); body:\n%s", live)
 	}
 	if strings.Contains(live, "led-green") || !strings.Contains(live, "led-error") {
@@ -1075,8 +1194,8 @@ func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
 	s.reg.Drop("printer")
 	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading: refused", Since: frameTS.Add(4 * time.Second)})
 	_, live = get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(live, "stale since 00:53:30") {
-		t.Errorf("with no readings the badge should fall back to Since; body:\n%s", live)
+	if !strings.Contains(live, `Failing since <span class="mono">00:53:30</span>`) || strings.Contains(live, "Stale") {
+		t.Errorf("with no readings nothing is stale: the badge should say since when it has been failing; body:\n%s", live)
 	}
 }
 
@@ -1682,7 +1801,8 @@ func TestIndexErrorMessageIsQuietWithFullTextInTitle(t *testing.T) {
 	if !strings.Contains(body, `<span class="reading-wrap reading-wrap-error">`) {
 		t.Errorf("error cell should carry the reading-wrap-error modifier (mobile card layout); body:\n%s", body)
 	}
-	for _, want := range []string{`<span class="tag tag-error">error</span>`, `class="reading-error-msg" title="` + msg + `">` + msg + `<`} {
+	// The cell shows the summary; the full chain stays in title.
+	for _, want := range []string{`<span class="tag tag-error">error</span>`, `class="reading-error-msg" title="` + msg + `">Connection refused<`} {
 		if !strings.Contains(row, want) {
 			t.Errorf("error row missing %q; row:\n%s", want, row)
 		}
@@ -1691,7 +1811,7 @@ func TestIndexErrorMessageIsQuietWithFullTextInTitle(t *testing.T) {
 		t.Errorf("conf-low is for OCR confidence only, not error text; body:\n%s", body)
 	}
 	_, detail := get(t, s.Handler(), "/watch/printer")
-	if !strings.Contains(detail, `class="status-detail mono"`) || strings.Contains(detail, "conf-low") {
+	if !strings.Contains(detail, `<div id="status-detail" class="status-detail">`) || strings.Contains(detail, "conf-low") {
 		t.Errorf("detail status line should be quiet mono text, not conf-low; body:\n%s", detail)
 	}
 }
@@ -1703,13 +1823,13 @@ func TestStoppedUsesNeutralStateEverywhere(t *testing.T) {
 	_, index := get(t, s.Handler(), "/")
 	_, detail := get(t, s.Handler(), "/watch/printer")
 	_, live := get(t, s.Handler(), "/watch/printer/live")
-	if row := index[strings.Index(index, `data-label="Last reading"`):]; !strings.Contains(row, `<span class="tag">stopped</span>`) {
+	if row := index[strings.Index(index, `data-label="Last reading"`):]; !strings.Contains(row, `<span class="tag">Stopped</span>`) {
 		t.Errorf("dashboard should show a neutral stopped tag; row:\n%s", row)
 	}
 	if !strings.Contains(detail, "status-stopped") || !strings.Contains(detail, "led-stopped") {
 		t.Errorf("detail pill should be the stopped state with its own LED; body:\n%s", detail)
 	}
-	if !strings.Contains(live, `class="stale-badge stale-badge-stopped"`) || !strings.Contains(live, "led-stopped") {
+	if !strings.Contains(live, `<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling`) {
 		t.Errorf("live fragment should use the neutral stopped badge and LED; body:\n%s", live)
 	}
 	for name, b := range map[string]string{"index": index, "detail": detail, "live": live} {

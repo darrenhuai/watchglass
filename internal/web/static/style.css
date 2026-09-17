@@ -270,10 +270,49 @@ main {
 .status-running { color: var(--accent); border-color: var(--accent-a35); }
 .status-stopped { color: var(--text-dim); border-color: var(--border-control); }
 .status-error   { color: var(--red);    border-color: var(--red-a35); }
-.status-detail  {
-  margin: 6px 0 0;
-  font-size: var(--fs-xs);
+/* The detail header's error: one sentence, with the raw chain behind a
+   disclosure (the same .tech-detail the error page, the snapshot
+   placeholder and a failed Test use). */
+.status-detail { margin-top: var(--space-2); max-width: 75ch; }
+.status-summary { margin: 0; font-size: var(--fs-base); color: var(--text); overflow-wrap: anywhere; }
+
+.tech-detail { margin-top: var(--space-1); font-size: var(--fs-sm); color: var(--text-faint); }
+.tech-detail summary, .region-manual summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
   color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.tech-detail summary::-webkit-details-marker,
+.region-manual summary::-webkit-details-marker { display: none; }
+/* A chevron drawn with borders: the native triangle is a different glyph in
+   every engine and sits on a different baseline. */
+.tech-detail summary::before, .region-manual summary::before {
+  content: "";
+  flex: none;
+  width: 5px; height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.tech-detail[open] summary::before,
+.region-manual[open] summary::before { transform: rotate(45deg) translate(-1px, -1px); }
+.tech-detail summary:hover { color: var(--accent); }
+.tech-raw {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -669,31 +708,150 @@ fieldset > legend ~ * { clear: both; }
 .empty-state p:first-child { color: var(--text); font-weight: var(--fw-strong); }
 
 /* ---- Error page (error.html) --------------------------------------------
-   must_fix 3: every server-side rejection on create/save used to fall
-   through to a bare http.Error() text body — no header, no branding, no
-   link back, a dead end recoverable only via the browser Back button. This
-   wraps the same message in the app's normal chrome instead. */
-.error-panel { max-width: 560px; }
-.error-panel h1 { margin-bottom: var(--space-3); }
+   Only for failures a form can't fix in place (config.yaml unwritable, a
+   saved watch that didn't restart, a failed delete). Same header block as
+   the detail page, a statement of where things stand, the reason in plain
+   words, the raw chain behind a disclosure, and the way out as buttons. */
+.error-head h1 { margin-top: 10px; }
+.error-panel { max-width: 640px; border-color: var(--red-a30); }
 .error-message {
-  padding: var(--space-3);
-  border: 1px solid var(--red-a30);
-  border-radius: var(--radius-sm);
-  background: var(--red-a10);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
   color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.error-message .led { position: relative; top: -2px; }
+.error-reason {
+  margin: var(--space-3) 0 0 20px;
+  color: var(--text-dim);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.error-reason-label { color: var(--text-faint); font-weight: var(--fw-label); margin-right: 4px; }
+.error-panel .tech-detail { margin: var(--space-3) 0 0 20px; }
+.error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
+/* ---- Confirmation and form errors ----------------------------------------
+   .flash: the one-shot "Saved / Created / Deleted" line after a redirect.
+   .form-alert: a rejected save's summary under the detail header, linking
+   to each field; .field-error sits under the field itself. Red marks the
+   problem (border, icon); the words stay readable body text. */
+.flash {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--accent-a30);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-base);
+  overflow-wrap: anywhere;
+}
+.flash-icon { flex: none; margin-top: 2px; color: var(--accent); }
+.flash-text strong { font-weight: var(--fw-strong); }
+.flash-meta { margin-left: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
+.page-head + .flash { margin: 0 0 var(--space-4); }
+/* A create that was written but didn't start: the red LED marks the
+   problem; the words stay body text. */
+.flash-warn { border-color: var(--red-a35); background: var(--red-a10); }
+.flash-led { margin-top: 6px; }
+
+.form-alert {
+  margin-top: var(--space-4);
+  max-width: 75ch;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--red-a35);
+  border-radius: var(--radius-md);
+  background: var(--red-a10);
+}
+/* Focused on arrival so it is read out; not a tab stop, so no ring. */
+.form-alert:focus, .form-alert:focus-visible { outline: none; }
+.form-alert-title { margin: 0; font-weight: var(--fw-strong); color: var(--text); }
+.form-alert-text { margin: var(--space-1) 0 0; color: var(--text); text-wrap: pretty; overflow-wrap: anywhere; }
+.form-alert .tech-detail { margin-top: var(--space-2); }
+/* Inside the add form: a full-width first row above the fields. */
+.form-inline-add > .form-alert-inline { flex: 1 1 100%; margin: 0; max-width: none; }
+.form-alert-list { margin: var(--space-1) 0 0; padding-left: 18px; color: var(--text); }
+.form-alert-list li { margin-top: 2px; overflow-wrap: anywhere; }
+.form-alert-list li::marker { color: var(--red); }
+.form-alert-list a { font-weight: var(--fw-label); }
+
+.field-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.field-error::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin: 0 7px 1px 1px;
+  border-radius: 50%;
+  background: var(--red);
+  vertical-align: middle;
+}
+/* Server-marked fields, and fields the browser's own checks (pattern,
+   required, min) reject after the user has touched them. */
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"],
+input:user-invalid, select:user-invalid, textarea:user-invalid {
+  border-color: var(--red);
+}
+input[aria-invalid="true"]:focus, select[aria-invalid="true"]:focus, textarea[aria-invalid="true"]:focus,
+input:user-invalid:focus, select:user-invalid:focus, textarea:user-invalid:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px var(--red-a30);
+}
+input[type="range"][aria-invalid="true"] { border: 0; }
+.field-row > .field-error { grid-column: 2; margin-top: -4px; }
+.field-row-wide > .field-error { grid-column: 1; margin-top: 4px; }
+fieldset > .field-error { margin-top: var(--space-2); }
+.field-error-region { margin-top: var(--space-2); }
+
+/* Top-aligned so a field error under one input doesn't drag the Create
+   button down with it; the button's margin stands in for a label line. */
 .form-inline-add {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: var(--space-4);
   flex-wrap: wrap;
   margin-top: var(--space-5);
 }
+.form-inline-add > .btn { margin-top: calc(20px + 6px); }
+.form-inline-add > .form-error { flex: 1 1 100%; margin: 0; }
+/* An error under a field wraps to the field's width instead of widening it. */
+.form-inline-add .field-error { width: 0; min-width: 100%; }
 .field { display: flex; flex-direction: column; gap: 6px; }
-.field label { font-size: var(--fs-sm); color: var(--text-dim); }
+.field label { font-size: var(--fs-sm); line-height: 20px; color: var(--text-dim); }
+.form-error { color: var(--text); }
+.form-error::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin: 0 8px 1px 1px;
+  border-radius: 50%;
+  background: var(--red);
+  vertical-align: middle;
+}
 .field-grow { flex: 1 1 320px; }
 .field input { width: 100%; }
 
@@ -785,19 +943,21 @@ fieldset > legend ~ * { clear: both; }
   background: var(--bg-inset);
   font-size: var(--fs-sm);
 }
-.snap-error strong { color: var(--text); font-size: var(--fs-sm); }
-.snap-error div { color: var(--text-dim); font-size: var(--fs-xs); word-break: break-word; max-width: 46ch; }
+.snap-error strong { color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-strong); }
+.snap-error .snap-cause { margin: 0; color: var(--text-dim); max-width: 46ch; text-wrap: pretty; overflow-wrap: anywhere; }
+.snap-error .tech-detail { width: 100%; max-width: 52ch; text-align: center; }
+.snap-error .tech-raw { text-align: left; }
 
 /* ---- Manual region entry (should_fix 7) ----------------------------------
    Keyboard/switch/screen-reader path to the same fx/fy/fw/fh fields the
    pointer-drag overlay writes to; a <details> disclosure so it stays out of
    the way for pointer users who don't need it. */
 .region-manual { margin-top: var(--space-3); }
+/* Marker, layout and transition come from the shared disclosure rule
+   (.tech-detail summary, .region-manual summary). */
 .region-manual summary {
-  cursor: pointer;
   font-size: var(--fs-sm);
-  color: var(--text-dim);
-  transition: color var(--dur-fast) var(--ease-out);
+  gap: 8px;
 }
 .region-manual summary:hover { color: var(--accent); }
 .region-manual .field-row { grid-template-columns: 60px 1fr; }
@@ -809,6 +969,24 @@ fieldset > legend ~ * { clear: both; }
    test has actually run. */
 #test-result { margin-top: var(--space-4); }
 #test-result:empty { display: none; }
+/* A failed Test: built by app.js from the plain-text error body (never
+   inserted as markup). */
+.test-error {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--red-a30);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.test-error-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-weight: var(--fw-strong);
+  color: var(--text);
+}
+.test-error-summary { margin: 2px 0 0; padding-left: 16px; color: var(--text-dim); overflow-wrap: anywhere; }
+.test-error .tech-detail { padding-left: 16px; }
 .crop-frame { display: inline-block; margin: 0 0 var(--space-3); }
 .crop-frame img {
   display: block;
@@ -842,8 +1020,12 @@ fieldset > legend ~ * { clear: both; }
    Status.State is "error" (the same health.Tracker verdict must_fix 1
    drives), so recovery — the badge disappearing — needs no extra wiring.
    The error message itself is shown once, under the page title; the badge
-   only dates the staleness. A stopped watch gets the neutral variant. */
+   only dates the staleness. A stopped watch gets the neutral variant: an
+   unlit LED on a borderless fill, sized to its text, so it reads as a status
+   line and never as an empty input. */
 .stale-badge {
+  width: fit-content;
+  max-width: 100%;
   margin: 0 0 var(--space-3);
   padding: 6px 10px;
   border: 1px solid var(--red-a30);
@@ -851,8 +1033,15 @@ fieldset > legend ~ * { clear: both; }
   background: var(--red-a10);
   color: var(--text);
   font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
 }
-.stale-badge-stopped { border-color: var(--border-control); background: var(--surface-2); }
+.stale-badge-stopped {
+  border-color: transparent;
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.stale-badge .led { margin-right: 8px; vertical-align: 1px; }
+.stale-badge .mono { font-size: var(--fs-sm); }
 
 .readout {
   display: flex;
@@ -978,6 +1167,12 @@ fieldset > legend ~ * { clear: both; }
   .watch-table td.col-actions::before { content: none; }
 
   .form-inline-add { flex-direction: column; align-items: stretch; }
+  .form-inline-add > .btn { margin-top: 0; }
+  .error-actions { flex-direction: column-reverse; }
+  .error-actions .btn { width: 100%; }
+  .error-reason, .error-panel .tech-detail { margin-left: 0; }
+  .tech-detail summary { padding: 10px 0; margin: -6px 0; }
+  .field-row > .field-error { grid-column: 1; margin-top: 0; }
   /* .field-grow's 320px flex-basis is meant to grow the field horizontally
      in the desktop row layout — once the form stacks to a column, that
      basis is read as a height instead, leaving a tall empty gap above the
@@ -1011,8 +1206,8 @@ fieldset > legend ~ * { clear: both; }
   .btn-ghost { padding: 12px 12px; }
   .brand { padding: 8px 0; margin: -8px 0; }
   .back-link { display: inline-block; padding: 10px 0; margin: -10px 0; }
-  /* Not inline-block: <summary> must keep display:list-item or the native
-     disclosure triangle disappears. */
+  /* The chevron is drawn (no native marker), so the summary can be a
+     flex row with its own 44px-ish hit area. */
   .region-manual { margin-top: 2px; }
   .region-manual summary { padding: 10px 0; }
   .watch-table .cell-name a { display: inline-block; padding: 6px 0; margin: -6px 0; }
