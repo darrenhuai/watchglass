@@ -277,7 +277,7 @@
   var liveStrip = document.getElementById("live-strip");
   var pill = document.getElementById("status-pill");
   var statusDetail = document.getElementById("status-detail");
-  var PILL_LED = { running: "led-green", error: "led-error", stopped: "led-red" };
+  var PILL_LED = { running: "led-green", error: "led-error", stopped: "led-stopped" };
   function updateStatus(state, message) {
     if (!pill || !PILL_LED[state]) return;
     pill.className = "status-pill status-" + state;

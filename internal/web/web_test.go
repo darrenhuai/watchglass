@@ -743,14 +743,14 @@ func TestIndexShowsStoppedWhenNotRunning(t *testing.T) {
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "42% changed", Fired: false, PNG: pngBytes(t)})
 	s.sup.Stop("printer") // newTestServer doesn't actually start it, but be explicit/robust
 	_, body := get(t, s.Handler(), "/")
-	// Isolate the watch row from the topbar's own always-on led-green
-	// "local instrument" indicator (unrelated to any watch's status).
+	// Isolate the watch row from the rest of the page so the LED checks
+	// below only see this watch's own indicator.
 	rowStart := strings.Index(body, `data-label="Last reading"`)
 	if rowStart == -1 {
 		t.Fatalf("Last reading cell not found; body:\n%s", body)
 	}
 	row := body[rowStart:]
-	if !strings.Contains(row, "led-red") || !strings.Contains(row, "stopped") {
+	if !strings.Contains(row, "led-stopped") || !strings.Contains(row, "stopped") {
 		t.Errorf("stopped watch with a stale reading must show stopped, not the stale reading; row:\n%s", row)
 	}
 	if strings.Contains(row, "led-green") || strings.Contains(row, "42% changed") {
@@ -799,8 +799,14 @@ func TestDetailAndLiveShowErrorStatus(t *testing.T) {
 	}
 
 	_, body = get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(body, "stale since") || !strings.Contains(body, "stream unreachable: refused") {
-		t.Errorf("live fragment missing stale-since badge; body:\n%s", body)
+	if !strings.Contains(body, "stale since") || !strings.Contains(body, `data-message="stream unreachable: refused"`) {
+		t.Errorf("live fragment missing stale-since badge or the message for the header; body:\n%s", body)
+	}
+	// The message is shown once, under the page title (#status-detail); the
+	// badge only dates the staleness instead of repeating it.
+	badge := body[strings.Index(body, "stale since"):]
+	if badge = badge[:strings.Index(badge, "</p>")]; strings.Contains(badge, "refused") {
+		t.Errorf("stale badge repeats the error message: %q", badge)
 	}
 }
 
@@ -1615,5 +1621,117 @@ func TestTestRegionRapidOCRShowsLines(t *testing.T) {
 	}
 	if strings.Contains(body, "available") || strings.Contains(body, "not on PATH") {
 		t.Errorf("no availability note when the engine ran; body:\n%s", body)
+	}
+}
+
+// "Fired" is shown as a visible word next to the reading on the dashboard,
+// in the Live readout and on the filmstrip caption, never by colour alone
+// (amber and the running mint have the same luminance).
+func TestFiredIsAVisibleTag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) { return blockingSource{}, nil }
+	wc, _ := s.findWatch("printer")
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "PRINT COMPLETE", Fired: true, PNG: pngBytes(t)})
+
+	const tag = `<span class="tag tag-fired">fired</span>`
+	_, body := get(t, s.Handler(), "/")
+	row := body[strings.Index(body, `data-label="Last reading"`):]
+	// Reading and tag share one wrapping box (so the tag follows the value
+	// instead of claiming its own column), with a real space between them.
+	if !strings.Contains(row, "led-amber") || !strings.Contains(row, `<span class="reading-body"><span class="mono fired">PRINT COMPLETE</span> `+tag+`</span>`) {
+		t.Errorf("dashboard row should pair the fired reading with a visible tag in one reading-body; row:\n%s", row)
+	}
+	_, live := get(t, s.Handler(), "/watch/printer/live")
+	if n := strings.Count(live, tag); n != 2 {
+		t.Errorf("live fragment should tag the readout and the fired strip frame (2), got %d; body:\n%s", n, live)
+	}
+	// The caption is inline text: without a separator it reads "firedPRINT COMPLETE".
+	if !strings.Contains(live, tag+" PRINT COMPLETE</figcaption>") {
+		t.Errorf("strip caption should separate the fired tag from the reading with a space; body:\n%s", live)
+	}
+	if strings.Contains(body+live, `<span class="sr-only">, fired</span>`) {
+		t.Error("fired should no longer be screen-reader-only text")
+	}
+
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "PRINTING 12%", PNG: pngBytes(t)})
+	_, body = get(t, s.Handler(), "/")
+	if row := body[strings.Index(body, `data-label="Last reading"`):]; strings.Contains(row, "tag-fired") || !strings.Contains(row, "led-green") {
+		t.Errorf("a reading that did not fire must carry no fired tag; row:\n%s", row)
+	}
+}
+
+// A source error on the dashboard keeps red for the signal (LED + "error"
+// token) and renders the message as quiet body text with the full text
+// kept in title, instead of a red paragraph.
+func TestIndexErrorMessageIsQuietWithFullTextInTitle(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) { return blockingSource{}, nil }
+	wc, _ := s.findWatch("printer")
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	msg := "no reading for 2 consecutive polls: grab: refused"
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: msg, Since: time.Now()})
+	_, body := get(t, s.Handler(), "/")
+	row := body[strings.Index(body, `data-label="Last reading"`):]
+	if !strings.Contains(body, `<span class="reading-wrap reading-wrap-error">`) {
+		t.Errorf("error cell should carry the reading-wrap-error modifier (mobile card layout); body:\n%s", body)
+	}
+	for _, want := range []string{`<span class="tag tag-error">error</span>`, `class="reading-error-msg" title="` + msg + `">` + msg + `<`} {
+		if !strings.Contains(row, want) {
+			t.Errorf("error row missing %q; row:\n%s", want, row)
+		}
+	}
+	if strings.Contains(body, "conf-low") {
+		t.Errorf("conf-low is for OCR confidence only, not error text; body:\n%s", body)
+	}
+	_, detail := get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(detail, `class="status-detail mono"`) || strings.Contains(detail, "conf-low") {
+		t.Errorf("detail status line should be quiet mono text, not conf-low; body:\n%s", detail)
+	}
+}
+
+// Stopped is its own neutral state on all three views, never error red.
+func TestStoppedUsesNeutralStateEverywhere(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "0.0% changed", PNG: pngBytes(t)})
+	_, index := get(t, s.Handler(), "/")
+	_, detail := get(t, s.Handler(), "/watch/printer")
+	_, live := get(t, s.Handler(), "/watch/printer/live")
+	if row := index[strings.Index(index, `data-label="Last reading"`):]; !strings.Contains(row, `<span class="tag">stopped</span>`) {
+		t.Errorf("dashboard should show a neutral stopped tag; row:\n%s", row)
+	}
+	if !strings.Contains(detail, "status-stopped") || !strings.Contains(detail, "led-stopped") {
+		t.Errorf("detail pill should be the stopped state with its own LED; body:\n%s", detail)
+	}
+	if !strings.Contains(live, `class="stale-badge stale-badge-stopped"`) || !strings.Contains(live, "led-stopped") {
+		t.Errorf("live fragment should use the neutral stopped badge and LED; body:\n%s", live)
+	}
+	for name, b := range map[string]string{"index": index, "detail": detail, "live": live} {
+		if strings.Contains(b, "led-red") || strings.Contains(b, "led-error") {
+			t.Errorf("%s: a stopped watch must not use a red LED; body:\n%s", name, b)
+		}
+	}
+}
+
+// The page chrome carries no status LED of its own (a light that never
+// changes would dilute every real one), and Save is a real <button>.
+func TestChromeHasNoStaticStatusLEDAndSaveIsAButton(t *testing.T) {
+	s, _ := newTestServer(t)
+	for _, path := range []string{"/", "/watch/printer"} {
+		_, body := get(t, s.Handler(), path)
+		head := body[:strings.Index(body, "<main>")]
+		if strings.Contains(head, "led") || strings.Contains(head, "local instrument") {
+			t.Errorf("%s: topbar should carry no status LED; head:\n%s", path, head)
+		}
+	}
+	_, detail := get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(detail, `<button type="submit" class="btn btn-primary">Save &amp; restart watch</button>`) {
+		t.Errorf("Save should be a <button> so it shares every button state; body:\n%s", detail)
 	}
 }

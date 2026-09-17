@@ -6,16 +6,16 @@
      status pill in step without a reload. */}}
 <div class="live-status" data-state="{{.Status.State}}" data-message="{{.Status.Message}}">
 {{if eq .Status.State "error"}}
-<p class="stale-badge conf-low">stale since {{if .Recent}}{{(index .Recent 0).TS.Format "15:04:05"}}{{else}}{{.Status.Since.Format "15:04:05"}}{{end}} — {{.Status.Message}}</p>
+<p class="stale-badge">stale since {{if .Recent}}{{(index .Recent 0).TS.Format "15:04:05"}}{{else}}{{.Status.Since.Format "15:04:05"}}{{end}}</p>
 {{else if eq .Status.State "stopped"}}
-<p class="stale-badge conf-low">stopped — not polling{{if .Recent}}; readings below are from before it stopped{{end}}</p>
+<p class="stale-badge stale-badge-stopped">stopped — not polling{{if .Recent}}; readings below are from before it stopped{{end}}</p>
 {{end}}
 {{if .Recent}}
 {{$latest := index .Recent 0}}
 <div class="readout">
-  <span class="led {{if eq .Status.State "stopped"}}led-red{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
+  <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
   <span class="readout-label">latest</span>
-  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}{{if $latest.Fired}}<span class="sr-only">, fired</span>{{end}}</strong>
+  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}</strong>{{if $latest.Fired}}<span class="tag tag-fired">fired</span>{{end}}
   <span class="readout-ts mono muted">{{$latest.TS.Format "15:04:05"}}</span>
 </div>
 {{else}}
@@ -27,7 +27,7 @@
 {{range .Recent}}
   <figure>
     <img src="{{b64png .PNG}}" alt="crop">
-    <figcaption {{if .Fired}}class="fired"{{end}}>{{.Reading}}{{if .Fired}}<span class="sr-only">, fired</span>{{end}}</figcaption>
+    <figcaption {{if .Fired}}class="fired"{{end}}>{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}{{.Reading}}</figcaption>
   </figure>
 {{end}}
 </div>

@@ -3,6 +3,11 @@
    Precision-instrument / control-room visual language: hairline structure,
    restrained LED status dots, monospace for technical readings, quiet
    dense-but-breathing layout. Dark only.
+
+   Colour rules: mint accent = primary action, running, focus, selection.
+   Amber = fired. Red = error and destructive only. Everything else is a
+   tinted neutral. Uppercase mono is reserved for state tokens (the status
+   pill and .tag); every heading and label is sentence case in the UI sans.
    ========================================================================== */
 
 /* ---- Reset ------------------------------------------------------------- */
@@ -21,8 +26,7 @@ img { max-width: 100%; }
    visible. This one rule keeps `el.hidden = true` reliable everywhere. */
 [hidden] { display: none !important; }
 
-/* ---- Tokens -------------------------------------------------------------
-   Dark neutral ground, hairline borders, green/amber/red signal colors. */
+/* ---- Tokens ------------------------------------------------------------- */
 :root {
   --bg:            #0b0d10;
   --bg-inset:      #08090b;
@@ -32,19 +36,25 @@ img { max-width: 100%; }
   --border:        #22262d;
   --border-strong: #2d323b;
   --border-hair:   rgba(255, 255, 255, 0.06);
+  /* Editable-control and outline-button edges. #5f6672 is the lowest value
+     that clears WCAG 1.4.11's 3:1 against both the input fill (3.44:1 on
+     --bg-inset) and the panel behind it (3.13:1 on --surface); hairlines
+     between rows stay on --border-hair so a separator never reads as a field. */
+  --border-control:       #5f6672;
+  --border-control-hover: #7a828e;
 
   --text:        #e8eaed;
   --text-dim:    #a1a8b3;
-  --text-faint:  #838b98;
+  --text-faint:  #838b98; /* 5.3:1 on --surface: the floor for any text */
 
-  --accent:      #7fd4a8; /* running / ok / focus */
+  --accent:       #7fd4a8; /* running / primary action / focus / selection */
   --accent-hover: #93ddb6;
-  --accent-dim:  #3e6f57;
-  --accent-ink:  #08150f; /* text-on-accent */
-  --amber:       #ffb454; /* fired */
-  --red:         #ff6b6b; /* stopped / low-confidence / danger */
-  --red-dim:     #5c2b2b;
-  --blue:        #8ab8ff; /* links */
+  --accent-press: #6bc293;
+  --accent-dim:   #3e6f57;
+  --accent-ink:   #08150f; /* text-on-accent */
+  --amber:        #ffb454; /* fired */
+  --red:          #ff6b6b; /* error / destructive */
+  --red-dim:      #5c2b2b;
 
   --focus-ring:  rgba(127, 212, 168, 0.25);
 
@@ -55,7 +65,6 @@ img { max-width: 100%; }
   --accent-a30:  rgba(127, 212, 168, 0.3);
   --accent-a35:  rgba(127, 212, 168, 0.35);
   --accent-a65:  rgba(127, 212, 168, 0.65);
-  --accent-a70:  rgba(127, 212, 168, 0.7);
   --red-a10:     rgba(255, 107, 107, 0.1);
   --red-a30:     rgba(255, 107, 107, 0.3);
   --red-a35:     rgba(255, 107, 107, 0.35);
@@ -73,39 +82,75 @@ img { max-width: 100%; }
   --space-5: 24px;
   --space-6: 32px;
 
+  --content-max: 1160px; /* main's width; the topbar aligns its edges to it */
   --field-label-w: 128px;
 
   --font-ui:   -apple-system, "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a929e' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* Type scale (rem, ~1.07–1.25 steps). 11px exists only for uppercase
+     state tokens; nothing else goes below 12px. */
+  --fs-token: 0.6875rem; /* 11 — status pill, .tag */
+  --fs-xs:    0.75rem;   /* 12 — column labels, chips, timestamps */
+  --fs-sm:    0.8125rem; /* 13 — controls, form labels, help text */
+  --fs-base:  0.875rem;  /* 14 — body */
+  --fs-read:  0.9375rem; /* 15 — a reading in the watch table */
+  --fs-md:    1rem;      /* 16 — section headings, live readout */
+  --fs-lg:    1.25rem;   /* 20 — page title */
+  --ls-caps:  0.07em;
+
+  /* 650 is not a real face in Segoe UI, Consolas or Liberation Mono and
+     snaps to 700 there; stick to weights the fallback stacks ship. */
+  --fw-label:  500;
+  --fw-strong: 600;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 160ms;
+
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a1a8b3' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* ---- Base typography ----------------------------------------------------*/
 body {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.55 var(--font-ui);
+  font: var(--fs-base)/1.55 var(--font-ui);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 p { margin: 0 0 var(--space-3); }
-h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+h1 {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-strong);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
 h2 {
-  font: 650 11.5px/1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--text-dim);
+  font: var(--fw-strong) var(--fs-md)/1.3 var(--font-ui);
+  letter-spacing: -0.005em;
+  color: var(--text);
+  text-wrap: balance;
   margin: var(--space-6) 0 var(--space-3);
 }
-a { color: var(--blue); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-control);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color var(--dur-fast) var(--ease-out), text-decoration-color var(--dur-fast) var(--ease-out);
+}
+a:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
 
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--text-dim); }
-.fired { color: var(--amber); font-weight: 600; }
+.fired { color: var(--amber); font-weight: var(--fw-strong); }
+/* OCR word confidence only (the test-result chips). */
 .conf-low { color: var(--red); }
 .conf-ok { color: var(--accent); }
+
+::selection { background: var(--accent-a35); color: var(--text); }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -119,7 +164,7 @@ a:hover { text-decoration: underline; }
 
 /* ---- Layout ---------------------------------------------------------- */
 main {
-  max-width: 1160px;
+  max-width: var(--content-max);
   margin: 0 auto;
   padding: var(--space-5) var(--space-5) var(--space-6);
 }
@@ -130,6 +175,9 @@ main {
   border-radius: var(--radius-lg);
   padding: var(--space-5);
 }
+/* A panel's last paragraph would otherwise add its 12px bottom margin on
+   top of the panel padding (24px top vs ~36px bottom). */
+.panel > :last-child, .panel p:last-child { margin-bottom: 0; }
 
 /* ---- Header / topbar ---------------------------------------------------*/
 .topbar {
@@ -137,58 +185,57 @@ main {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-3) var(--space-5);
+  /* Full-bleed background, but the brand lines up with main's content
+     edge once the viewport is wider than the content column. */
+  padding-inline: max(var(--space-5), calc((100% - var(--content-max)) / 2 + var(--space-5)));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 9px; color: var(--text); }
-.brand:hover { text-decoration: none; }
-.brand-name { font: 700 14px/1 var(--font-ui); letter-spacing: 0.01em; }
+.brand { display: flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; }
+.brand:hover { color: var(--text); }
+.brand-name { font: 700 var(--fs-base)/1 var(--font-ui); letter-spacing: 0.01em; }
+/* A lens: neutral on purpose. Green means "running" everywhere else, and a
+   brand dot that is always green would be a status light that never changes. */
 .brand-mark {
   position: relative;
   width: 16px; height: 16px;
   flex: none;
   border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
+  border: 1.5px solid var(--border-control);
   background: var(--surface-2);
 }
 .brand-mark::after {
   content: "";
-  position: absolute; inset: 5px;
+  position: absolute; inset: 4px;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent-a70);
-}
-.topbar-meta { display: flex; align-items: center; gap: 8px; }
-.topbar-label {
-  font-size: 11px;
-  color: var(--text-faint);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  background: var(--text-dim);
 }
 
 /* ---- LED status dots -----------------------------------------------------
-   Restrained signal indicators — small, quiet, a soft glow only when lit.
-   Color carries the primary signal; a filled-vs-ringed treatment gives a
-   second, non-color channel between the two "steady state" values (running
-   vs stopped) without stacking a third cue on top. */
+   Restrained signal indicators, always paired with text. Shape is a second
+   channel next to hue: running = solid green, fired = solid amber inside a
+   ring (amber and mint share a luminance, so hue alone fails for
+   deuteranopes), error = solid red, stopped = solid grey (unlit), no data
+   yet = hollow grey ring. */
 .led {
   display: inline-block;
   flex: none;
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--border-strong);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+  background: var(--text-faint);
 }
-.led-green { background: var(--accent); box-shadow: 0 0 5px var(--accent-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
-.led-amber { background: var(--amber);  box-shadow: 0 0 5px var(--amber-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
-.led-red   { background: transparent; box-shadow: inset 0 0 0 1.5px var(--red); }
-.led-off   { background: var(--border-strong); box-shadow: none; }
-/* must_fix 1: a third, visually distinct state for "running, but the
-   source has been failing" — solid red (unlike led-red's ring-only
-   "stopped") so the two red states never read as the same LED at a glance. */
-.led-error { background: var(--red); box-shadow: 0 0 5px var(--red-a30), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.led-green   { background: var(--accent); box-shadow: 0 0 5px var(--accent-a65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.led-amber   {
+  background: var(--amber);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  outline: 1px solid var(--amber-a65);
+  outline-offset: 2px;
+}
+.led-error   { background: var(--red); box-shadow: 0 0 5px var(--red-a30), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.led-stopped { background: var(--text-dim); box-shadow: none; }
+.led-off     { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-faint); }
 
-/* ---- Pills / chips / status badges -------------------------------------*/
+/* ---- Pills / chips / state tokens --------------------------------------*/
 .pill {
   display: inline-block;
   padding: 2px 9px;
@@ -196,28 +243,52 @@ main {
   border-radius: 100px;
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: 11px;
-  letter-spacing: 0.02em;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+/* The one uppercase voice: state tokens. */
+.status-pill, .tag {
+  font: var(--fw-strong) var(--fs-token)/1 var(--font-mono);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
+  gap: 7px;
+  padding: 5px 10px 5px 8px;
   border-radius: 100px;
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
-  font: 650 10.5px/1.6 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
   color: var(--text-dim);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 /* Class names mirror watchStatus.State verbatim ("running"/"stopped"/
    "error" — see detail.html's class="status-{{.Status.State}}"). */
 .status-running { color: var(--accent); border-color: var(--accent-a35); }
-.status-stopped { color: var(--red);    border-color: var(--red-a30); }
-.status-error   { color: var(--red);    border-color: var(--red-a30); }
-.status-detail  { margin: 6px 0 0; font-size: 12.5px; }
+.status-stopped { color: var(--text-dim); border-color: var(--border-control); }
+.status-error   { color: var(--red);    border-color: var(--red-a35); }
+.status-detail  {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* A small inline state token next to a value: "fired", "error", "stopped". */
+.tag {
+  display: inline-block;
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--border-control);
+  border-radius: 100px;
+  color: var(--text-dim);
+  vertical-align: middle;
+}
+.tag-fired { color: var(--amber); border-color: var(--amber-a55); }
+.tag-error { color: var(--red); border-color: var(--red-a35); }
 
 /* ---- Buttons -------------------------------------------------------------*/
 button, input[type="submit"], input[type="button"] {
@@ -226,7 +297,7 @@ button, input[type="submit"], input[type="button"] {
   appearance: none;
 }
 .btn {
-  font: 600 13px/1 var(--font-ui);
+  font: var(--fw-strong) var(--fs-sm)/1 var(--font-ui);
   height: 36px;
   padding: 0 16px;
   border-radius: var(--radius-sm);
@@ -234,49 +305,82 @@ button, input[type="submit"], input[type="button"] {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform 80ms var(--ease-out);
 }
+.btn:active { transform: translateY(1px); }
+
 .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.btn-primary:hover { background: var(--accent-hover); }
-/* The shared :focus-visible ring is the same mint as this button's own
-   fill, so on a light/filled control it needs a higher-contrast color
-   (not just the low-opacity green glow) to actually stand out. Covers the
-   <button> case (Create); the <input type="submit"> case (Save & restart
-   watch) is separately overridden below — it's caught by the generic
-   `input:focus` rule further down, which outranks this on specificity and
-   would otherwise silently win back the low-contrast ring. */
-.btn-primary:focus-visible { outline-color: var(--text); }
-input.btn-primary:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 1px var(--accent-a35), 0 0 12px var(--accent-a25);
 }
-.btn-outline { background: transparent; border-color: var(--border-strong); color: var(--text); }
-.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-primary:active { background: var(--accent-press); border-color: var(--accent-press); box-shadow: none; }
+/* The shared :focus-visible ring is the same mint as this button's fill,
+   so the primary button gets a near-white ring with a dark gap instead. */
+.btn-primary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.btn-primary::selection { background: var(--accent-ink); color: var(--accent); }
+
+.btn-outline { background: transparent; border-color: var(--border-control); color: var(--text); }
+.btn-outline:hover { background: var(--surface-2); border-color: var(--border-control-hover); color: var(--text); }
+.btn-outline:active { background: var(--surface-hover); }
+
 .btn-ghost {
   background: transparent; border-color: transparent; color: var(--text-dim);
-  height: auto; padding: 6px 10px; font-size: 12px;
+  height: auto; padding: 6px 10px;
 }
+.btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn-ghost:active { background: var(--surface-hover); }
+/* Restated after the ghost rules: same specificity, so order decides, and a
+   grey ghost hover/press must never win over Delete's red. */
 .btn-danger { color: var(--red); }
-.btn-danger:hover { background: var(--red-dim); border-color: var(--red-a35); }
+.btn-danger:hover { background: var(--red-dim); border-color: var(--red-a35); color: var(--red); }
+.btn-danger:active { background: var(--red-a30); }
+
+.btn:disabled, .btn[aria-disabled="true"] {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text-faint);
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
 
 /* ---- Form controls ---------------------------------------------------- */
 input, select, textarea {
   background: var(--bg-inset);
   color: var(--text);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
   padding: 0 10px;
   height: 36px;
-  font: 13px/1.4 var(--font-ui);
+  font: var(--fs-sm)/1.4 var(--font-ui);
   width: 100%;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 textarea { height: auto; padding: 8px 10px; }
 textarea.mono { font-family: var(--font-mono); }
+input:hover, select:hover, textarea:hover { border-color: var(--border-control-hover); }
 input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-ring);
+}
+input:disabled, select:disabled, textarea:disabled {
+  color: var(--text-faint);
+  border-color: var(--border-strong);
+  cursor: not-allowed;
 }
 /* should_fix 6: placeholder text (e.g. Pattern's "(?i)print complete")
    rendered in a color nearly identical to real input text, easy to mistake
@@ -287,6 +391,12 @@ input::placeholder, textarea::placeholder {
   font-style: italic;
   opacity: 1; /* Firefox otherwise dims placeholders further on top of this */
 }
+/* The native stepper is off-theme, and on the manual region fields
+   (step 0.0001) a click moves the region by an invisible amount. Arrow
+   keys and the wheel still step. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 select {
   appearance: none;
@@ -295,35 +405,48 @@ select {
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 28px;
+  text-overflow: ellipsis;
 }
 
 .checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13px;
+  gap: 8px;
+  font-size: var(--fs-sm);
   color: var(--text);
   cursor: pointer;
   width: auto;
   height: auto;
 }
 .checkbox input[type="checkbox"] {
-  width: 14px; height: 14px;
+  width: 16px; height: 16px;
   accent-color: var(--accent);
   margin: 0;
+  box-shadow: none;
+}
+/* input:focus (0,1,1) sets outline:none, which cancels the global
+   :focus-visible ring; a 25%-alpha glow on a 16px box is not visible. */
+.checkbox input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 
+/* The element is a 28px-tall transparent hit area; the visible 2px track
+   is drawn on the track pseudo-elements. */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 2px;
-  background: var(--border-strong);
-  border-radius: 2px;
+  height: 28px;
+  background: transparent;
   outline: none;
   padding: 0;
   border: none;
+  box-shadow: none;
+  cursor: pointer;
 }
+input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--border-control); border-radius: 2px; }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 14px; height: 14px;
@@ -334,7 +457,7 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 0 0 3px var(--accent-a15);
   cursor: pointer;
 }
-input[type="range"]::-moz-range-track { height: 2px; background: var(--border-strong); border-radius: 2px; }
+input[type="range"]::-moz-range-track { height: 2px; background: var(--border-control); border-radius: 2px; }
 input[type="range"]::-moz-range-thumb {
   width: 14px; height: 14px;
   border-radius: 3px;
@@ -344,14 +467,16 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
 }
 /* Same reasoning as .btn-primary:focus-visible above: the thumb is already
-   solid accent-green, so the standard low-opacity green ring all but
-   disappears against it. A near-white ring (with a thin dark gap to keep
-   it separate from the thumb's own fill) reads clearly instead. */
+   solid accent-green, so a near-white ring with a dark gap reads instead. */
 input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
 }
 input[type="range"]:focus-visible::-moz-range-thumb {
   box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
+}
+@media (pointer: coarse) {
+  input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -9px; }
+  input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
 }
 
 fieldset {
@@ -361,25 +486,28 @@ fieldset {
   padding: var(--space-4) 0;
 }
 fieldset:first-of-type { border-top: 0; padding-top: 0; }
+/* Floated so the legend sits inside the fieldset's content box, below the
+   section rule, instead of straddling (and being struck through by) the
+   top border. Everything after it clears the float. */
 legend {
+  float: left;
+  width: 100%;
   padding: 0;
   margin-bottom: var(--space-2);
-  font: 650 11px/1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
+  font: var(--fw-strong) var(--fs-base)/1.3 var(--font-ui);
+  color: var(--text);
 }
+fieldset > legend ~ * { clear: both; }
 .legend-note {
-  text-transform: none;
-  letter-spacing: 0;
   font-weight: 400;
+  font-size: var(--fs-sm);
   color: var(--text-faint);
   margin-left: 6px;
 }
 /* should_fix 1/2: the one-line description under the Type dropdown
    (#ttype-help, text supplied by app.js) and the tesseract-missing note
    that appears there when the server has no OCR engine configured. */
-.trigger-note { margin: 4px 0 0; font-size: 12px; color: var(--text-faint); }
+.trigger-note { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--text-faint); text-wrap: pretty; }
 
 /* Label-left / field-right grid — replaces the old inline paragraph flow.
    The Pattern row stacks its label above the input via .field-row-wide
@@ -392,11 +520,13 @@ legend {
   padding: 7px 0;
   border-top: 1px solid var(--border-hair);
 }
-.field-row:first-child { border-top: none; }
+/* The first row under a legend sits right below the fieldset's own rule;
+   a second hairline there doubled it (<legend> is the first child, so
+   :first-child alone never matched). */
+.field-row:first-child, fieldset > legend + .field-row { border-top: none; }
 .field-row > label {
   color: var(--text-dim);
-  font-size: 12.5px;
-  letter-spacing: 0.01em;
+  font-size: var(--fs-sm);
 }
 .field-row-wide { grid-template-columns: 1fr; }
 .field-row-wide > label { margin-bottom: 4px; }
@@ -409,14 +539,14 @@ legend {
 }
 .range-field { display: flex; align-items: center; gap: 10px; }
 .range-field input[type="range"] { flex: 1; }
-.ppt-val { min-width: 34px; text-align: right; font-size: 12px; color: var(--text-dim); }
+.ppt-val { min-width: 34px; text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
 
 /* config.Save() merges into config.yaml (internal/config/merge.go), so
    comments, key order and quoting survive a UI save; what yaml.v3 can't
    round-trip — blank lines, end-of-line comment alignment — still changes
    on the first real edit, so this note sits permanently near Save rather
    than as a one-time dismissable warning. */
-.save-warning { margin-top: var(--space-4); font-size: 12px; }
+.save-warning { margin-top: var(--space-4); font-size: var(--fs-sm); text-wrap: pretty; }
 
 .form-actions {
   display: flex;
@@ -426,7 +556,7 @@ legend {
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
-.form-actions .btn, .form-actions input[type="submit"] { width: auto; }
+.form-actions .btn { width: auto; }
 
 /* ---- Index: page head, watch table, empty states ---------------------- */
 .page-head {
@@ -438,12 +568,11 @@ legend {
 }
 .page-head h1 { margin-bottom: 4px; }
 .count-chip {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   border: 1px solid var(--border-strong);
   border-radius: 100px;
   padding: 3px 10px;
-  letter-spacing: 0.03em;
   flex: none;
 }
 
@@ -452,14 +581,12 @@ legend {
    ever blows the min content width out again, it scrolls internally with
    a visible scrollbar instead of leaking into page-level horizontal
    scroll with the actions column unreachable. */
-.panel-table { padding: 0; overflow-x: auto; overflow-y: hidden; }
+.panel-table { position: relative; padding: 0; overflow-x: auto; overflow-y: hidden; } /* relative: the header .sr-only must not escape the scroller into page scroll */
 
 .watch-table { width: 100%; border-collapse: collapse; }
 .watch-table th {
   text-align: left;
-  font: 650 10.5px/1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+  font: var(--fw-label) var(--fs-xs)/1.2 var(--font-ui);
   color: var(--text-faint);
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border);
@@ -471,8 +598,38 @@ legend {
 }
 .watch-table tbody tr:last-child td { border-bottom: 0; }
 .watch-table tbody tr:hover { background: var(--surface-hover); }
-.watch-table .cell-name a { font-weight: 600; font-family: var(--font-mono); }
-.reading-wrap { display: inline-flex; align-items: flex-start; gap: 8px; }
+.watch-table .cell-name a {
+  color: var(--text);
+  font-weight: var(--fw-strong);
+  font-family: var(--font-mono);
+  text-decoration: none;
+}
+.watch-table tbody tr:hover .cell-name a, .watch-table .cell-name a:hover { color: var(--accent); }
+.watch-table td.col-interval { color: var(--text-dim); font-size: var(--fs-sm); }
+.reading-wrap { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; }
+.reading-wrap > * { min-width: 0; }
+.reading-wrap > .led, .reading-wrap > .tag { flex: none; }
+/* Reading + its "fired" tag share one wrapping box: the tag sits after the
+   value when there is room and drops under the value's start when there
+   isn't, instead of claiming its own column and squeezing the reading. */
+.reading-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 4px;
+  min-width: 0;
+}
+.reading-body > .mono { min-width: 0; }
+.reading-body > .tag { flex: none; }
+/* Narrow table widths (641-899px) left "Last reading" ~70px: readings
+   broke mid-token and the 3-line clamp cut the value off. The floor fits
+   "PRINTING 34%" on one line; the tighter cell padding below 900px pays for
+   it so the table still fits a 641px viewport. Cards (<=640) reset both. */
+.watch-table .reading-wrap { min-width: 8rem; }
+@media (max-width: 899px) {
+  .watch-table th, .watch-table td { padding-left: var(--space-3); padding-right: var(--space-3); }
+}
 /* An OCR reading can be arbitrarily long (ocr_match/ocr_changed triggers
    read whatever text is on screen) — cap it so one row can't balloon to
    many wrapped lines and drag the rest of the row's cells down with it. */
@@ -482,11 +639,34 @@ legend {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.watch-table .reading-wrap .mono { font-size: var(--fs-read); color: var(--text); }
+.watch-table .reading-wrap .mono.fired { color: var(--amber); }
+.reading-pending { color: var(--text-faint); font-style: italic; }
+/* Red is the signal (LED + token); the message itself is quiet body text,
+   clamped to two lines with the full text in the title attribute. */
+.reading-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.reading-error-msg {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .watch-table th.col-actions, .watch-table td.col-actions { text-align: right; width: 1%; white-space: nowrap; }
 
 .empty-state { padding: var(--space-6) var(--space-5); text-align: center; color: var(--text-dim); }
 .empty-state p { margin: 4px 0; }
-.empty-state p:first-child { color: var(--text); font-weight: 600; }
+.empty-state p:first-child { margin-top: 0; }
+.empty-state p:first-child { color: var(--text); font-weight: var(--fw-strong); }
 
 /* ---- Error page (error.html) --------------------------------------------
    must_fix 3: every server-side rejection on create/save used to fall
@@ -500,7 +680,7 @@ legend {
   border: 1px solid var(--red-a30);
   border-radius: var(--radius-sm);
   background: var(--red-a10);
-  color: var(--red);
+  color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -513,13 +693,13 @@ legend {
   margin-top: var(--space-5);
 }
 .field { display: flex; flex-direction: column; gap: 6px; }
-.field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.02em; }
+.field label { font-size: var(--fs-sm); color: var(--text-dim); }
 .field-grow { flex: 1 1 320px; }
 .field input { width: 100%; }
 
 /* ---- Detail page header ------------------------------------------------*/
 .detail-head { margin-bottom: var(--space-5); }
-.back-link { font-size: 12.5px; color: var(--text-dim); }
+.back-link { font-size: var(--fs-sm); color: var(--text-dim); text-decoration: none; }
 .back-link:hover { color: var(--accent); }
 .detail-title-row {
   display: flex;
@@ -529,7 +709,7 @@ legend {
   margin-top: 10px;
 }
 .detail-title-row h1 { margin: 0; font-family: var(--font-mono); }
-.source-line { margin: 6px 0 0; font-size: 12.5px; word-break: break-all; }
+.source-line { margin: 6px 0 0; font-size: var(--fs-sm); word-break: break-all; }
 
 /* ---- Detail two-column grid --------------------------------------------*/
 .detail-grid {
@@ -584,7 +764,7 @@ legend {
     linear-gradient(var(--accent-dim), var(--accent-dim)) bottom right / 12px 2px no-repeat,
     linear-gradient(var(--accent-dim), var(--accent-dim)) bottom right / 2px 12px no-repeat;
 }
-.hint { margin-top: var(--space-3); font-size: 12.5px; }
+.hint { margin-top: var(--space-3); font-size: var(--fs-sm); }
 
 /* ---- Snapshot error placeholder (#snap-error) ---------------------------
    must_fix 2: shown in place of the <img>'s generic broken-image glyph when
@@ -601,12 +781,12 @@ legend {
   min-height: 220px;
   padding: var(--space-4);
   text-align: center;
-  color: var(--red);
+  color: var(--text-dim);
   background: var(--bg-inset);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
-.snap-error strong { color: var(--text); font-size: 13px; }
-.snap-error div { color: var(--text-dim); word-break: break-word; max-width: 46ch; }
+.snap-error strong { color: var(--text); font-size: var(--fs-sm); }
+.snap-error div { color: var(--text-dim); font-size: var(--fs-xs); word-break: break-word; max-width: 46ch; }
 
 /* ---- Manual region entry (should_fix 7) ----------------------------------
    Keyboard/switch/screen-reader path to the same fx/fy/fw/fh fields the
@@ -615,8 +795,9 @@ legend {
 .region-manual { margin-top: var(--space-3); }
 .region-manual summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .region-manual summary:hover { color: var(--accent); }
 .region-manual .field-row { grid-template-columns: 60px 1fr; }
@@ -636,11 +817,11 @@ legend {
   border: 1px solid var(--accent-dim);
   border-radius: var(--radius-sm);
 }
-.ocr-line { font-size: 14px; margin: 0 0 var(--space-2); }
-.note { font-size: 13px; margin: 0 0 var(--space-2); }
+.ocr-line { font-size: var(--fs-base); margin: 0 0 var(--space-2); }
+.note { font-size: var(--fs-sm); margin: 0 0 var(--space-2); }
 .word-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
 .word-chip {
-  font: 12px/1.4 var(--font-mono);
+  font: var(--fs-xs)/1.4 var(--font-mono);
   padding: 3px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
@@ -659,15 +840,19 @@ legend {
    Live panel showing zero visible change — badge still green, filmstrip
    frozen with no indication the timestamp had stopped advancing. Shown once
    Status.State is "error" (the same health.Tracker verdict must_fix 1
-   drives), so recovery — the badge disappearing — needs no extra wiring. */
+   drives), so recovery — the badge disappearing — needs no extra wiring.
+   The error message itself is shown once, under the page title; the badge
+   only dates the staleness. A stopped watch gets the neutral variant. */
 .stale-badge {
   margin: 0 0 var(--space-3);
   padding: 6px 10px;
   border: 1px solid var(--red-a30);
   border-radius: var(--radius-sm);
   background: var(--red-a10);
-  font-size: 12.5px;
+  color: var(--text);
+  font-size: var(--fs-sm);
 }
+.stale-badge-stopped { border-color: var(--border-control); background: var(--surface-2); }
 
 .readout {
   display: flex;
@@ -678,14 +863,9 @@ legend {
   margin-bottom: var(--space-3);
   border-bottom: 1px solid var(--border);
 }
-.readout-label {
-  font: 650 10px/1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-}
-.readout-value { font-size: 16px; }
-.readout-ts { margin-left: auto; font-size: 12px; }
+.readout-label { font-size: var(--fs-xs); color: var(--text-faint); }
+.readout-value { font-size: var(--fs-md); font-weight: var(--fw-strong); }
+.readout-ts { margin-left: auto; font-size: var(--fs-xs); }
 
 .strip {
   position: relative;
@@ -727,13 +907,14 @@ legend {
 .strip figure:has(figcaption.fired) img { border-color: var(--amber-a55); }
 .strip figcaption {
   margin-top: 6px;
-  font: 12px/1.3 var(--font-mono);
+  font: var(--fs-xs)/1.3 var(--font-mono);
   color: var(--text-dim);
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.strip figcaption .tag { padding: 2px 5px; vertical-align: 1px; } /* the template's space is the gap */
 /* .strip figcaption's own color rule (class+tag) outranks the bare .fired
    utility class on specificity alone — restate it here so a fired crop's
    caption still reads amber instead of silently losing the color. */
@@ -751,6 +932,9 @@ legend {
 @media (max-width: 640px) {
   main { padding: var(--space-4); }
   .topbar { padding: var(--space-3) var(--space-4); }
+  /* Not a bare .panel: that would beat .panel-table{padding:0} on order and
+     indent the edge-to-edge card table. */
+  .panel:not(.panel-table) { padding: var(--space-4); }
 
   .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
 
@@ -768,9 +952,8 @@ legend {
   .watch-table td::before {
     content: attr(data-label);
     flex: none;
-    font: 650 10px/1 var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    padding-top: 2px;
+    font: var(--fw-label) var(--fs-xs)/1.3 var(--font-ui);
     color: var(--text-faint);
   }
   /* An unbreakable OCR "Last reading" value must not push the row (and the
@@ -779,8 +962,18 @@ legend {
      shrink, plus overflow-wrap so a long space-free string breaks instead
      of overflowing. */
   .watch-table td > * { min-width: 0; }
-  .reading-wrap { min-width: 0; }
+  .watch-table .reading-wrap { min-width: 0; justify-content: flex-end; }
   .reading-wrap .mono { min-width: 0; overflow-wrap: anywhere; }
+  /* Card values hug the right edge; a wrapped reading, its fired tag and an
+     error block follow that edge instead of starting ragged at the LED. */
+  .reading-body { justify-content: flex-end; }
+  .reading-body > .mono { text-align: right; }
+  /* Error: LED and ERROR tag share the first line at the right edge, the
+     message takes its own full-width right-aligned line under them (a
+     right-aligned column block would strand the LED at the far left). */
+  .reading-wrap-error { flex-wrap: wrap; row-gap: 4px; }
+  .reading-wrap-error .reading-error { display: contents; }
+  .reading-wrap-error .reading-error-msg { flex: 1 1 100%; text-align: right; }
   .watch-table td.col-actions { justify-content: flex-end; width: 100%; }
   .watch-table td.col-actions::before { content: none; }
 
@@ -794,8 +987,12 @@ legend {
   .field-row { grid-template-columns: 1fr; }
   .field-row > label { margin-bottom: 2px; }
 
+  /* iOS Safari zooms the page on focus for any control under 16px. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), select, textarea { font-size: 16px; }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), select { height: 40px; }
+
   .form-actions { flex-direction: column-reverse; }
-  .form-actions .btn, .form-actions input[type="submit"] { width: 100%; justify-content: center; }
+  .form-actions .btn { width: 100%; }
 
   .readout-ts { margin-left: 0; }
 
@@ -806,10 +1003,47 @@ legend {
   .strip figure { max-width: 90%; }
   .strip img { max-width: 100%; }
 
-  /* Touch targets: the checkbox's own box stays 14px, but its clickable
-     label area gets padded closer to 40px; buttons and the Delete link
-     get the same treatment. */
+  /* Touch targets. Negative margins grow the hit area without moving the
+     surrounding layout; the checkbox label's padding is its hit area. */
   .btn { height: 40px; }
   .checkbox { padding: 10px 0; }
+  .checkbox input[type="checkbox"] { width: 18px; height: 18px; }
   .btn-ghost { padding: 12px 12px; }
+  .brand { padding: 8px 0; margin: -8px 0; }
+  .back-link { display: inline-block; padding: 10px 0; margin: -10px 0; }
+  /* Not inline-block: <summary> must keep display:list-item or the native
+     disclosure triangle disappears. */
+  .region-manual { margin-top: 2px; }
+  .region-manual summary { padding: 10px 0; }
+  .watch-table .cell-name a { display: inline-block; padding: 6px 0; margin: -6px 0; }
+}
+
+/* ---- Forced colors (Windows High Contrast) ------------------------------
+   The LEDs and the brand dot are background-only and would vanish. Keep
+   their own colours (state stays visible) with an outline so even a dark
+   dot shows on a black Canvas. The range track is a background (forced to
+   Canvas, so invisible) and appearance:auto on its pseudo-elements does not
+   bring native drawing back, so paint track and thumb in system colours. */
+@media (forced-colors: active) {
+  .led { forced-color-adjust: none; outline: 1px solid CanvasText; outline-offset: 1px; }
+  .led-off { background: transparent; box-shadow: none; } /* hollow: the outline alone */
+  .brand-mark { forced-color-adjust: none; border-color: CanvasText; }
+  .brand-mark::after { forced-color-adjust: none; background: CanvasText; }
+  /* One engine's pseudo-element in a selector list voids the whole rule in
+     the other engine, so each is stated separately. */
+  input[type="range"]::-webkit-slider-runnable-track { forced-color-adjust: none; background: CanvasText; }
+  input[type="range"]::-moz-range-track { forced-color-adjust: none; background: CanvasText; }
+  input[type="range"]::-webkit-slider-thumb { forced-color-adjust: none; background: Highlight; border: 1px solid CanvasText; box-shadow: none; }
+  input[type="range"]::-moz-range-thumb { forced-color-adjust: none; background: Highlight; border: 1px solid CanvasText; box-shadow: none; }
+  input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px Canvas, 0 0 0 4px CanvasText; }
+  input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px Canvas, 0 0 0 4px CanvasText; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+  .btn:active { transform: none; }
 }

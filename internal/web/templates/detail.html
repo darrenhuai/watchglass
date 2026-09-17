@@ -4,12 +4,12 @@
   <div class="detail-title-row">
     <h1 class="mono">{{.Watch.Name}}</h1>
     <span id="status-pill" class="status-pill status-{{.Status.State}}">
-      <span class="led {{if eq .Status.State "running"}}led-green{{else if eq .Status.State "error"}}led-error{{else}}led-red{{end}}" aria-hidden="true"></span>
+      <span class="led {{if eq .Status.State "running"}}led-green{{else if eq .Status.State "error"}}led-error{{else}}led-stopped{{end}}" aria-hidden="true"></span>
       <span class="status-text">{{.Status.State}}</span>
     </span>
   </div>
   <p class="source-line muted mono">{{.Watch.Source}}</p>
-  <p id="status-detail" class="status-detail conf-low"{{if ne .Status.State "error"}} hidden{{end}}>{{.Status.Message}}</p>
+  <p id="status-detail" class="status-detail mono"{{if ne .Status.State "error"}} hidden{{end}}>{{.Status.Message}}</p>
 </div>
 <div class="detail-grid">
   <div class="col-stage">
@@ -168,7 +168,7 @@
       <p class="save-warning muted">Saving merges this watch into config.yaml — comments, key order and quoting are kept; blank lines may be collapsed and end-of-line comments lose their alignment.</p>
       <div class="form-actions">
         <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
-        <input type="submit" value="Save &amp; restart watch" class="btn btn-primary">
+        <button type="submit" class="btn btn-primary">Save &amp; restart watch</button>
       </div>
     </form>
   </div>
