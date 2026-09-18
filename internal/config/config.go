@@ -68,11 +68,12 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// MarshalYAML writes durations in human-readable form ("5s", "10m") so the
-// config file the web UI saves stays hand-editable. time.Duration spells an
-// hour "1h0m0s" and a minute "1m0s"; nobody writes those by hand, so the
-// trailing zero units go.
-func (d Duration) MarshalYAML() (any, error) {
+// String spells a duration the way a person writes it ("5s", "10m",
+// "1h30m"). time.Duration spells an hour "1h0m0s" and a minute "1m0s";
+// nobody writes those by hand, so the trailing zero units go. The web UI
+// shows durations through this, and time.ParseDuration reads every form
+// back unchanged.
+func (d Duration) String() string {
 	s := time.Duration(d).String()
 	if strings.HasSuffix(s, "m0s") {
 		s = strings.TrimSuffix(s, "0s")
@@ -80,7 +81,13 @@ func (d Duration) MarshalYAML() (any, error) {
 	if strings.HasSuffix(s, "h0m") {
 		s = strings.TrimSuffix(s, "0m")
 	}
-	return s, nil
+	return s
+}
+
+// MarshalYAML writes durations in human-readable form (see String) so the
+// config file the web UI saves stays hand-editable.
+func (d Duration) MarshalYAML() (any, error) {
+	return d.String(), nil
 }
 
 // Region is a normalized rectangle; all fields are 0.0–1.0.
@@ -155,7 +162,11 @@ var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true
 // through the web UI's own routes (/watch/{name}, /watch/{name}/save, ...):
 // '/' breaks path segmentation, '?' and '#' truncate the path at the query
 // string / fragment, and control characters (including bare newlines) are
-// never legitimate in a display name. Leading/trailing whitespace is
+// never legitimate in a display name. "." and ".." are dot segments:
+// browsers and Go's ServeMux resolve /watch/.. to / before any handler sees
+// it, escaped (%2E) or not, so no link can ever reach such a watch. Every
+// other character ('%', '\', spaces, non-ASCII) is fine, because the UI
+// path-escapes names wherever they enter a URL. Leading/trailing whitespace is
 // rejected outright rather than silently trimmed, since the create handler
 // already trims before this runs — any survives-to-here whitespace means a
 // caller (e.g. a saved config.yaml hand-edited or written by another tool)
@@ -166,6 +177,9 @@ func validWatchName(name string) error {
 	}
 	if strings.TrimSpace(name) != name {
 		return fmt.Errorf("name %q must not have leading or trailing whitespace", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("name %q is reserved: it can't be used in a URL path", name)
 	}
 	for _, r := range name {
 		if r == '/' || r == '?' || r == '#' || unicode.IsControl(r) {

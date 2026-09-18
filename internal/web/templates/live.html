@@ -9,18 +9,20 @@
      pass can fail too), so the no-readings badge doesn't guess a cause. */}}
 <div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-message="{{.Status.Message}}">
 {{if eq .Status.State "error"}}
-{{if .Recent}}<p class="stale-badge">Stale — last good reading <span class="mono">{{(index .Recent 0).TS.Format "15:04:05"}}</span></p>
-{{else}}<p class="stale-badge">Failing since <span class="mono">{{.Status.Since.Format "15:04:05"}}</span></p>{{end}}
+{{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale — last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
+{{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
 {{else if eq .Status.State "stopped"}}
 <p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}} — readings below are from before it stopped{{end}}</p>
 {{end}}
 {{if .Recent}}
-{{$latest := index .Recent 0}}
+{{$latest := index .Recent 0}}{{$r := reading .Engine $latest.Reading}}
 <div class="readout">
-  <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
+  <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
   <span class="readout-label">latest</span>
-  <strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{$latest.Reading}}</strong>{{if $latest.Fired}}<span class="tag tag-fired">fired</span>{{end}}
-  <span class="readout-ts mono muted">{{$latest.TS.Format "15:04:05"}}</span>
+  {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired</span>{{end}}
+  <time class="readout-ts mono muted" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
+  {{if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>
+  {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>{{end}}
 </div>
 {{else}}
 <p class="muted">No readings yet</p>
@@ -31,7 +33,7 @@
 {{range .Recent}}
   <figure>
     <img src="{{b64png .PNG}}" alt="crop">
-    <figcaption {{if .Fired}}class="fired"{{end}}>{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}{{.Reading}}</figcaption>
+    {{$r := reading $.Engine .Reading}}<figcaption {{if .Fired}}class="fired"{{else if $r.Placeholder}}class="caption-none"{{end}}>{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</figcaption>
   </figure>
 {{end}}
 </div>

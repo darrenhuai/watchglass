@@ -210,3 +210,35 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckEvaluatesOneReading(t *testing.T) {
+	cases := []struct {
+		name      string
+		cfg       config.Trigger
+		reading   string
+		evaluable bool
+		met       bool
+		detail    string
+	}{
+		{"match met", config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete"}, "PRINT COMPLETE", true, true, "The text matches the pattern"},
+		{"match not met", config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete"}, "PRINTING 12%", true, false, "The text doesn't match the pattern"},
+		{"gt met", config.Trigger{Type: "numeric", Op: "gt", Threshold: 20}, "23.5", true, true, "23.5 is above 20"},
+		{"gt not met", config.Trigger{Type: "numeric", Op: "gt", Threshold: 24, Pattern: "([0-9.]+)"}, "?4?", true, false, "4 is not above 24"},
+		{"lt met", config.Trigger{Type: "numeric", Op: "lt", Threshold: -2.5}, "temp -3", true, true, "-3 is below -2.5"},
+		{"no number", config.Trigger{Type: "numeric", Op: "gt", Threshold: 1}, "?", true, false, "No number found in the reading"},
+		{"changed", config.Trigger{Type: "ocr_changed"}, "A", false, false, "Fires when the text changes from one stable reading to another"},
+		{"pixel", config.Trigger{Type: "pixel_change", Threshold: 10}, "", false, false, "Pixel change compares each frame with the one before, so one test has nothing to compare"},
+	}
+	for _, c := range cases {
+		got, err := Check(c.cfg, c.reading)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got.Evaluable != c.evaluable || got.Met != c.met || got.Detail != c.detail {
+			t.Errorf("%s: got %+v, want evaluable=%v met=%v detail=%q", c.name, got, c.evaluable, c.met, c.detail)
+		}
+	}
+	if _, err := Check(config.Trigger{Type: "ocr_match", Pattern: "("}, "x"); err == nil {
+		t.Error("an invalid pattern must be reported, not evaluated")
+	}
+}

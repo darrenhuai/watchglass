@@ -92,6 +92,16 @@
     if (mw.value !== "") fw.value = mw.value;
     if (mh.value !== "") fh.value = mh.value;
     paint();
+    markTestStale();
+  }
+  // A test result describes the region and settings it was run with. Once
+  // either changes it stays on screen (it's still useful to compare) but
+  // says it is out of date. The drag and the manual fields write the hidden
+  // region inputs directly, which fires no events, so they call this
+  // themselves; the fields a test reads are watched below.
+  function markTestStale() {
+    var panel = document.querySelector("#test-result .test-panel");
+    if (panel && !panel.classList.contains("is-stale")) panel.classList.add("is-stale");
   }
   if (mx) {
     [mx, my, mw, mh].forEach(function (el) {
@@ -121,6 +131,7 @@
     fw.value = Math.abs(x1 - drag.x0).toFixed(4);
     fh.value = Math.abs(y1 - drag.y0).toFixed(4);
     drawRect();
+    markTestStale();
   });
   canvas.addEventListener("pointerup", function () { drag = null; });
   // A touch drag the browser turns into a scroll ends in pointercancel, not
@@ -158,6 +169,45 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  // The server writes times in its own zone (often UTC in a container) with
+  // the instant in datetime; show them in the viewer's zone instead, with
+  // the date when it isn't today and the full date and time on hover.
+  function localizeTimes(root) {
+    var times = root.querySelectorAll("time[datetime]");
+    var today = new Date().toDateString();
+    for (var i = 0; i < times.length; i++) {
+      var d = new Date(times[i].getAttribute("datetime"));
+      if (isNaN(d.getTime())) continue;
+      var text = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      if (d.toDateString() !== today) {
+        text = d.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + text;
+      }
+      times[i].textContent = text;
+      times[i].title = d.toLocaleString([], { dateStyle: "full", timeStyle: "long" });
+    }
+  }
+  // How long ago a stale badge's time was, when that's at least a minute:
+  // "3 min ago", "5 h ago", "2 days ago". A camera dead for days must not
+  // read like one that failed a moment ago.
+  function ageText(ms) {
+    var min = Math.floor(ms / 60000);
+    if (min < 1) return "";
+    if (min < 60) return min + " min ago";
+    var h = Math.floor(min / 60);
+    if (h < 48) return h + " h ago";
+    return Math.floor(h / 24) + " days ago";
+  }
+  function updateAges(root) {
+    var ages = root.querySelectorAll(".stale-age");
+    for (var i = 0; i < ages.length; i++) {
+      var t = ages[i].previousElementSibling;
+      var d = t && t.getAttribute("datetime") ? new Date(t.getAttribute("datetime")) : null;
+      var a = d && !isNaN(d.getTime()) ? ageText(Date.now() - d.getTime()) : "";
+      var text = a ? " · " + a : "";
+      if (ages[i].textContent !== text) ages[i].textContent = text;
+    }
+  }
+  localizeTimes(document);
   function techDetail(raw) {
     var d = el("details", "tech-detail");
     d.appendChild(el("summary", null, "Technical detail"));
@@ -316,8 +366,27 @@
     if (e.raw) wrap.appendChild(techDetail(e.raw));
     box.appendChild(wrap);
   }
-  document.getElementById("testbtn").addEventListener("click", function () {
-    var box = document.getElementById("test-result");
+  var testBox = document.getElementById("test-result");
+  var testBtn = document.getElementById("testbtn");
+  // The × in the result's header clears it; focus goes back to the button
+  // that makes a new one rather than being dropped on <body>.
+  testBox.addEventListener("click", function (e) {
+    if (!e.target.closest("[data-dismiss-test]")) return;
+    testBox.textContent = "";
+    testBtn.focus();
+  });
+  // Only the fields a test result depends on: the engine, the trigger it
+  // checks and the preprocessing. Interval, notify and the like don't
+  // change what a test shows.
+  var TEST_FIELDS = { ttype: 1, engine: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
+    pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
+  function testFieldChanged(e) {
+    if (e.target && TEST_FIELDS[e.target.name]) markTestStale();
+  }
+  form.addEventListener("input", testFieldChanged);
+  form.addEventListener("change", testFieldChanged);
+  testBtn.addEventListener("click", function () {
+    var box = testBox;
     box.textContent = "";
     box.appendChild(el("p", "muted", "Testing…"));
     fetch(base + "/watch/" + encodeURIComponent(name) + "/test", {
@@ -329,7 +398,16 @@
         return { ok: resp.ok, html: html, text: t, status: resp.status };
       });
     }).then(function (r) {
-      if (r.ok && r.html) { box.innerHTML = r.text; return; }
+      if (r.ok && r.html) {
+        // Times are localised before the fragment lands, so the live
+        // region announces the result once, already in the viewer's zone.
+        var tpl = document.createElement("template");
+        tpl.innerHTML = r.text;
+        localizeTimes(tpl.content);
+        box.textContent = "";
+        box.appendChild(tpl.content);
+        return;
+      }
       renderTestError(box, r.text.trim() || "watchglass answered HTTP " + r.status + ".");
     }).catch(function () {
       renderTestError(box, "watchglass didn't answer. Is it still running?");
@@ -385,10 +463,19 @@
         tpl.innerHTML = html;
         var status = tpl.content.querySelector(".live-status");
         var strip = tpl.content.querySelector(".strip");
+        // Compared as the server sent it; localised just before it lands,
+        // so a real change is announced once and never re-announced by a
+        // rewrite after insertion.
         var statusHTML = status ? status.innerHTML : html;
         var stripHTML = strip ? strip.outerHTML : "";
         if (statusHTML !== lastStatus) {
-          liveStatus.innerHTML = statusHTML;
+          if (status) {
+            localizeTimes(status);
+            updateAges(status);
+            liveStatus.innerHTML = status.innerHTML;
+          } else {
+            liveStatus.innerHTML = statusHTML;
+          }
           lastStatus = statusHTML;
         }
         if (stripHTML !== lastStrip) {
@@ -401,6 +488,10 @@
   }
   poll();
   setInterval(poll, 2000);
+  // An unchanged status is never re-swapped, so a stale badge's age is
+  // brought up to date here. It is aria-hidden and only written when the
+  // wording changes (at most once a minute).
+  setInterval(function () { updateAges(liveStatus); }, 30000);
 
   // should_fix 1: the trigger fieldset used to show every field for every
   // Type at once, with no indication of which fields a given Type actually

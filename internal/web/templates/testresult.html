@@ -1,12 +1,38 @@
-<figure class="crop-frame">
-  <img src="{{.Crop}}" alt="preprocessed crop">
-</figure>
-{{if .Note}}<p class="muted note">{{.Note}}</p>{{end}}
-{{if .Text}}<p class="ocr-line">Read: <strong class="mono">{{.Text}}</strong></p>{{end}}
-{{if .Words}}
-<p class="word-list">
-{{range .Words}}
-  <span class="word-chip {{if lt .Conf 60.0}}conf-low{{else}}conf-ok{{end}}" title="confidence {{.Conf}}">{{.Text}} ({{.Conf}})</span>
-{{end}}
-</p>
-{{end}}
+{{/* One test of the region, inserted into #test-result by app.js. The
+     answer (the verdict) comes before the evidence (crop, reading). app.js
+     marks the panel stale when the region or a setting the test used
+     changes, and the × clears it. No <style>/<script> in here. */}}
+<section class="test-panel" aria-labelledby="test-title">
+  <div class="test-head">
+    <div class="test-head-text">
+    <h2 id="test-title" class="test-title">Test result</h2>
+    <p class="test-meta mono">{{with .Engine}}<span>{{.}}</span><span class="test-meta-sep" aria-hidden="true">·</span>{{end}}<time datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time></p>
+    </div>
+    <button type="button" class="btn btn-ghost test-dismiss" data-dismiss-test aria-label="Clear test result"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+  </div>
+  <p class="test-stale">The region or a setting changed since this test. Run it again to see the new result.</p>
+  {{with .Verdict}}
+  <p class="verdict verdict-{{.State}}">
+    <span class="led {{if eq .State "met"}}led-amber{{else if eq .State "invalid"}}led-error{{else}}led-off{{end}}" aria-hidden="true"></span>
+    <span class="verdict-text"><strong class="verdict-title">{{.Title}}</strong> <span class="verdict-detail">{{.Detail}}</span></span>
+  </p>
+  {{end}}
+  <figure class="crop-frame">
+    <img src="{{.Crop}}" alt="The tested region after preprocessing">
+  </figure>
+  {{if .Read}}
+  <dl class="test-facts">
+    <dt>Read</dt>
+    <dd>{{with .Reading.Placeholder}}<span class="reading-none">{{.}}</span>{{else}}<span class="mono test-reading">{{template "readingText" .Reading}}</span>{{end}}</dd>
+    {{if .Words}}
+    <dt>Confidence</dt>
+    <dd><p class="word-list">{{range .Words}}{{$low := lowConf .Conf}}
+      <span class="word-chip {{if $low}}conf-low{{else}}conf-ok{{end}}">{{if $low}}<span class="sr-only">Low confidence: </span>{{end}}{{if and (eq $.Engine "sevenseg") (eq .Text "?")}}<span class="digit-unknown">?</span>{{else}}{{.Text}}{{end}}<span class="conf">{{pct .Conf}}%</span></span>{{end}}
+    </p></dd>
+    {{end}}
+  </dl>
+  {{if .Reading.Partial}}<p class="test-note"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>
+  {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>{{end}}
+  {{end}}
+  {{with .Note}}<p class="test-note test-note-status"><span class="led led-off" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}
+</section>

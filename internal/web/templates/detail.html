@@ -42,7 +42,7 @@
   <div class="col-stage">
     <div class="stage-frame">
       <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
-        <img id="snap" src="{{u "/watch/"}}{{.Watch.Name}}/snapshot" alt="snapshot">
+        <img id="snap" src="{{watchURL .Watch.Name "/snapshot"}}" alt="snapshot">
         <canvas id="overlay"></canvas>
         <div id="snap-error" class="snap-error" hidden></div>
       </div>
@@ -78,7 +78,7 @@
     </section>
   </div>
   <div class="col-config">
-    <form id="watchform" class="panel" method="post" action="{{u "/watch/"}}{{.Watch.Name}}/save">
+    <form id="watchform" class="panel" method="post" action="{{watchURL .Watch.Name "/save"}}">
       <input type="hidden" name="x" value="{{.Watch.Region.X}}">
       <input type="hidden" name="y" value="{{.Watch.Region.Y}}">
       <input type="hidden" name="w" value="{{.Watch.Region.W}}">
@@ -155,17 +155,17 @@
         </div>
         <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}">
           <label for="f-cooldown">Cooldown</label>
-          <input id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true" aria-describedby="err-cooldown"{{end}}>
+          <input id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true" aria-describedby="err-cooldown"{{end}}>
           {{with .Form.Err "cooldown"}}<p id="err-cooldown" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "interval"}} field-invalid{{end}}">
           <label for="f-interval">Interval</label>
-          <input id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true" aria-describedby="err-interval"{{end}}>
+          <input id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true" aria-describedby="err-interval"{{end}}>
           {{with .Form.Err "interval"}}<p id="err-interval" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "max_interval"}} field-invalid{{end}}">
           <label for="f-maxinterval">Max interval</label>
-          <input id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true" aria-describedby="err-max-interval"{{end}}>
+          <input id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true" aria-describedby="err-max-interval"{{end}}>
           {{with .Form.Err "max_interval"}}<p id="err-max-interval" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "health_after"}} field-invalid{{end}}">

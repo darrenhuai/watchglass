@@ -176,6 +176,32 @@ func TestSaveWritesHumanReadableDurations(t *testing.T) {
 	}
 }
 
+// Durations print the way people write them: no trailing zero units, and
+// every form parses back to the same value.
+func TestDurationStringIsHumanAndRoundTrips(t *testing.T) {
+	cases := map[time.Duration]string{
+		0:                            "0s",
+		500 * time.Millisecond:       "500ms",
+		6 * time.Second:              "6s",
+		time.Minute:                  "1m",
+		5 * time.Minute:              "5m",
+		90 * time.Second:             "1m30s",
+		time.Hour:                    "1h",
+		90 * time.Minute:             "1h30m",
+		time.Hour + time.Second:      "1h0m1s",
+		26*time.Hour + 3*time.Minute: "26h3m",
+	}
+	for d, want := range cases {
+		if got := Duration(d).String(); got != want {
+			t.Errorf("Duration(%v).String() = %q, want %q", d, got, want)
+		}
+		back, err := time.ParseDuration(Duration(d).String())
+		if err != nil || back != d {
+			t.Errorf("%q parses back as %v (%v), want %v", Duration(d).String(), back, err, d)
+		}
+	}
+}
+
 func TestSourceKind(t *testing.T) {
 	cases := map[string]string{
 		"rtsp://cam/stream":          "ffmpeg",
@@ -500,13 +526,16 @@ func TestValidateRejectsUnroutableNames(t *testing.T) {
 	bad := []string{
 		"kitchen/oven", "a?b", "x#y", "a\nb",
 		"", " leading space", "trailing space ", "\ttab-prefixed",
+		// Dot segments: /watch/. and /watch/.. resolve away before routing.
+		".", "..",
 	}
 	for _, name := range bad {
 		if err := mk(name).Validate(); err == nil {
 			t.Errorf("name %q: expected error", name)
 		}
 	}
-	good := []string{"kitchen oven", "3d printer bay 2", "厨房烤箱", "a-b_c.d"}
+	// '%', '\' and dots inside a longer name are routable once escaped.
+	good := []string{"kitchen oven", "3d printer bay 2", "厨房烤箱", "a-b_c.d", ".hidden", "a..b", "...", "pct 100%", "a%20b", `bs2\x`}
 	for _, name := range good {
 		if err := mk(name).Validate(); err != nil {
 			t.Errorf("name %q: unexpected error: %v", name, err)

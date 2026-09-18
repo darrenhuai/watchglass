@@ -146,9 +146,6 @@ a:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--text-dim); }
 .fired { color: var(--amber); font-weight: var(--fw-strong); }
-/* OCR word confidence only (the test-result chips). */
-.conf-low { color: var(--red); }
-.conf-ok { color: var(--accent); }
 
 ::selection { background: var(--accent-a35); color: var(--text); }
 
@@ -216,7 +213,8 @@ main {
    channel next to hue: running = solid green, fired = solid amber inside a
    ring (amber and mint share a luminance, so hue alone fails for
    deuteranopes), error = solid red, stopped = solid grey (unlit), no data
-   yet = hollow grey ring. */
+   yet = hollow grey ring, running but no digit decoded = half-lit mint
+   (a mint ring around a dim core: the watch is fine, the reading isn't). */
 .led {
   display: inline-block;
   flex: none;
@@ -234,6 +232,7 @@ main {
 .led-error   { background: var(--red); box-shadow: 0 0 5px var(--red-a30), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
 .led-stopped { background: var(--text-dim); box-shadow: none; }
 .led-off     { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-faint); }
+.led-unsure  { background: var(--accent-a25); box-shadow: inset 0 0 0 1.5px var(--accent); }
 
 /* ---- Pills / chips / state tokens --------------------------------------*/
 .pill {
@@ -680,7 +679,17 @@ fieldset > legend ~ * { clear: both; }
 }
 .watch-table .reading-wrap .mono { font-size: var(--fs-read); color: var(--text); }
 .watch-table .reading-wrap .mono.fired { color: var(--amber); }
-.reading-pending { color: var(--text-faint); font-style: italic; }
+.reading-pending, .reading-none { color: var(--text-faint); font-style: italic; }
+/* The seven-segment decoder's "?": kept in place so the number keeps its
+   shape, but faint and dotted-underlined so it never reads as a glyph that
+   was actually on the display. */
+.digit-unknown {
+  color: var(--text-faint);
+  font-weight: 400;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
 /* Red is the signal (LED + token); the message itself is quiet body text,
    clamped to two lines with the full text in the title attribute. */
 .reading-error {
@@ -987,27 +996,134 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 .test-error-summary { margin: 2px 0 0; padding-left: 16px; color: var(--text-dim); overflow-wrap: anywhere; }
 .test-error .tech-detail { padding-left: 16px; }
-.crop-frame { display: inline-block; margin: 0 0 var(--space-3); }
+/* A successful Test: one framed panel. The verdict (the answer) leads,
+   the crop and the reading (the evidence) follow. */
+.test-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.test-panel > :last-child { margin-bottom: 0; }
+/* Title and meta wrap among themselves; the clear button keeps the
+   top-right corner at every width. */
+.test-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+.test-head-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+  row-gap: 2px;
+  min-width: 0;
+}
+.test-title {
+  margin: 0;
+  font: var(--fw-strong) var(--fs-base)/1.3 var(--font-ui);
+}
+.test-meta {
+  display: inline-flex;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.test-dismiss {
+  flex: none;
+  margin: 0 -8px 0 auto;
+  width: 32px; height: 32px;
+  padding: 0;
+}
+/* Shown by app.js (.is-stale) once the region or a setting the test used
+   changes; the result stays readable underneath, just visibly old. */
+.test-stale {
+  display: none;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+.test-panel.is-stale .test-stale { display: block; }
+.test-panel > .verdict, .test-panel > .crop-frame, .test-panel > .test-facts, .test-panel > .test-note {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.test-panel.is-stale > .verdict, .test-panel.is-stale > .crop-frame,
+.test-panel.is-stale > .test-facts, .test-panel.is-stale > .test-note { opacity: 0.45; }
+
+.verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: 72ch;
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+.verdict .led { position: relative; top: -2px; }
+/* Title on its own line, the reason under it: "Condition met" is the
+   answer and must not run into the sentence that explains it. */
+.verdict-title { display: block; color: var(--text); font-weight: var(--fw-strong); font-size: var(--fs-base); }
+
+.crop-frame { margin: 0 0 var(--space-3); }
 .crop-frame img {
   display: block;
+  width: auto;
   max-width: 100%;
+  max-height: 180px; /* a tall region shouldn't push the reading off screen */
   background: var(--bg-inset);
-  border: 1px solid var(--accent-dim);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
 }
-.ocr-line { font-size: var(--fs-base); margin: 0 0 var(--space-2); }
-.note { font-size: var(--fs-sm); margin: 0 0 var(--space-2); }
+/* Label / value pairs: "Read" and "Confidence". */
+.test-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+.test-facts dt { font: var(--fw-label) var(--fs-xs)/1.4 var(--font-ui); color: var(--text-faint); }
+.test-facts dd { margin: 0; min-width: 0; }
+.test-reading { font-size: var(--fs-read); font-weight: var(--fw-strong); overflow-wrap: anywhere; }
+.test-note {
+  max-width: 72ch;
+  margin: 0 0 var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+/* An engine status line: LED with the text hanging beside it. */
+.test-note-status { display: flex; align-items: baseline; gap: var(--space-2); }
+.test-note-status .led { position: relative; top: -1px; }
+.test-note > .digit-unknown { font-family: var(--font-mono); }
 .word-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
 .word-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   font: var(--fs-xs)/1.4 var(--font-mono);
   padding: 3px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
-.word-chip.conf-ok { border-color: var(--accent-a30); }
-.word-chip.conf-low { border-color: var(--red-a30); }
-.word-chip.conf-low::before { content: "! "; color: var(--red); }
+.word-chip .conf { color: var(--text-faint); }
+/* Low confidence: a dashed edge (a shape cue, not hue alone) and the
+   number in red; screen readers get "Low confidence:" in words. */
+.word-chip.conf-low { border-color: var(--red-a35); border-style: dashed; }
+.word-chip.conf-low .conf { color: var(--red); }
 
 /* ---- Live section (#live, polled fragment) ------------------------------
    Injected via innerHTML — no <style>/<script> inside the fragment. */
@@ -1042,6 +1158,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 .stale-badge .led { margin-right: 8px; vertical-align: 1px; }
 .stale-badge .mono { font-size: var(--fs-sm); }
+.stale-age { color: var(--text-dim); }
 
 .readout {
   display: flex;
@@ -1055,6 +1172,16 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .readout-label { font-size: var(--fs-xs); color: var(--text-faint); }
 .readout-value { font-size: var(--fs-md); font-weight: var(--fw-strong); }
 .readout-ts { margin-left: auto; font-size: var(--fs-xs); }
+.readout-value.reading-none { font-size: var(--fs-base); font-weight: 400; }
+.readout-hint {
+  flex: 1 1 100%;
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+.readout-hint > .digit-unknown { font-family: var(--font-mono); }
 
 .strip {
   position: relative;
@@ -1108,6 +1235,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
    utility class on specificity alone — restate it here so a fired crop's
    caption still reads amber instead of silently losing the color. */
 .strip figcaption.fired { color: var(--amber); }
+.strip figcaption.caption-none { font-family: var(--font-ui); font-style: italic; color: var(--text-faint); }
 
 /* ---- Responsive: tablet -------------------------------------------------*/
 @media (max-width: 860px) {
@@ -1204,6 +1332,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   .checkbox { padding: 10px 0; }
   .checkbox input[type="checkbox"] { width: 18px; height: 18px; }
   .btn-ghost { padding: 12px 12px; }
+  .test-dismiss { width: 40px; height: 40px; padding: 0; margin: -6px -10px -6px auto; }
   .brand { padding: 8px 0; margin: -8px 0; }
   .back-link { display: inline-block; padding: 10px 0; margin: -10px 0; }
   /* The chevron is drawn (no native marker), so the summary can be a

@@ -22,7 +22,7 @@
   <tbody>
   {{range .Rows}}
     <tr>
-      <td class="cell-name" data-label="Name"><a href="{{u "/watch/"}}{{.Watch.Name}}">{{.Watch.Name}}</a></td>
+      <td class="cell-name" data-label="Name"><a href="{{watchURL .Watch.Name ""}}">{{.Watch.Name}}</a></td>
       <td data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
       <td class="mono col-interval" data-label="Interval">{{dur .Watch.Interval}}</td>
       <td data-label="Last reading">
@@ -33,9 +33,10 @@
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
           <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span></span>
-        {{else if .Has}}
-          <span class="led {{if .Latest.Fired}}led-amber{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="reading-body"><span class="mono{{if .Latest.Fired}} fired{{end}}">{{.Latest.Reading}}</span>{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}</span>
+        {{else if .Has}}{{$r := reading .Watch.Engine .Latest.Reading}}
+          {{/* Fired stays first: an alert is never hidden behind "unreadable". */}}
+          <span class="led {{if .Latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
+          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}</span>
         {{else}}
           <span class="led led-off" aria-hidden="true"></span>
           <span class="reading-pending">No readings yet</span>
@@ -43,7 +44,7 @@
         </span>
       </td>
       <td class="col-actions">
-        <form method="post" action="{{u "/watch/"}}{{.Watch.Name}}/delete" onsubmit="return confirm('Delete watch {{.Watch.Name}}?')">
+        <form method="post" action="{{watchURL .Watch.Name "/delete"}}" onsubmit="return confirm('Delete watch {{.Watch.Name}}?')">
           <button type="submit" class="btn btn-ghost btn-danger">Delete</button>
         </form>
       </td>

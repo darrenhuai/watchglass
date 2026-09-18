@@ -29,6 +29,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/supervisor"
+	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
 //go:embed templates/*.html static/*
@@ -104,16 +105,31 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"b64png": func(b []byte) template.URL {
 			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
 		},
-		"dur":       func(d config.Duration) string { return time.Duration(d).String() },
-		"u":         func(p string) string { return s.BasePath + p },
+		"dur": func(d config.Duration) string { return d.String() },
+		"u":   func(p string) string { return s.BasePath + p },
+		// watchURL is the only way a watch name enters a URL: names may hold
+		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
+		// to be decoded (or path-normalized) into a different name.
+		"watchURL":  s.watchURL,
 		"pageTitle": pageTitle,
 		"shortErr":  summarizeErr,
+		"reading":   viewReading,
+		"pct":       confidencePct,
+		"lowConf":   func(c float64) bool { return c < lowConfidence },
+		"isoTime":   isoTime,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
 	s.tmpl = tmpl
 	return s, nil
+}
+
+// watchURL is BasePath + "/watch/" + the path-escaped name + suffix (e.g.
+// "/save"). ServeMux matches {name} against the escaped path and PathValue
+// hands the handler the unescaped name back.
+func (s *Server) watchURL(name, suffix string) string {
+	return s.BasePath + "/watch/" + url.PathEscape(name) + suffix
 }
 
 func (s *Server) Handler() http.Handler {
@@ -308,19 +324,25 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 type liveData struct {
-	Name   string
+	Name string
+	// Engine is the watch's configured engine: it decides whether a '?'
+	// in a reading is the seven-segment decoder's "digit not read" or just
+	// text that has a question mark in it.
+	Engine string
 	Recent []state.Sample
 	Status watchStatus
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if _, ok := s.findWatch(name); !ok {
+	wc, ok := s.findWatch(name)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	s.render(w, "live.html", liveData{
 		Name:   name,
+		Engine: wc.Engine,
 		Recent: s.reg.Recent(name),
 		Status: s.statusFor(name, s.isRunning(name)),
 	})
@@ -386,6 +408,7 @@ type flash struct {
 	Subject string
 	Reason  string
 	File    string
+	At      time.Time // "saved" only: when
 }
 
 // flashReasonMax keeps the cookie well under browser size limits; a start
@@ -397,13 +420,15 @@ const flashCookie = "wg_flash"
 // setFlash stores the confirmation in a short-lived cookie rather than a
 // query parameter, so the redirect Location stays the plain page URL and a
 // reload or a shared link never repeats it.
+// Each part is escaped on its own before they are joined, so a watch name
+// (or a reason) holding '|' can't spill into the next field.
 func (s *Server) setFlash(w http.ResponseWriter, kind, subject, reason string) {
-	v := kind + "|" + subject
+	v := kind + "|" + url.QueryEscape(subject)
 	if reason != "" {
 		if r := []rune(reason); len(r) > flashReasonMax {
 			reason = string(r[:flashReasonMax-1]) + "…"
 		}
-		v += "|" + reason
+		v += "|" + url.QueryEscape(reason)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     flashCookie,
@@ -427,16 +452,29 @@ func (s *Server) takeFlash(w http.ResponseWriter, r *http.Request) *flash {
 	if err != nil {
 		return nil
 	}
-	parts := strings.SplitN(v, "|", 3)
-	if len(parts) < 2 {
+	parts := strings.Split(v, "|")
+	if len(parts) < 2 || len(parts) > 3 {
 		return nil
+	}
+	for i := 1; i < len(parts); i++ {
+		if parts[i], err = url.QueryUnescape(parts[i]); err != nil {
+			return nil
+		}
 	}
 	f := &flash{Kind: parts[0], Subject: parts[1], File: s.configFile()}
 	if len(parts) == 3 {
 		f.Reason = parts[2]
 	}
 	switch f.Kind {
-	case "saved", "deleted":
+	case "saved":
+		// Subject is the save time (RFC 3339, UTC); the page shows it in the
+		// viewer's zone once app.js has run.
+		if f.At, err = time.Parse(time.RFC3339, f.Subject); err != nil {
+			return nil
+		}
+		f.Reason = ""
+		return f
+	case "deleted":
 		f.Reason = ""
 		return f
 	case "created":
@@ -586,7 +624,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notifyConfigChanged()
 	s.setFlash(w, "created", name, startReason)
-	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
+	http.Redirect(w, r, s.watchURL(name, ""), http.StatusSeeOther)
 }
 
 type detailData struct {
@@ -731,10 +769,72 @@ func parsePreprocess(r *http.Request) (config.Preprocess, error) {
 }
 
 type testResult struct {
-	Crop  template.URL
-	Text  string
-	Words []ocr.Word
-	Note  string
+	Crop template.URL
+	// At is when the frame was tested; Engine names the reader, "" when
+	// the trigger type reads no text (pixel_change).
+	At     time.Time
+	Engine string
+	// Read is true when an engine actually read the crop (Text may still
+	// be empty: nothing legible). Reading is Text split for display.
+	Read    bool
+	Text    string
+	Reading readingView
+	Words   []ocr.Word
+	Note    string
+	// Verdict is the trigger's condition checked against this one reading.
+	Verdict *testVerdict
+}
+
+// testVerdict answers "would this fire?" for one test. State is "met",
+// "unmet", "info" (the type can't be judged from one frame) or "invalid"
+// (the trigger settings themselves don't work).
+type testVerdict struct {
+	State  string
+	Title  string
+	Detail string
+}
+
+// verdictFor checks trig against the test's reading. It says "condition
+// met", never "will notify": edges, Confirm and Cooldown depend on the
+// readings around this one. view says whether the seven-segment decoder
+// left digits unread ("?4?", "?"): the check still runs, since the watch
+// judges the same text, but a met/unmet answer about "4" (or "no number")
+// when the display shows 24.5 would be false confidence, so it comes back
+// as info.
+func verdictFor(trig config.Trigger, reading string, view readingView, errs []fieldError) *testVerdict {
+	// Only a threshold the numeric check needs can stop it; a bad Confirm
+	// or Cooldown is Save's to report (their base values stand in).
+	for _, e := range errs {
+		if e.Field == "tthreshold" && trig.Type == "numeric" {
+			return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: e.Msg}
+		}
+	}
+	cond, err := trigger.Check(trig, reading)
+	if err != nil {
+		return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
+	}
+	switch {
+	case !cond.Evaluable && trig.Type == "pixel_change":
+		return &testVerdict{State: "info", Title: "Nothing to compare yet", Detail: cond.Detail + "."}
+	case !cond.Evaluable:
+		return &testVerdict{State: "info", Title: "No verdict from one reading", Detail: cond.Detail + "."}
+	case view.Unreadable:
+		return &testVerdict{State: "info", Title: "No digits read", Detail: "The decoder couldn't read any digit, so there's nothing to check the trigger against yet."}
+	case view.Partial:
+		return &testVerdict{State: "info", Title: "Partial reading", Detail: "Some digits weren't read, so this only checked part of the number: " +
+			lowerFirst(cond.Detail) + "."}
+	case !cond.Met:
+		return &testVerdict{State: "unmet", Title: "Condition not met", Detail: cond.Detail + "."}
+	}
+	confirm := trig.Confirm
+	if confirm <= 0 {
+		confirm = 3 // config.Validate's default
+	}
+	when := "on the first reading like this"
+	if confirm > 1 {
+		when = fmt.Sprintf("after %d readings like this in a row", confirm)
+	}
+	return &testVerdict{State: "met", Title: "Condition met", Detail: cond.Detail + ". The watch fires " + when + ", unless it was already met or Cooldown is running."}
 }
 
 func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
@@ -773,7 +873,25 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := testResult{Crop: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()))}
+	res := testResult{
+		Crop: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())),
+		At:   time.Now(),
+	}
+	// The trigger as the form has it now (unsaved edits included), so the
+	// verdict answers for what the user is looking at. A request without
+	// ttype (curl, an older client) is judged by the saved trigger.
+	trig, trigErrs := wc.Trigger, []fieldError(nil)
+	if _, ok := r.Form["ttype"]; ok {
+		trig, trigErrs = triggerFromForm(r, wc.Trigger)
+	}
+	// pixel_change reads no text, so a test of it doesn't run an engine:
+	// its answer is the crop and the note that one frame has nothing to
+	// compare with. (Only when the form says so; see above.)
+	if r.FormValue("ttype") == "pixel_change" {
+		res.Verdict = verdictFor(trig, "", readingView{}, trigErrs)
+		s.render(w, "testresult.html", res)
+		return
+	}
 	// The form's engine wins over the saved one so the decoder can be tried
 	// before saving; a request without the field (curl, an older client)
 	// reads with whatever the watch is configured for.
@@ -781,28 +899,18 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	if engName == "" {
 		engName = wc.Engine
 	}
+	res.Engine = engName
+	if res.Engine == "" {
+		res.Engine = "tesseract"
+	}
 	engine, err := s.engines.For(engName)
 	switch {
 	case errors.Is(err, ocr.ErrNoTesseract):
-		// should_fix 3: pixel_change never uses OCR, so the tesseract-missing
-		// note is noise (and reads as an error) on the most common first test
-		// a new user runs. r.FormValue("ttype") is the type currently
-		// selected in the form — the whole watchform, ttype included, is what
-		// app.js's testbtn handler posts here. An unset/unknown value (a
-		// request that, unlike the UI, doesn't send ttype at all) falls back
-		// to showing the note, matching the pre-fix behavior for that case.
-		if r.FormValue("ttype") != "pixel_change" {
-			res.Note = "No OCR engine available (tesseract not on PATH) — showing the preprocessed crop only. " +
-				"The seven-segment decoder (engine: sevenseg) needs no tesseract."
-		}
+		res.Note = "tesseract isn't installed, so this shows the crop only. For a digit display, try Engine: sevenseg."
 	case errors.Is(err, ocr.ErrNoRapidOCR):
-		// Same suppression as above: a pixel_change test never reads OCR.
-		if r.FormValue("ttype") != "pixel_change" {
-			res.Note = "RapidOCR isn't available (no python3/python with the rapidocr package on PATH — " +
-				"pip install rapidocr onnxruntime) — showing the preprocessed crop only."
-		}
+		res.Note = "rapidocr isn't installed, so this shows the crop only. Install it with pip install rapidocr onnxruntime."
 	case err != nil:
-		res.Note = fmt.Sprintf("OCR engine: %v", err)
+		res.Note = upperFirst(fmt.Sprintf("engine unavailable: %v", err)) + "."
 	default:
 		if e, ok := engine.(ocr.DetailedEngine); ok {
 			res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
@@ -810,10 +918,51 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 			res.Text, err = engine.Recognize(ctx, prepped)
 		}
 		if err != nil {
-			res.Note = fmt.Sprintf("OCR failed: %v", err)
+			res.Note = upperFirst(fmt.Sprintf("read failed: %v", err))
+			break
 		}
+		res.Read = true
+		res.Reading = viewReading(engName, res.Text)
+		res.Verdict = verdictFor(trig, res.Text, res.Reading, trigErrs)
 	}
 	s.render(w, "testresult.html", res)
+}
+
+// triggerFromForm reads the trigger fields of the detail form, the same way
+// for Save and for Test. A field that doesn't parse keeps base's value and
+// is reported.
+func triggerFromForm(r *http.Request, base config.Trigger) (config.Trigger, []fieldError) {
+	var errs []fieldError
+	trig := config.Trigger{
+		Type:    r.FormValue("ttype"),
+		Pattern: r.FormValue("pattern"),
+		Op:      r.FormValue("op"),
+	}
+	if v := strings.TrimSpace(r.FormValue("tthreshold")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err != nil {
+			errs = append(errs, fieldError{"tthreshold", "Threshold must be a number."})
+			trig.Threshold = base.Threshold
+		} else {
+			trig.Threshold = f
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("confirm")); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			errs = append(errs, fieldError{"confirm", "Confirm must be a whole number, 1 or more."})
+			trig.Confirm = base.Confirm
+		} else {
+			trig.Confirm = n
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("cooldown")); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			errs = append(errs, fieldError{"cooldown", fmt.Sprintf("Cooldown %q isn't a duration. %s", v, durationPhrase["cooldown"])})
+			trig.Cooldown = base.Cooldown
+		} else {
+			trig.Cooldown = config.Duration(d)
+		}
+	}
+	return trig, errs
 }
 
 // durationPhrase is the hint each duration field's parse error ends with,
@@ -856,35 +1005,8 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	}
 	// An empty numeric field means 0 (Validate applies the defaults), as
 	// before; an unparseable one keeps base's value alongside its error.
-	trig := config.Trigger{
-		Type:    r.FormValue("ttype"),
-		Pattern: r.FormValue("pattern"),
-		Op:      r.FormValue("op"),
-	}
-	if v := strings.TrimSpace(r.FormValue("tthreshold")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err != nil {
-			fail("tthreshold", "Threshold must be a number.")
-			trig.Threshold = base.Trigger.Threshold
-		} else {
-			trig.Threshold = f
-		}
-	}
-	if v := strings.TrimSpace(r.FormValue("confirm")); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			fail("confirm", "Confirm must be a whole number, 1 or more.")
-			trig.Confirm = base.Trigger.Confirm
-		} else {
-			trig.Confirm = n
-		}
-	}
-	if v := strings.TrimSpace(r.FormValue("cooldown")); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			fail("cooldown", fmt.Sprintf("Cooldown %q isn't a duration. %s", v, durationPhrase["cooldown"]))
-			trig.Cooldown = base.Trigger.Cooldown
-		} else {
-			trig.Cooldown = config.Duration(d)
-		}
-	}
+	trig, trigErrs := triggerFromForm(r, base.Trigger)
+	errs = append(errs, trigErrs...)
 	if v := strings.TrimSpace(r.FormValue("interval")); v == "" {
 		fail("interval", "Enter an interval. "+durationPhrase["interval"])
 	} else if d, err := time.ParseDuration(v); err != nil {
@@ -1032,7 +1154,8 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	backURL, backLabel := "/watch/"+name, "Back to "+name
+	// renderError prefixes BasePath itself.
+	backURL, backLabel := "/watch/"+url.PathEscape(name), "Back to "+name
 	// A rejected save re-renders the form with what was submitted and every
 	// problem marked next to its field (status 400); nothing is written.
 	rejected := func(updated config.Watch, errs []fieldError) {
@@ -1114,8 +1237,8 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyConfigChanged()
-	s.setFlash(w, "saved", time.Now().Format("15:04:05"), "")
-	http.Redirect(w, r, s.BasePath+"/watch/"+name, http.StatusSeeOther)
+	s.setFlash(w, "saved", time.Now().UTC().Format(time.RFC3339), "")
+	http.Redirect(w, r, s.watchURL(name, ""), http.StatusSeeOther)
 }
 
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {

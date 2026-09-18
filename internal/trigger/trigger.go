@@ -151,6 +151,55 @@ func (e *Evaluator) ObservePixel(pct float64) Event {
 	return e.fire(reading, "pixel change")
 }
 
+// Condition is what a single reading says about a trigger's condition, for
+// a one-off check such as the web UI's "Test this region". It is stateless
+// on purpose: whether a watch actually notifies also depends on the
+// readings before this one (edges), Confirm and Cooldown, so callers must
+// present Met as "the condition holds", never as "this will notify".
+type Condition struct {
+	// Evaluable is false for the types one reading can't decide:
+	// pixel_change compares consecutive frames, and ocr_changed compares a
+	// reading with the previous stable one.
+	Evaluable bool
+	Met       bool
+	// Detail says why, in a short sentence without a trailing period.
+	Detail string
+}
+
+// Check evaluates cfg's condition against one reading. The error is
+// trigger.New's: an unknown type, a missing or invalid pattern, a bad op.
+func Check(cfg config.Trigger, reading string) (Condition, error) {
+	e, err := New(cfg)
+	if err != nil {
+		return Condition{}, err
+	}
+	switch cfg.Type {
+	case "ocr_match":
+		if e.re.MatchString(reading) {
+			return Condition{Evaluable: true, Met: true, Detail: "The text matches the pattern"}, nil
+		}
+		return Condition{Evaluable: true, Detail: "The text doesn't match the pattern"}, nil
+	case "numeric":
+		v, ok := e.extract(reading)
+		if !ok {
+			return Condition{Evaluable: true, Detail: "No number found in the reading"}, nil
+		}
+		word := "above"
+		met := v > cfg.Threshold
+		if cfg.Op == "lt" {
+			word, met = "below", v < cfg.Threshold
+		}
+		num := func(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+		if met {
+			return Condition{Evaluable: true, Met: true, Detail: fmt.Sprintf("%s is %s %s", num(v), word, num(cfg.Threshold))}, nil
+		}
+		return Condition{Evaluable: true, Detail: fmt.Sprintf("%s is not %s %s", num(v), word, num(cfg.Threshold))}, nil
+	case "ocr_changed":
+		return Condition{Detail: "Fires when the text changes from one stable reading to another"}, nil
+	}
+	return Condition{Detail: "Pixel change compares each frame with the one before, so one test has nothing to compare"}, nil
+}
+
 func (e *Evaluator) extract(s string) (float64, bool) {
 	m := e.re.FindStringSubmatch(s)
 	if m == nil {

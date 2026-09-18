@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -56,11 +57,18 @@ func TestFriendlyConfigError(t *testing.T) {
 	cases := []struct{ err, field, want string }{
 		{`duplicate watch name "printer"`, "name", `A watch named "printer" already exists.`},
 		{`watch 0: name "a/b" must not contain '/', '?', '#', or control characters`, "name", "Names can't contain /, ?, # or control characters."},
+		{`watch 0: name ".." is reserved: it can't be used in a URL path`, "name", `A name can't be just "." or "..": a link to it would lead somewhere else.`},
 		{`watch "cam": unsupported source "ftp://x": expected one of http:// https:// rtsp:// rtsps:// v4l2: dshow: ffmpeg:`, "source",
 			"That source isn't supported. It must start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:."},
 		{`watch "cam": interval must be >= 1s`, "interval", "Interval must be at least 1s"},
 		{`watch "cam": max_interval must be >= interval`, "max_interval", "Max interval can't be shorter than Interval"},
-		{"watch \"cam\": trigger: pattern: error parsing regexp: missing closing ): `(`", "pattern", "Pattern isn't a valid regular expression: missing closing ): (."},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: missing closing ): `(`", "pattern", `Pattern isn't a valid regular expression. A "(" is never closed.`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: unexpected ): `abc)`", "pattern", `Pattern isn't a valid regular expression. There's a ")" with no "(" before it.`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: missing argument to repetition operator: `*`", "pattern", `Pattern isn't a valid regular expression. "*" has nothing before it to repeat.`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: invalid escape sequence: `\\q`", "pattern", `Pattern isn't a valid regular expression. "\q" isn't an escape Go understands.`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: trailing backslash at end of expression: ``", "pattern", `Pattern isn't a valid regular expression. It ends in a lone \.`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: invalid or unsupported Perl syntax: `(?=`", "pattern", `Pattern isn't a valid regular expression. "(?=" isn't supported: Go regular expressions have no lookarounds`},
+		{"watch \"cam\": trigger: pattern: error parsing regexp: some future code: `x`", "pattern", `Pattern isn't a valid regular expression. Some future code near "x".`},
 		{`watch "cam": trigger: ocr_match requires a pattern`, "pattern", "ocr_match needs a pattern"},
 		{`watch "cam": trigger: numeric op must be gt or lt, got ""`, "op", "Choose gt or lt"},
 		{`watch "cam": notify: invalid URL "nope" (must include a scheme, e.g. ntfy://...)`, "notify", `Notify URL "nope" needs a scheme`},
@@ -70,6 +78,43 @@ func TestFriendlyConfigError(t *testing.T) {
 		got := friendlyConfigError(errors.New(c.err))
 		if got.Field != c.field || !strings.HasPrefix(got.Msg, c.want) {
 			t.Errorf("%s:\n got  %+v\n want field %q, msg starting %q", c.err, got, c.field, c.want)
+		}
+	}
+}
+
+// Go's own regexp errors (not hand-typed copies of them) come out in
+// words: a change in the standard library's wording shows up here.
+func TestPatternErrorsFromRealRegexps(t *testing.T) {
+	for _, p := range []string{"(", "abc)", "[a", "*a", "a**", "a{2000}", `\q`, `a\`, "[z-a]", "(?=x)", "(?<n"} {
+		_, err := regexp.Compile(p)
+		if err == nil {
+			t.Fatalf("%q compiled", p)
+		}
+		got := friendlyConfigError(fmt.Errorf("watch \"cam\": trigger: pattern: %w", err))
+		if got.Field != "pattern" || strings.Contains(got.Msg, "`") || strings.Contains(got.Msg, " near ") ||
+			!strings.HasPrefix(got.Msg, "Pattern isn't a valid regular expression. ") {
+			t.Errorf("%q: %+v", p, got)
+		}
+	}
+}
+
+// Go reports three different repeat-count problems under one code; each
+// gets its own reason rather than always blaming "too many repeats".
+func TestRepeatCountErrorsFromRealRegexps(t *testing.T) {
+	const pre = "Pattern isn't a valid regular expression. "
+	for p, want := range map[string]string{
+		"a{2,1}":      `"{2,1}" isn't a valid repeat count: the minimum is larger than the maximum.`,
+		"a{1001}":     `"{1001}" asks for too many repeats (the most is 1000).`,
+		"a{2,1001}":   `"{2,1001}" asks for too many repeats (the most is 1000).`,
+		"(a{500}){3}": `"{3}" repeats a group that already repeats, and together they come to more than 1000 repeats.`,
+	} {
+		_, err := regexp.Compile(p)
+		if err == nil {
+			t.Fatalf("%q compiled", p)
+		}
+		got := friendlyConfigError(fmt.Errorf("watch \"cam\": trigger: pattern: %w", err))
+		if got.Field != "pattern" || got.Msg != pre+want {
+			t.Errorf("%q:\n got  %+v\n want %q", p, got, pre+want)
 		}
 	}
 }

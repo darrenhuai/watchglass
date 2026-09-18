@@ -2,8 +2,10 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -193,15 +195,82 @@ var configFieldErrors = []struct {
 	{"name is required", "name", "Enter a name for the watch."},
 	{"leading or trailing whitespace", "name", "The name can't start or end with a space."},
 	{"must not contain '/', '?', '#', or control characters", "name", "Names can't contain /, ?, # or control characters."},
+	{"is reserved: it can't be used in a URL path", "name", "A name can't be just \".\" or \"..\": a link to it would lead somewhere else."},
 }
 
 var (
-	dupNameRe     = regexp.MustCompile(`^duplicate watch name ("(?:[^"\\]|\\.)*")$`)
-	badSourceRe   = regexp.MustCompile(`^unsupported source ("(?:[^"\\]|\\.)*"): expected one of (.+)$`)
-	badPatternRe  = regexp.MustCompile(`trigger: pattern: (?:error parsing regexp: )?(.+)$`)
-	badNotifyURL  = regexp.MustCompile(`notify: invalid URL ("(?:[^"\\]|\\.)*")`)
-	regexpDetails = strings.NewReplacer("`", "")
+	dupNameRe    = regexp.MustCompile(`^duplicate watch name ("(?:[^"\\]|\\.)*")$`)
+	badSourceRe  = regexp.MustCompile(`^unsupported source ("(?:[^"\\]|\\.)*"): expected one of (.+)$`)
+	badPatternRe = regexp.MustCompile(`trigger: pattern: (?:error parsing regexp: )?(.+)$`)
+	badNotifyURL = regexp.MustCompile(`notify: invalid URL ("(?:[^"\\]|\\.)*")`)
+	// A regexp/syntax.Error prints as "code: `fragment`".
+	regexpCodeRe  = regexp.MustCompile("^(.+?): `(.*)`$")
+	repeatCountRe = regexp.MustCompile(`^\{(\d+)(?:,(\d*))?\}$`)
 )
+
+// repeatCountProblem says why the repeat count frag ("{2,1}", "{1001}")
+// was refused. Go reports three different problems with the one code
+// "invalid repeat count": a minimum above the maximum, a count above 1000,
+// and nested repeats whose counts multiply past 1000 (where frag, the
+// outer count, can be small on its own).
+func repeatCountProblem(frag string) string {
+	m := repeatCountRe.FindStringSubmatch(frag)
+	if m == nil {
+		return `"` + frag + `" isn't a valid repeat count (the most is 1000).`
+	}
+	lo, _ := strconv.Atoi(m[1])
+	hi := -1
+	if m[2] != "" {
+		hi, _ = strconv.Atoi(m[2])
+	}
+	switch {
+	case hi >= 0 && lo > hi:
+		return `"` + frag + `" isn't a valid repeat count: the minimum is larger than the maximum.`
+	case lo > 1000 || hi > 1000:
+		return `"` + frag + `" asks for too many repeats (the most is 1000).`
+	default:
+		return `"` + frag + `" repeats a group that already repeats, and together they come to more than 1000 repeats.`
+	}
+}
+
+// regexpProblems says each regexp/syntax error code in words; %s is the
+// offending fragment where showing it helps. Go's own text ("missing
+// closing ): `(`") reads as a pile of punctuation inside a sentence.
+var regexpProblems = map[string]string{
+	"missing closing )":                       `A "(" is never closed.`,
+	"unexpected )":                            `There's a ")" with no "(" before it.`,
+	"missing closing ]":                       `A "[" is never closed.`,
+	"missing argument to repetition operator": `"%s" has nothing before it to repeat. Put \ in front of it to match it literally.`,
+	"invalid nested repetition operator":      `"%s" repeats a repeat.`,
+	"invalid escape sequence":                 `"%s" isn't an escape Go understands.`,
+	"trailing backslash at end of expression": `It ends in a lone \.`,
+	"invalid character class range":           `"%s" isn't a valid character range.`,
+	"invalid character class":                 `"%s" isn't a valid character class.`,
+	"invalid or unsupported Perl syntax":      `"%s" isn't supported: Go regular expressions have no lookarounds or backreferences.`,
+	"invalid named capture":                   `"%s" isn't a valid named group.`,
+	"invalid repetition operator":             `"%s" isn't a valid repeat.`,
+	"invalid UTF-8":                           `It contains invalid UTF-8.`,
+	"expression nests too deeply":             `It nests too deeply.`,
+	"expression too large":                    `It's too large.`,
+}
+
+// regexpProblem is detail (a regexp/syntax error without its "error
+// parsing regexp: " prefix) as one sentence.
+func regexpProblem(detail string) string {
+	if m := regexpCodeRe.FindStringSubmatch(detail); m != nil {
+		if m[1] == "invalid repeat count" {
+			return repeatCountProblem(m[2])
+		}
+		if f, ok := regexpProblems[m[1]]; ok {
+			if strings.Contains(f, "%s") {
+				return fmt.Sprintf(f, m[2])
+			}
+			return f
+		}
+		return upperFirst(m[1]) + ` near "` + m[2] + `".`
+	}
+	return upperFirst(strings.TrimSuffix(detail, ".")) + "."
+}
 
 // friendlyConfigError maps a config.Validate (or mutateConfig) error to the
 // form field it concerns and a sentence for a person. An error it doesn't
@@ -218,7 +287,7 @@ func friendlyConfigError(err error) fieldError {
 		return fieldError{"source", "That source isn't supported. It must start with " + joinOr(list) + "."}
 	}
 	if m := badPatternRe.FindStringSubmatch(bare); m != nil {
-		return fieldError{"pattern", "Pattern isn't a valid regular expression: " + regexpDetails.Replace(m[1]) + "."}
+		return fieldError{"pattern", "Pattern isn't a valid regular expression. " + regexpProblem(m[1])}
 	}
 	if m := badNotifyURL.FindStringSubmatch(bare); m != nil {
 		return fieldError{"notify", "Notify URL " + m[1] + " needs a scheme, for example ntfy://ntfy.sh/topic."}

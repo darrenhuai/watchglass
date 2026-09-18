@@ -74,7 +74,7 @@ func TestMutationsConfirmWithOneShotFlash(t *testing.T) {
 		t.Fatalf("save status = %d", resp.StatusCode)
 	}
 	_, body = getWithCookies(t, h, "/watch/oven", []*http.Cookie{flashCookieFrom(t, resp)})
-	if !strings.Contains(body, `Saved to config.yaml and restarted the watch <span class="flash-meta mono">`) {
+	if !strings.Contains(body, `Saved to config.yaml and restarted the watch <time class="flash-meta mono" datetime="`) {
 		t.Errorf("detail after save should confirm the save and restart; body:\n%s", body)
 	}
 
@@ -164,7 +164,13 @@ func TestGrabErrorsArePlainTextSummaryThenDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(js), "if (r.ok && r.html) { box.innerHTML = r.text; return; }") || strings.Contains(string(js), "el.innerHTML = html") {
+	// The one place the answer is parsed as markup sits inside the
+	// ok+text/html branch, which returns before the text-only error path.
+	src := string(js)
+	guard := strings.Index(src, "if (r.ok && r.html) {")
+	parse := strings.Index(src, "tpl.innerHTML = r.text;")
+	errPath := strings.Index(src, `renderTestError(box, r.text.trim()`)
+	if guard < 0 || parse < guard || errPath < parse || strings.Count(src, "innerHTML = r.text") != 1 || strings.Contains(src, "el.innerHTML = html") {
 		t.Error("app.js must only insert a successful text/html Test answer as markup")
 	}
 }

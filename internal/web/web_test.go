@@ -196,7 +196,8 @@ func TestTestRegionReturnsWordsFragment(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
 	}
-	for _, want := range []string{"PRINT COMPLETE", "91.5", "data:image/png;base64,"} {
+	// Confidence is a whole percent (rounded down), not the engine's float.
+	for _, want := range []string{"PRINT COMPLETE", `<span class="conf">91%</span>`, "data:image/png;base64,"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("fragment missing %q; body:\n%s", want, body)
 		}
@@ -892,7 +893,7 @@ func TestSaveRejectionRerendersFormWithFieldErrors(t *testing.T) {
 	for _, want := range []string{
 		`id="watchform"`, `action="/watch/printer/save"`, "&larr; All watches",
 		`<div id="form-errors" class="form-alert" role="alert" tabindex="-1" autofocus>`,
-		"Not saved. One field needs a fix:", `<a href="#f-pattern">Pattern isn&#39;t a valid regular expression: missing closing ): (.`,
+		"Not saved. One field needs a fix:", `<a href="#f-pattern">Pattern isn&#39;t a valid regular expression. A &#34;(&#34; is never closed.</a>`,
 		`name="pattern" value="("`, `aria-describedby="err-pattern"`, `<p id="err-pattern" class="field-error">`,
 		`name="cooldown" value="7s"`, `name="x" value="0.1"`, `<option value="ocr_match" selected`,
 	} {
@@ -1184,7 +1185,9 @@ func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
 	s.reg.Add("printer", state.Sample{TS: frameTS, Reading: "0.0% changed", PNG: pngBytes(t)})
 	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading for 2 consecutive polls: grab: refused", Since: frameTS.Add(4 * time.Second)})
 	_, live := get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(live, `Stale — last good reading <span class="mono">00:53:26</span>`) {
+	// The server's zone is the no-script text; datetime (UTC) is what app.js
+	// shows in the viewer's zone.
+	if !strings.Contains(live, `Stale — last good reading <time class="mono" datetime="`+frameTS.UTC().Format(time.RFC3339)+`">00:53:26</time>`) {
 		t.Errorf("stale badge should date from the last frame (00:53:26); body:\n%s", live)
 	}
 	if strings.Contains(live, "led-green") || !strings.Contains(live, "led-error") {
@@ -1194,7 +1197,7 @@ func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
 	s.reg.Drop("printer")
 	s.reg.SetHealth("printer", state.Health{Down: true, Message: "no reading: refused", Since: frameTS.Add(4 * time.Second)})
 	_, live = get(t, s.Handler(), "/watch/printer/live")
-	if !strings.Contains(live, `Failing since <span class="mono">00:53:30</span>`) || strings.Contains(live, "Stale") {
+	if !strings.Contains(live, `Failing since <time class="mono" datetime="`+frameTS.Add(4*time.Second).UTC().Format(time.RFC3339)+`">00:53:30</time>`) || strings.Contains(live, "Stale") {
 		t.Errorf("with no readings nothing is stale: the badge should say since when it has been failing; body:\n%s", live)
 	}
 }
@@ -1469,8 +1472,8 @@ func TestTestRegionTesseractNoteMentionsSevenSeg(t *testing.T) {
 	s.engines.Tesseract = nil
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"ocr_match"}, "engine": {"tesseract"}}
 	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
-	if !strings.Contains(body, "tesseract") || !strings.Contains(body, "seven-segment") {
-		t.Errorf("note should say tesseract is missing and that the seven-segment decoder needs none; body:\n%s", body)
+	if !strings.Contains(body, "tesseract isn") || !strings.Contains(body, "try Engine: sevenseg") {
+		t.Errorf("note should say tesseract is missing and point a digit display at sevenseg; body:\n%s", body)
 	}
 	form.Set("engine", "bogus")
 	resp, body := postForm(t, s.Handler(), "/watch/printer/test", form)
@@ -1706,15 +1709,15 @@ func TestTestRegionRapidOCRNoteWhenMissing(t *testing.T) {
 		t.Fatalf("status = %d, body: %s", resp.StatusCode, body)
 	}
 	// The apostrophe is HTML-escaped in the fragment; match around it.
-	if !strings.Contains(body, "RapidOCR isn") || !strings.Contains(body, "pip install rapidocr onnxruntime") {
+	if !strings.Contains(body, "rapidocr isn") || !strings.Contains(body, "pip install rapidocr onnxruntime") {
 		t.Errorf("note should say rapidocr is missing and how to install it; body:\n%s", body)
 	}
-	if strings.Contains(body, "tesseract not on PATH") {
+	if strings.Contains(body, "tesseract isn") {
 		t.Errorf("the tesseract note is the wrong note here; body:\n%s", body)
 	}
 	form.Set("ttype", "pixel_change")
 	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
-	if strings.Contains(body, "RapidOCR isn") {
+	if strings.Contains(body, "rapidocr isn") {
 		t.Errorf("pixel_change never reads OCR; the note is noise there; body:\n%s", body)
 	}
 }
