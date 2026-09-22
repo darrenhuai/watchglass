@@ -117,6 +117,8 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"pct":       confidencePct,
 		"lowConf":   func(c float64) bool { return c < lowConfidence },
 		"isoTime":   isoTime,
+		"ppSet":     preprocessSet,
+		"ppSummary": preprocessSummary,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)

@@ -368,6 +368,121 @@
   }
   var testBox = document.getElementById("test-result");
   var testBtn = document.getElementById("testbtn");
+  // Side by side (>= 920px) style.css pins the stage column --stage-gap
+  // under the viewport top while the form scrolls. A column taller than
+  // the viewport (a test result, the manual fields open on a short laptop)
+  // pinned like that would keep its bottom — the result, the Live strip —
+  // out of reach, so from then on it behaves like a sidebar: scrolling
+  // down lets it travel with the page until its bottom sits --stage-gap
+  // above the viewport bottom and it pins there; scrolling up lets it
+  // travel until its top is back at --stage-gap. Between the two pins it
+  // is position:relative at a fixed offset from its place in the grid, so
+  // a change of its own height (a result landing, the fields opening, the
+  // result dismissed) grows or shrinks it downwards from where it is and
+  // never moves what is on screen; only the page's own scrolling does.
+  // data-pin says which of the three it is in.
+  var colStage = document.querySelector(".col-stage");
+  var stageGrid = colStage && colStage.parentNode;
+  // mode, the page offset the last scroll event was handled at, and the
+  // column's viewport top as last seen: positions are worked out from
+  // that, never from the column's current height, so a scroll and a
+  // height change landing in the same frame (click × right after a
+  // wheel tick) still put the column where it was, moved with the page.
+  var stagePin = { mode: "top", lastY: window.scrollY, top: 0 };
+  function setPin(mode, top) {
+    stagePin.mode = mode;
+    colStage.style.position = mode === "free" ? "relative" : "";
+    colStage.style.top = mode === "top" ? "" : top + "px";
+    colStage.dataset.pin = mode;
+  }
+  function noteStageTop() { stagePin.top = colStage.getBoundingClientRect().top; }
+  // The stacked layout has no --stage-gap: any inline offset left over
+  // from the side-by-side one is dropped there.
+  function stagePinned() {
+    var gap = parseFloat(getComputedStyle(colStage).getPropertyValue("--stage-gap"));
+    if (gap !== gap && stagePin.mode !== "top") { setPin("top"); stageGrid.style.minHeight = ""; }
+    return gap === gap ? gap : NaN;
+  }
+  function stageMetrics(gap) {
+    var grid = stageGrid.getBoundingClientRect();
+    var col = colStage.getBoundingClientRect();
+    return { gap: gap, top: col.top, h: col.height, natural: grid.top,
+      tall: col.height > window.innerHeight - 2 * gap,
+      bottomPin: window.innerHeight - gap - col.height };
+  }
+  // A sticky column cannot leave its grid: pinned deep in the form and
+  // then outgrowing the grid's end (the form is barely taller than the
+  // stage plus a result), it would be shoved up to fit. So the grid is
+  // kept at least as tall as a tall column needs at the offset it wants
+  // — and only a tall one: a short pinned column that is being scrolled
+  // past and updated by the live strip must never ratchet the page longer.
+  // Returns the offset the column can actually have (the grid's end bounds
+  // a short column; a tall one has just been given the room).
+  function fitStageGrid(m, offset) {
+    offset = Math.max(0, offset);
+    stageGrid.style.minHeight = m.tall ? offset + m.h + "px" : "";
+    return Math.min(offset, Math.max(0, stageGrid.getBoundingClientRect().height - m.h));
+  }
+  // Free the column at viewport top `top`: never above its place in the
+  // grid, never past the grid's end.
+  function freeStage(m, top) {
+    setPin("free", fitStageGrid(m, top - m.natural));
+  }
+  function onStageScroll() {
+    var y = window.scrollY, dy = y - stagePin.lastY;
+    stagePin.lastY = y;
+    var gap = stagePinned();
+    if (gap !== gap || dy === 0) return;
+    var m = stageMetrics(gap);
+    if (stagePin.mode === "top") {
+      // A tall column leaves the top pin as the page starts moving down,
+      // from where it sat before this frame's scroll (so it travels from
+      // the first pixel like any other block).
+      if (m.tall && dy > 0) freeStage(m, stagePin.top - dy);
+    } else if (stagePin.mode === "bottom") {
+      if (dy < 0) freeStage(m, stagePin.top - dy);
+    } else if (dy < 0 && m.top >= m.gap) {
+      setPin("top");
+    } else if (dy > 0 && m.tall && m.top + m.h <= window.innerHeight - m.gap) {
+      fitStageGrid(m, m.bottomPin - m.natural);
+      setPin("bottom", m.bottomPin);
+    }
+    noteStageTop();
+  }
+  // The column or the window changed size. Top-pinned, it grows downwards
+  // from its pin (the grid is grown under it if it must); bottom-pinned,
+  // it is freed where its top edge was (its bottom is what moved, and the
+  // next scroll down re-pins it); free, it keeps its offset.
+  function fitStage() {
+    if (!colStage) return;
+    var gap = stagePinned();
+    if (gap !== gap) return;
+    var m = stageMetrics(gap);
+    if (stagePin.mode === "top") fitStageGrid(m, gap - m.natural);
+    else if (stagePin.mode === "bottom") freeStage(m, stagePin.top - (window.scrollY - stagePin.lastY));
+    else freeStage(m, m.natural + (parseFloat(colStage.style.top) || 0));
+    noteStageTop();
+  }
+  if (colStage) {
+    if (window.ResizeObserver) new ResizeObserver(fitStage).observe(colStage);
+    window.addEventListener("resize", fitStage);
+    window.addEventListener("scroll", onStageScroll, { passive: true });
+    fitStage();
+    noteStageTop();
+  }
+  // A result lands under the Test button, which on a phone or with the
+  // manual fields open can be below the fold: bring it into view (a
+  // pinned column that has just outgrown the viewport travels with that
+  // scroll, see onStageScroll). Focus stays on the button (the box is a
+  // live region, so the result is read out anyway) so a second Test is
+  // one keypress away.
+  function revealTestResult() {
+    fitStage();
+    var r = testBox.getBoundingClientRect();
+    if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    testBox.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+  }
   // The × in the result's header clears it; focus goes back to the button
   // that makes a new one rather than being dropped on <body>.
   testBox.addEventListener("click", function (e) {
@@ -406,11 +521,14 @@
         localizeTimes(tpl.content);
         box.textContent = "";
         box.appendChild(tpl.content);
+        revealTestResult();
         return;
       }
       renderTestError(box, r.text.trim() || "watchglass answered HTTP " + r.status + ".");
+      revealTestResult();
     }).catch(function () {
       renderTestError(box, "watchglass didn't answer. Is it still running?");
+      revealTestResult();
     });
   });
 
@@ -447,7 +565,10 @@
       // open across polls.
       var sum = statusDetail.querySelector(".status-summary");
       var raw = statusDetail.querySelector(".tech-raw");
-      if (sum && sum.textContent !== (summary || "")) sum.textContent = summary || "";
+      if (sum && sum.textContent !== (summary || "")) {
+        sum.textContent = summary || "";
+        sum.title = summary || ""; // the sentence is clamped to two lines; the title has it whole
+      }
       if (raw && raw.textContent !== (message || "")) raw.textContent = message || "";
       statusDetail.hidden = state !== "error";
       syncSnapCause();
@@ -599,5 +720,26 @@
     var sync = function () { out.textContent = range.value === "0" ? "off" : range.value; };
     range.addEventListener("input", sync);
     sync();
+  }
+  // The folded Preprocess section's readout ("off", "grayscale · binarize
+  // 128 · 2×"): the server renders it (preprocessSummary in web.go) and
+  // this keeps it in step with the controls, so a closed section still
+  // says what it holds. Same wording as the Go side.
+  var ppSummaryEl = document.getElementById("pp-summary");
+  function ppSummary() {
+    if (!ppSummaryEl) return;
+    var p = [];
+    var gray = form.elements["pp_grayscale"], inv = form.elements["pp_invert"], up = form.elements["pp_upscale"];
+    if (gray && gray.checked) p.push("grayscale");
+    if (inv && inv.checked) p.push("invert");
+    if (range && range.value !== "0") p.push("binarize " + range.value);
+    if (up && up.value !== "0") p.push(up.value + "×");
+    var text = p.length ? p.join(" · ") : "off";
+    if (ppSummaryEl.textContent !== text) ppSummaryEl.textContent = text;
+  }
+  if (ppSummaryEl) {
+    form.addEventListener("input", function (e) { if (e.target && /^pp_/.test(e.target.name || "")) ppSummary(); });
+    form.addEventListener("change", function (e) { if (e.target && /^pp_/.test(e.target.name || "")) ppSummary(); });
+    ppSummary();
   }
 })();

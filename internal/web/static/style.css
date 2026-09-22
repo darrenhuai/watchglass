@@ -12,7 +12,10 @@
 
 /* ---- Reset ------------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { color-scheme: dark; }
+/* scroll-padding: the detail form's Save bar sticks to the bottom of the
+   viewport, so a field scrolled into view (a focus, an error link) must
+   land above it, not under it. */
+html { color-scheme: dark; scroll-padding-bottom: 88px; }
 body, h1, h2, h3, p, figure, fieldset { margin: 0; }
 ul, ol { margin: 0; padding: 0; }
 img { max-width: 100%; }
@@ -167,10 +170,11 @@ main {
 }
 
 .panel {
+  --panel-pad: var(--space-5); /* read back by anything that has to span the panel edge to edge (the form's Save bar) */
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--panel-pad);
 }
 /* A panel's last paragraph would otherwise add its 12px bottom margin on
    top of the panel padding (24px top vs ~36px bottom). */
@@ -291,8 +295,19 @@ main:focus { outline: none; }
 /* The detail header's error: one sentence, with the raw chain behind a
    disclosure (the same .tech-detail the error page, the snapshot
    placeholder and a failed Test use). */
-.status-detail { margin-top: var(--space-2); max-width: 75ch; }
-.status-summary { margin: 0; font-size: var(--fs-base); color: var(--text); overflow-wrap: anywhere; }
+.status-detail { margin-top: var(--space-2); max-width: 72ch; }
+/* Two lines at most under the title: the sentence's title attribute and the
+   disclosure under it carry the rest. */
+.status-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  font-size: var(--fs-base);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
 
 .tech-detail { margin-top: var(--space-1); font-size: var(--fs-sm); color: var(--text-faint); }
 .tech-detail summary, .region-manual summary {
@@ -309,7 +324,7 @@ main:focus { outline: none; }
 .region-manual summary::-webkit-details-marker { display: none; }
 /* A chevron drawn with borders: the native triangle is a different glyph in
    every engine and sits on a different baseline. */
-.tech-detail summary::before, .region-manual summary::before {
+.tech-detail summary::before, .region-manual summary::before, .fold-summary::before {
   content: "";
   flex: none;
   width: 5px; height: 5px;
@@ -319,7 +334,8 @@ main:focus { outline: none; }
   transition: transform var(--dur-fast) var(--ease-out);
 }
 .tech-detail[open] summary::before,
-.region-manual[open] summary::before { transform: rotate(45deg) translate(-1px, -1px); }
+.region-manual[open] summary::before,
+.fold[open] > .fold-summary::before { transform: rotate(45deg) translate(-1px, -1px); }
 .tech-detail summary:hover { color: var(--accent); }
 .tech-raw {
   margin: var(--space-2) 0 0;
@@ -460,7 +476,9 @@ input, select, textarea {
   box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35);
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
-textarea { height: auto; padding: 8px 10px; }
+/* block: an inline-block textarea sits on the baseline and adds ~4px of
+   descender space under itself. */
+textarea { display: block; height: auto; padding: 8px 10px; }
 textarea.mono { font-family: var(--font-mono); }
 input:hover, select:hover, textarea:hover { border-color: var(--border-control-hover); }
 input:focus, select:focus, textarea:focus {
@@ -581,6 +599,9 @@ fieldset {
   padding: var(--space-4) 0;
 }
 fieldset:first-of-type { border-top: 0; padding-top: 0; }
+/* The last section's bottom padding would stack on the Save bar's top
+   margin (a 40px hole under Notify); the bar's margin alone is the gap. */
+form fieldset:last-of-type { padding-bottom: 0; }
 /* Floated so the legend sits inside the fieldset's content box, below the
    section rule, instead of straddling (and being struck through by) the
    top border. Everything after it clears the float. */
@@ -604,6 +625,28 @@ fieldset > legend ~ * { clear: both; }
    that appears there when the server has no OCR engine configured. */
 .trigger-note { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--text-faint); text-wrap: pretty; }
 
+/* A section that folds (Preprocess): the summary stands in for the legend
+   at the legend's size and weight, with the shared chevron in front and a
+   mono readout of the current settings after it, so a closed section still
+   says what it holds. */
+.fold-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  cursor: pointer;
+  list-style: none;
+  font: var(--fw-strong) var(--fs-base)/1.3 var(--font-ui);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+}
+.fold-summary::-webkit-details-marker { display: none; }
+.fold-summary::before { align-self: center; color: var(--text-dim); }
+.fold-summary:hover, .fold-summary:hover::before { color: var(--accent); }
+.fold-note { font: 400 var(--fs-xs)/1.3 var(--font-mono); color: var(--text-faint); }
+.fold[open] > .fold-summary { margin-bottom: var(--space-2); }
+.fold-summary + .field-row { border-top: none; }
+
 /* Label-left / field-right grid — replaces the old inline paragraph flow.
    The Pattern row stacks its label above the input via .field-row-wide
    since a regex benefits from the room a fixed label column can't give it. */
@@ -613,16 +656,21 @@ fieldset > legend ~ * { clear: both; }
   align-items: center;
   gap: var(--space-3);
   padding: 7px 0;
+  min-height: 51px; /* one pitch for every row: 7 + 36 (a control) + 7 + the hairline; checkbox and slider rows land on it too */
   border-top: 1px solid var(--border-hair);
 }
 /* The first row under a legend sits right below the fieldset's own rule;
    a second hairline there doubled it (<legend> is the first child, so
    :first-child alone never matched). */
-.field-row:first-child, fieldset > legend + .field-row { border-top: none; }
+.field-row:first-child, fieldset > legend + .field-row { border-top: none; min-height: 50px; }
 .field-row > label {
   color: var(--text-dim);
   font-size: var(--fs-sm);
 }
+/* Numbers and durations: a control sized to what goes in it ("30s",
+   "24.5"), not the whole column. Text, patterns and long selects keep the
+   full width. */
+.control-short { max-width: 10rem; }
 .field-row-wide { grid-template-columns: 1fr; }
 .field-row-wide > label { margin-bottom: 4px; }
 .field-row-wide input { font-family: var(--font-mono); }
@@ -632,26 +680,86 @@ fieldset > legend ~ * { clear: both; }
   gap: var(--space-5);
   grid-template-columns: none;
 }
-.range-field { display: flex; align-items: center; gap: 10px; }
-.range-field input[type="range"] { flex: 1; }
-.ppt-val { min-width: 34px; text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
+.range-field { display: flex; align-items: center; gap: 10px; min-height: 36px; max-width: 18rem; }
+.range-field input[type="range"] { flex: 1; margin: 0; }
+.ppt-val { min-width: 3ch; text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
 
-/* config.Save() merges into config.yaml (internal/config/merge.go), so
-   comments, key order and quoting survive a UI save; what yaml.v3 can't
-   round-trip — blank lines, end-of-line comment alignment — still changes
-   on the first real edit, so this note sits permanently near Save rather
-   than as a one-time dismissable warning. */
-.save-warning { margin-top: var(--space-4); font-size: var(--fs-sm); text-wrap: pretty; }
-
+/* The Save bar. It sticks to the bottom of the viewport while the form
+   runs past it (a long form on a laptop, any form on a phone), spanning
+   the panel edge to edge: the negative margins cancel the panel padding,
+   the radius nests inside the panel's corners. The note on its left says
+   where the save goes; config.Save() merges into that file
+   (internal/config/merge.go), keeping comments, key order and quoting,
+   and the README lists what yaml.v3 can't round-trip. */
 .form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: var(--space-3);
-  margin-top: var(--space-5);
-  padding-top: var(--space-4);
+  gap: var(--space-4);
+  margin: var(--space-5) calc(-1 * var(--panel-pad)) 0;
+  padding: var(--space-3) var(--panel-pad);
+  background: var(--surface);
   border-top: 1px solid var(--border);
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
 }
-.form-actions .btn { width: auto; }
+/* Restated at the panel rule's specificity: `.panel > :last-child` would
+   otherwise zero the bottom margin and leave the panel padding under the bar. */
+.panel > .form-actions { margin-bottom: calc(-1 * var(--panel-pad)); }
+.form-actions .btn { width: auto; flex: none; }
+/* The note is one line tall beside Save, whatever the file name and the
+   column width: it is a wrapping flex row clipped to its first line, so
+   the "· comments kept" half shows only while it fits on that line and
+   drops out (onto the clipped second line) the moment it would not —
+   never a stranded separator, never a second line. min-width: 0 lets the
+   note give way to the button instead of overflowing the panel's left
+   edge with a long file name. The title has the whole sentence. */
+.save-note {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.3em;
+  min-width: 0;
+  max-height: 1.4em;
+  overflow: hidden;
+  margin: 0 auto 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+/* The file name never breaks at a hyphen into a second line; a long name
+   that does not fit beside Save ends in an ellipsis instead. */
+.save-note-file {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.save-note-more { flex: none; white-space: nowrap; }
+.save-note code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+/* Under 1024px the form column (380-432px) or a phone leaves the note
+   ~150-210px: too little for "Writes to <file>" on one line with any
+   real file name, so "Writes to" and the name take a line each rather
+   than truncating the name, and the "comments kept" half is gone. Only a
+   name wider than the column ends in an ellipsis (the title has it whole). */
+@media (max-width: 1023px) {
+  .save-note { max-height: none; overflow: visible; }
+  .save-note-file { white-space: normal; }
+  .save-note code {
+    display: inline-block;
+    max-width: 100%;
+    vertical-align: bottom;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .save-note-more { display: none; }
+}
 
 /* ---- Index: page head, watch table, empty states ---------------------- */
 /* Title and one-line description on the left, the count and the jump to
@@ -1078,9 +1186,13 @@ fieldset > .field-error { margin-top: var(--space-2); }
   margin-top: 10px;
 }
 .detail-title-row h1 { margin: 0; font-family: var(--font-mono); }
-.source-line { margin: 6px 0 0; font-size: var(--fs-sm); word-break: break-all; }
+.source-line { margin: 6px 0 0; max-width: 72ch; font-size: var(--fs-sm); word-break: break-all; }
 
-/* ---- Detail two-column grid --------------------------------------------*/
+/* ---- Detail two-column grid ---------------------------------------------
+   Stage (snapshot, region actions, test result, Live) on the left, the
+   configuration form on the right. The bases plus the gap come to 872px,
+   so with main's padding the columns sit side by side from a 920px
+   viewport; the tablet block below stacks them under that. */
 .detail-grid {
   display: flex;
   align-items: flex-start;
@@ -1089,6 +1201,32 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 .col-stage  { flex: 1 1 460px; min-width: 0; }
 .col-config { flex: 1 1 380px; min-width: 0; }
+.col-heading { margin: 0 0 var(--space-3); }
+/* Side by side, the stage stays in view while the (longer) form scrolls.
+   --stage-gap is also app.js's cue that the column is pinned (unset in the
+   stacked layout): when the column outgrows the viewport (a test result,
+   the manual fields open on a short laptop) app.js turns it into a
+   sidebar — free to travel with the page, pinned by its bottom edge on
+   the way down and by its top edge on the way up — by setting position
+   and top inline. Nothing here switches the pin off; a pinned column
+   taller than the screen would keep its bottom out of reach, and a column
+   that flips between pinned and static jumps by its whole offset. */
+@media (min-width: 920px) {
+  .col-stage { --stage-gap: var(--space-4); position: sticky; top: var(--stage-gap); }
+}
+
+/* Under the stage: the drag hint and the Test button on one line; both act
+   on the region, so they live next to it, not at the end of the form. */
+.region-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3);
+}
+.region-actions .hint { margin: 0; flex: 1 1 16rem; max-width: 72ch; }
+.region-actions .btn { flex: none; margin-left: auto; }
 
 /* ---- Stage: snapshot + canvas overlay -----------------------------------
    #stage/#snap/#overlay geometry is load-bearing for app.js (canvas is
@@ -1439,8 +1577,11 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .strip figcaption.fired { color: var(--amber); }
 .strip figcaption.caption-none { font-family: var(--font-ui); font-style: italic; color: var(--text-faint); }
 
-/* ---- Responsive: tablet -------------------------------------------------*/
-@media (max-width: 860px) {
+/* ---- Responsive: tablet -------------------------------------------------
+   919px: the width just under where the two detail columns fit side by
+   side (see .detail-grid), so the stacked layout starts exactly where the
+   wrap would have. */
+@media (max-width: 919px) {
   .detail-grid { flex-direction: column; }
   .col-stage, .col-config { flex: 1 1 auto; width: 100%; }
 }
@@ -1455,7 +1596,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   .topbar { padding: var(--space-3) var(--space-4); }
   /* Not a bare .panel: that would beat .panel-table{padding:0} on order and
      indent the edge-to-edge card table. */
-  .panel:not(.panel-table) { padding: var(--space-4); }
+  .panel:not(.panel-table) { --panel-pad: var(--space-4); padding: var(--panel-pad); }
 
   /* Actions stay beside the title; the description runs full width. */
   .page-head { grid-template-areas: "title actions" "sub sub"; row-gap: 6px; column-gap: var(--space-3); }
@@ -1521,15 +1662,21 @@ fieldset > .field-error { margin-top: var(--space-2); }
      Create button. Reset it so the field sizes to its label+input again. */
   .field-grow { flex: 0 1 auto; }
 
-  .field-row { grid-template-columns: 1fr; }
+  /* Stacked label/control rows keep their natural height. */
+  .field-row, .field-row:first-child, fieldset > legend + .field-row { grid-template-columns: 1fr; min-height: 0; }
   .field-row > label { margin-bottom: 2px; }
+  /* A 44px-ish hit area for the fold's summary, without moving the rows. */
+  .fold-summary { padding: 12px 0; margin: -12px 0; }
+  .fold[open] > .fold-summary { margin-bottom: calc(var(--space-2) - 12px); }
+  .region-actions .btn { width: 100%; }
 
   /* iOS Safari zooms the page on focus for any control under 16px. */
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), select, textarea { font-size: 16px; }
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), select { height: 40px; }
 
-  .form-actions { flex-direction: column-reverse; }
-  .form-actions .btn { width: 100%; }
+  /* The Save bar stays a row: the (two-line, see .save-note) note on the
+     left, Save on the right, so the pinned bar costs one button's height. */
+  .form-actions { gap: var(--space-3); }
   .dialog-actions { flex-direction: column-reverse; }
   .dialog-actions .btn { width: 100%; }
   .field-name { flex: 0 1 auto; min-width: 0; }

@@ -10,9 +10,10 @@
   </div>
   <p class="source-line muted mono">{{.Watch.Source}}</p>
   {{/* The error in a sentence, with the full chain one click away. app.js
-       keeps both in step with the Live poll (data-summary/data-message). */}}
+       keeps both in step with the Live poll (data-summary/data-message).
+       The sentence is clamped to two lines; its title carries the whole. */}}
   <div id="status-detail" class="status-detail"{{if ne .Status.State "error"}} hidden{{end}}>
-    <p class="status-summary">{{shortErr .Status.Message}}</p>
+    <p class="status-summary" title="{{shortErr .Status.Message}}">{{shortErr .Status.Message}}</p>
     <details class="tech-detail">
       <summary>Technical detail</summary>
       <p class="tech-raw mono">{{.Status.Message}}</p>
@@ -39,6 +40,11 @@
   {{end}}
 </div>
 <div class="detail-grid">
+  {{/* The stage is the hero: the snapshot with the region drawn on it, and
+       right under it everything that acts on the region — the drag hint,
+       Test (a region action, not a form action; app.js posts the form's
+       fields from here), manual entry, and the test result. On wide
+       viewports app.js keeps this column pinned while the form scrolls. */}}
   <div class="col-stage">
     <div class="stage-frame">
       <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
@@ -47,7 +53,10 @@
         <div id="snap-error" class="snap-error" hidden></div>
       </div>
     </div>
-    <p class="hint muted">Drag on the image to select the region to watch.</p>
+    <div class="region-actions">
+      <p class="hint muted">Drag on the image to select the region to watch.</p>
+      <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
+    </div>
     {{with .Form.Err "region"}}<p id="err-region" class="field-error field-error-region">{{.}}</p>{{end}}
     <details class="region-manual">
       <summary>Set region manually</summary>
@@ -78,7 +87,8 @@
     </section>
   </div>
   <div class="col-config">
-    <form id="watchform" class="panel" method="post" action="{{watchURL .Watch.Name "/save"}}">
+    <h2 id="config-heading" class="col-heading">Configuration</h2>
+    <form id="watchform" class="panel" method="post" action="{{watchURL .Watch.Name "/save"}}" aria-labelledby="config-heading">
       <input type="hidden" name="x" value="{{.Watch.Region.X}}">
       <input type="hidden" name="y" value="{{.Watch.Region.Y}}">
       <input type="hidden" name="w" value="{{.Watch.Region.W}}">
@@ -136,7 +146,7 @@
         </div>
         <div class="field-row{{if .Form.Err "op"}} field-invalid{{end}}" id="row-op">
           <label for="f-op">Op</label>
-          <select id="f-op" name="op"{{with .Form.Err "op"}} aria-invalid="true" aria-describedby="err-op"{{end}}>
+          <select id="f-op" name="op" class="control-short"{{with .Form.Err "op"}} aria-invalid="true" aria-describedby="err-op"{{end}}>
             <option value="" {{if eq .Watch.Trigger.Op ""}}selected{{end}}>-</option>
             <option value="gt" {{if eq .Watch.Trigger.Op "gt"}}selected{{end}}>gt</option>
             <option value="lt" {{if eq .Watch.Trigger.Op "lt"}}selected{{end}}>lt</option>
@@ -145,59 +155,71 @@
         </div>
         <div class="field-row{{if .Form.Err "tthreshold"}} field-invalid{{end}}">
           <label for="f-threshold">Threshold</label>
-          <input id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Form.Val "tthreshold" (printf "%v" .Watch.Trigger.Threshold)}}"{{with .Form.Err "tthreshold"}} aria-invalid="true" aria-describedby="err-tthreshold"{{end}} title="pixel_change: percent of the region that must change, 0-100. numeric: the compare value — can be negative (e.g. a sub-zero reading).">
+          <input class="control-short" id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Form.Val "tthreshold" (printf "%v" .Watch.Trigger.Threshold)}}"{{with .Form.Err "tthreshold"}} aria-invalid="true" aria-describedby="err-tthreshold"{{end}} title="pixel_change: percent of the region that must change, 0-100. numeric: the compare value — can be negative (e.g. a sub-zero reading).">
           {{with .Form.Err "tthreshold"}}<p id="err-tthreshold" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "confirm"}} field-invalid{{end}}">
           <label for="f-confirm">Confirm</label>
-          <input id="f-confirm" name="confirm" type="number" min="1" step="1" value="{{.Form.Val "confirm" (printf "%d" .Watch.Trigger.Confirm)}}"{{with .Form.Err "confirm"}} aria-invalid="true" aria-describedby="err-confirm"{{end}} title="Consecutive identical readings required before a state is believed (must be at least 1).">
+          <input class="control-short" id="f-confirm" name="confirm" type="number" min="1" step="1" value="{{.Form.Val "confirm" (printf "%d" .Watch.Trigger.Confirm)}}"{{with .Form.Err "confirm"}} aria-invalid="true" aria-describedby="err-confirm"{{end}} title="Consecutive identical readings required before a state is believed (must be at least 1).">
           {{with .Form.Err "confirm"}}<p id="err-confirm" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}">
           <label for="f-cooldown">Cooldown</label>
-          <input id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true" aria-describedby="err-cooldown"{{end}}>
+          <input class="control-short" id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true" aria-describedby="err-cooldown"{{end}}>
           {{with .Form.Err "cooldown"}}<p id="err-cooldown" class="field-error">{{.}}</p>{{end}}
         </div>
+      </fieldset>
+      {{/* Watch-level timing (config.Watch, not the trigger): how often the
+           camera is read and when a failing source counts as down. */}}
+      <fieldset id="fs-polling">
+        <legend>Polling</legend>
         <div class="field-row{{if .Form.Err "interval"}} field-invalid{{end}}">
           <label for="f-interval">Interval</label>
-          <input id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true" aria-describedby="err-interval"{{end}}>
+          <input class="control-short" id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true" aria-describedby="err-interval"{{end}}>
           {{with .Form.Err "interval"}}<p id="err-interval" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "max_interval"}} field-invalid{{end}}">
           <label for="f-maxinterval">Max interval</label>
-          <input id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true" aria-describedby="err-max-interval"{{end}}>
+          <input class="control-short" id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true" aria-describedby="err-max-interval"{{end}}>
           {{with .Form.Err "max_interval"}}<p id="err-max-interval" class="field-error">{{.}}</p>{{end}}
         </div>
         <div class="field-row{{if .Form.Err "health_after"}} field-invalid{{end}}">
           <label for="f-health">Health after</label>
-          <input id="f-health" name="health_after" type="number" min="1" step="1" value="{{.Form.Val "health_after" (printf "%d" .Watch.HealthAfter)}}"{{with .Form.Err "health_after"}} aria-invalid="true" aria-describedby="err-health-after"{{end}}>
+          <input class="control-short" id="f-health" name="health_after" type="number" min="1" step="1" value="{{.Form.Val "health_after" (printf "%d" .Watch.HealthAfter)}}"{{with .Form.Err "health_after"}} aria-invalid="true" aria-describedby="err-health-after"{{end}} title="Consecutive failed reads before the watch counts as down.">
           {{with .Form.Err "health_after"}}<p id="err-health-after" class="field-error">{{.}}</p>{{end}}
         </div>
       </fieldset>
-      <fieldset id="fs-preprocess">
-        <legend>Preprocess <span class="legend-note">OCR only</span></legend>
-        <div class="field-row field-row-check">
-          <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> Grayscale</label>
-          <label class="checkbox"><input type="checkbox" name="pp_invert" {{if .Watch.Preprocess.Invert}}checked{{end}}> Invert</label>
-        </div>
-        <div class="field-row{{if .Form.Err "pp_threshold"}} field-invalid{{end}}">
-          <label for="f-binarize">Binarize</label>
-          <div class="range-field">
-            <input id="f-binarize" type="range" name="pp_threshold" min="0" max="255" value="{{.Watch.Preprocess.Threshold}}"{{with .Form.Err "pp_threshold"}} aria-invalid="true" aria-describedby="err-pp-threshold"{{end}}>
-            <span id="ppt-val" class="mono ppt-val"></span>
+      {{/* Preprocess folds away while every option is at its default (the
+           summary beside the title says "off"); a tuned watch, or a
+           rejected save that names one of these fields, opens it so nothing
+           configured is hidden. The fieldset keeps the id app.js hides for
+           pixel_change, which reads no pixels through OCR. */}}
+      <fieldset id="fs-preprocess" class="fs-fold" aria-labelledby="pp-label">
+        <details class="fold"{{if or (ppSet .Watch.Preprocess) (.Form.Err "pp_threshold") (.Form.Err "pp_upscale")}} open{{end}}>
+          <summary class="fold-summary"><span id="pp-label" class="fold-title">Preprocess</span><span id="pp-summary" class="fold-note mono">{{ppSummary .Watch.Preprocess}}</span></summary>
+          <div class="field-row field-row-check">
+            <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> Grayscale</label>
+            <label class="checkbox"><input type="checkbox" name="pp_invert" {{if .Watch.Preprocess.Invert}}checked{{end}}> Invert</label>
           </div>
-          {{with .Form.Err "pp_threshold"}}<p id="err-pp-threshold" class="field-error">{{.}}</p>{{end}}
-        </div>
-        <div class="field-row{{if .Form.Err "pp_upscale"}} field-invalid{{end}}">
-          <label for="f-upscale">Upscale</label>
-          <select id="f-upscale" name="pp_upscale"{{with .Form.Err "pp_upscale"}} aria-invalid="true" aria-describedby="err-pp-upscale"{{end}}>
-            <option value="0" {{if lt .Watch.Preprocess.Upscale 2}}selected{{end}}>off</option>
-            <option value="2" {{if eq .Watch.Preprocess.Upscale 2}}selected{{end}}>2x</option>
-            <option value="3" {{if eq .Watch.Preprocess.Upscale 3}}selected{{end}}>3x</option>
-            <option value="4" {{if eq .Watch.Preprocess.Upscale 4}}selected{{end}}>4x</option>
-          </select>
-          {{with .Form.Err "pp_upscale"}}<p id="err-pp-upscale" class="field-error">{{.}}</p>{{end}}
-        </div>
+          <div class="field-row{{if .Form.Err "pp_threshold"}} field-invalid{{end}}">
+            <label for="f-binarize">Binarize</label>
+            <div class="range-field">
+              <input id="f-binarize" type="range" name="pp_threshold" min="0" max="255" value="{{.Watch.Preprocess.Threshold}}"{{with .Form.Err "pp_threshold"}} aria-invalid="true" aria-describedby="err-pp-threshold"{{end}}>
+              <span id="ppt-val" class="mono ppt-val"></span>
+            </div>
+            {{with .Form.Err "pp_threshold"}}<p id="err-pp-threshold" class="field-error">{{.}}</p>{{end}}
+          </div>
+          <div class="field-row{{if .Form.Err "pp_upscale"}} field-invalid{{end}}">
+            <label for="f-upscale">Upscale</label>
+            <select id="f-upscale" name="pp_upscale" class="control-short"{{with .Form.Err "pp_upscale"}} aria-invalid="true" aria-describedby="err-pp-upscale"{{end}}>
+              <option value="0" {{if lt .Watch.Preprocess.Upscale 2}}selected{{end}}>off</option>
+              <option value="2" {{if eq .Watch.Preprocess.Upscale 2}}selected{{end}}>2x</option>
+              <option value="3" {{if eq .Watch.Preprocess.Upscale 3}}selected{{end}}>3x</option>
+              <option value="4" {{if eq .Watch.Preprocess.Upscale 4}}selected{{end}}>4x</option>
+            </select>
+            {{with .Form.Err "pp_upscale"}}<p id="err-pp-upscale" class="field-error">{{.}}</p>{{end}}
+          </div>
+        </details>
       </fieldset>
       <fieldset>
         <legend>Notify <span class="legend-note">one shoutrrr URL per line</span></legend>
@@ -206,9 +228,12 @@
 {{end}}</textarea>
         {{with .Form.Err "notify"}}<p id="err-notify" class="field-error">{{.}}</p>{{end}}
       </fieldset>
-      <p class="save-warning muted">Saving merges this watch into {{.ConfigFile}} — comments, key order and quoting are kept; blank lines may be collapsed and end-of-line comments lose their alignment.</p>
+      {{/* The bar stays at the bottom of the viewport while the form is
+           longer than the screen, so Save is always one click away. The
+           note says where the save goes; the README covers what YAML can't
+           round-trip (blank lines, end-of-line comment alignment). */}}
       <div class="form-actions">
-        <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
+        <p class="save-note" title="Merged into {{.ConfigFile}}: comments, key order and quoting are kept. See the README for the few things YAML can't round-trip."><span class="save-note-file">Writes to <code>{{.ConfigFile}}</code></span><span class="save-note-more">· comments kept</span></p>
         <button type="submit" class="btn btn-primary">Save &amp; restart watch</button>
       </div>
     </form>

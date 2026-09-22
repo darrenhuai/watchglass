@@ -115,7 +115,7 @@ func TestCopyNamesTheConfigFileInUse(t *testing.T) {
 	if !strings.Contains(body, "Saved to cams.yml and restarted the watch") {
 		t.Errorf("flash should name cams.yml; body:\n%s", body)
 	}
-	if !strings.Contains(body, "Saving merges this watch into cams.yml") {
+	if !strings.Contains(body, "Writes to <code>cams.yml</code>") || !strings.Contains(body, `title="Merged into cams.yml:`) {
 		t.Errorf("save note should name cams.yml; body:\n%s", body)
 	}
 	if strings.Contains(body, "config.yaml") {

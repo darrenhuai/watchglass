@@ -798,7 +798,7 @@ func TestDetailAndLiveShowErrorStatus(t *testing.T) {
 	_, body := get(t, s.Handler(), "/watch/printer")
 	// The header leads with the summary and keeps the full chain one
 	// disclosure away, once.
-	for _, want := range []string{"status-error", `<p class="status-summary">Connection refused</p>`,
+	for _, want := range []string{"status-error", `<p class="status-summary" title="Connection refused">Connection refused</p>`,
 		`<p class="tech-raw mono">stream unreachable: refused</p>`, "<title>[error] printer · watchglass</title>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail page missing %q; body:\n%s", want, body)
