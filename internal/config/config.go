@@ -158,7 +158,7 @@ var validTypes = map[string]bool{
 // validEngines are the Watch.Engine spellings; "" is tesseract.
 var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true, "rapidocr": true}
 
-// validWatchName rejects names that would make a watch unaddressable
+// ValidWatchName rejects names that would make a watch unaddressable
 // through the web UI's own routes (/watch/{name}, /watch/{name}/save, ...):
 // '/' breaks path segmentation, '?' and '#' truncate the path at the query
 // string / fragment, and control characters (including bare newlines) are
@@ -170,8 +170,9 @@ var validEngines = map[string]bool{"": true, "tesseract": true, "sevenseg": true
 // rejected outright rather than silently trimmed, since the create handler
 // already trims before this runs — any survives-to-here whitespace means a
 // caller (e.g. a saved config.yaml hand-edited or written by another tool)
-// bypassed that.
-func validWatchName(name string) error {
+// bypassed that. Exported so the web UI's create handler can report a bad
+// name and a bad source together, before Validate stops at the first one.
+func ValidWatchName(name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -198,27 +199,37 @@ func nonFinite(v float64) bool {
 }
 
 // SourceKind classifies a watch's source URL into the source tier that can
-// read it: "http" for plain snapshot URLs (pure Go, no dependencies) or
-// "ffmpeg" for anything needing a decoder subprocess.
+// read it (see sourcePrefixes).
+//
+// A bare scheme ("http://", "v4l2:") is rejected: nothing could ever be
+// read from it, and the web UI's add form checks the same rule in the
+// browser (index.html's source pattern), so the two must agree.
 func SourceKind(source string) (string, error) {
-	switch {
-	case strings.HasPrefix(source, "rtsp://"), strings.HasPrefix(source, "rtsps://"):
-		return "ffmpeg", nil
-	case strings.HasPrefix(source, "http://"), strings.HasPrefix(source, "https://"):
-		return "http", nil
-	case strings.HasPrefix(source, "ffmpeg:"):
-		// Duplicated in source.ffmpegInputArgs (config cannot import source
-		// without an import cycle) — keep both checks in sync.
-		if strings.TrimSpace(strings.TrimPrefix(source, "ffmpeg:")) == "" {
-			return "", fmt.Errorf("ffmpeg: source has no arguments")
+	for _, p := range sourcePrefixes {
+		if !strings.HasPrefix(source, p.prefix) {
+			continue
 		}
-		return "ffmpeg", nil
-	case strings.HasPrefix(source, "v4l2:"),
-		strings.HasPrefix(source, "dshow:"):
-		return "ffmpeg", nil
+		if strings.TrimSpace(strings.TrimPrefix(source, p.prefix)) == "" {
+			if p.prefix == "ffmpeg:" {
+				// Duplicated in source.ffmpegInputArgs (config cannot import
+				// source without an import cycle) — keep both checks in sync.
+				return "", fmt.Errorf("ffmpeg: source has no arguments")
+			}
+			return "", fmt.Errorf("source %q has nothing after %s", source, p.prefix)
+		}
+		return p.kind, nil
 	}
 	return "", fmt.Errorf("unsupported source %q: expected one of "+
 		"http:// https:// rtsp:// rtsps:// v4l2: dshow: ffmpeg:", source)
+}
+
+// sourcePrefixes are the source spellings SourceKind accepts, with the
+// tier that reads each: "http" for plain snapshot URLs (pure Go, no
+// dependencies) or "ffmpeg" for anything needing a decoder subprocess.
+var sourcePrefixes = []struct{ prefix, kind string }{
+	{"rtsp://", "ffmpeg"}, {"rtsps://", "ffmpeg"},
+	{"http://", "http"}, {"https://", "http"},
+	{"ffmpeg:", "ffmpeg"}, {"v4l2:", "ffmpeg"}, {"dshow:", "ffmpeg"},
 }
 
 // Validate applies defaults (interval 5s, confirm 3) and validates every
@@ -260,7 +271,7 @@ func (c *Config) Validate() error {
 	seen := map[string]bool{}
 	for i := range c.Watches {
 		w := &c.Watches[i]
-		if err := validWatchName(w.Name); err != nil {
+		if err := ValidWatchName(w.Name); err != nil {
 			return fmt.Errorf("watch %d: %w", i, err)
 		}
 		if seen[w.Name] {

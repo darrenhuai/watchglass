@@ -839,7 +839,7 @@ func TestCreateRejectionRendersAppChrome(t *testing.T) {
 	// typed and the problem sits under the field it concerns.
 	for _, want := range []string{"<title>Watches · watchglass</title>", `class="watch-table"`,
 		`value="printer"`, `value="http://x/snap.jpg"`,
-		`aria-invalid="true" aria-describedby="err-name" autofocus`,
+		`aria-describedby="err-name hint-name" aria-invalid="true" autofocus`,
 		`<p id="err-name" class="field-error">A watch named &#34;printer&#34; already exists.</p>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rejected create missing %q; body:\n%s", want, body)
@@ -870,6 +870,38 @@ func TestCreateRejectionMapsEachFieldAndKeepsValues(t *testing.T) {
 		}
 		if !strings.Contains(body, `<p id="err-`+c.field+`" class="field-error">`+c.want) {
 			t.Errorf("%q/%q: want %s error %q; body:\n%s", c.name, c.source, c.field, c.want, body)
+		}
+	}
+	if got, _ := config.Load(cfgPath); len(got.Watches) != 1 {
+		t.Errorf("rejected creates must not write: watches = %d, want 1", len(got.Watches))
+	}
+}
+
+// A bad name and a bad source are reported together: the user fixes both
+// in one pass instead of learning about the source once the name is fine.
+// Focus still lands on the first field with a problem.
+func TestCreateRejectionReportsBothFields(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	cases := []struct{ name, source, wantName, wantSource string }{
+		{"   ", "notaurl", "Enter a name for the watch.", "That source isn&#39;t supported."},
+		{"kitchen/oven", "ffmpeg:", "Names can&#39;t contain /, ?, # or control characters.", "An ffmpeg: source needs its input arguments"},
+		{"printer", "http://", "A watch named &#34;printer&#34; already exists.", "The source needs an address after the scheme"},
+		{"..", "", "A name can&#39;t be just &#34;.&#34; or &#34;..&#34;", "Enter the camera&#39;s source URL."},
+	}
+	for _, c := range cases {
+		resp, body := postForm(t, s.Handler(), "/watch/new", url.Values{"name": {c.name}, "source": {c.source}})
+		if resp.StatusCode != 400 {
+			t.Errorf("%q/%q: status = %d, want 400", c.name, c.source, resp.StatusCode)
+		}
+		if !strings.Contains(body, `<p id="err-name" class="field-error">`+c.wantName) {
+			t.Errorf("%q/%q: want name error %q; body:\n%s", c.name, c.source, c.wantName, body)
+		}
+		if !strings.Contains(body, `<p id="err-source" class="field-error">`+c.wantSource) {
+			t.Errorf("%q/%q: want source error %q; body:\n%s", c.name, c.source, c.wantSource, body)
+		}
+		if !strings.Contains(body, `aria-describedby="err-name hint-name" aria-invalid="true" autofocus`) ||
+			!strings.Contains(body, `aria-describedby="err-source hint-source" aria-invalid="true">`) {
+			t.Errorf("%q/%q: focus should land on the name field only; body:\n%s", c.name, c.source, body)
 		}
 	}
 	if got, _ := config.Load(cfgPath); len(got.Watches) != 1 {
@@ -1848,7 +1880,7 @@ func TestChromeHasNoStaticStatusLEDAndSaveIsAButton(t *testing.T) {
 	s, _ := newTestServer(t)
 	for _, path := range []string{"/", "/watch/printer"} {
 		_, body := get(t, s.Handler(), path)
-		head := body[:strings.Index(body, "<main>")]
+		head := body[:strings.Index(body, `<main id="main"`)]
 		if strings.Contains(head, "led") || strings.Contains(head, "local instrument") {
 			t.Errorf("%s: topbar should carry no status LED; head:\n%s", path, head)
 		}

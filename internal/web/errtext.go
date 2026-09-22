@@ -192,6 +192,7 @@ var configFieldErrors = []struct {
 	{"notify: empty URL", "notify", "Remove the empty notify line."},
 	{"source is required", "source", "Enter the camera's source URL."},
 	{"source has no arguments", "source", "An ffmpeg: source needs its input arguments after the colon, for example ffmpeg:-i rtsp://cam/stream."},
+	{"has nothing after", "source", "The source needs an address after the scheme, for example http://camera/snapshot.jpg or rtsp://camera/stream."},
 	{"name is required", "name", "Enter a name for the watch."},
 	{"leading or trailing whitespace", "name", "The name can't start or end with a space."},
 	{"must not contain '/', '?', '#', or control characters", "name", "Names can't contain /, ?, # or control characters."},

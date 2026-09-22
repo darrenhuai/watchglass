@@ -1,31 +1,39 @@
 {{template "head" .}}
 <div class="page-head">
-  <div>
-    <h1>Watches</h1>
-    <p class="muted">Camera-fed regions under observation.</p>
+  <h1>Watches</h1>
+  <p class="muted page-sub">Each watch reads one region of a camera frame and alerts you when it changes.</p>
+  {{if len .Rows}}
+  <div class="page-head-actions">
+    <span class="count-chip mono" data-count>{{len .Rows}} {{if eq (len .Rows) 1}}watch{{else}}watches{{end}}</span>
+    <a class="btn btn-outline" href="#add-heading" data-jump-add>Add watch</a>
   </div>
-  <span class="count-chip mono">{{len .Rows}} total</span>
+  {{end}}
 </div>
 {{template "flash" .Flash}}
-<div class="panel panel-table">
 {{if len .Rows}}
-<table class="watch-table">
-  <thead>
-    <tr>
-      <th>Name</th>
-      <th>Trigger</th>
-      <th>Interval</th>
-      <th>Last reading</th>
-      <th class="col-actions"><span class="sr-only">Actions</span></th>
+{{/* index.js refreshes the rows in place every few seconds (a fetch of
+     this same page); it also shows .index-stale when that keeps failing. */}}
+<p class="index-stale" role="status" hidden><span class="led led-stopped" aria-hidden="true"></span>Can't reach watchglass. The readings below may be out of date.</p>
+<div class="panel panel-table">
+{{/* Explicit roles: the phone layout makes these display:grid/block, and
+     WebKit drops the implicit table semantics when that happens. */}}
+<table class="watch-table" id="watch-rows" role="table" data-src="{{u "/"}}">
+  <thead role="rowgroup">
+    <tr role="row">
+      <th role="columnheader" class="col-name">Name</th>
+      <th role="columnheader" class="col-trigger">Trigger</th>
+      <th role="columnheader" class="col-interval">Interval</th>
+      <th role="columnheader" class="col-reading">Last reading</th>
+      <th role="columnheader" class="col-actions"><span class="sr-only">Actions</span></th>
     </tr>
   </thead>
-  <tbody>
+  <tbody role="rowgroup">
   {{range .Rows}}
-    <tr>
-      <td class="cell-name" data-label="Name"><a href="{{watchURL .Watch.Name ""}}">{{.Watch.Name}}</a></td>
-      <td data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
-      <td class="mono col-interval" data-label="Interval">{{dur .Watch.Interval}}</td>
-      <td data-label="Last reading">
+    <tr role="row" data-name="{{.Watch.Name}}">
+      <td role="cell" class="cell-name" data-label="Name"><a href="{{watchURL .Watch.Name ""}}">{{.Watch.Name}}</a></td>
+      <td role="cell" class="col-trigger" data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
+      <td role="cell" class="mono col-interval" data-label="Interval">{{dur .Watch.Interval}}</td>
+      <td role="cell" class="cell-reading" data-label="Last reading">
         <span class="reading-wrap{{if eq .Status.State "error"}} reading-wrap-error{{end}}">
         {{if eq .Status.State "stopped"}}
           <span class="led led-stopped" aria-hidden="true"></span>
@@ -43,27 +51,63 @@
         {{end}}
         </span>
       </td>
-      <td class="col-actions">
-        <form method="post" action="{{watchURL .Watch.Name "/delete"}}" onsubmit="return confirm('Delete watch {{.Watch.Name}}?')">
-          <button type="submit" class="btn btn-ghost btn-danger">Delete</button>
+      <td role="cell" class="col-actions">
+        {{/* index.js asks in a styled dialog; the inline confirm() is the
+             fallback when that script didn't load. */}}
+        <form method="post" action="{{watchURL .Watch.Name "/delete"}}" class="delete-form" onsubmit="return confirm('Delete watch {{.Watch.Name}}? It stops now, is removed from {{$.ConfigFile}}, and its reading history is discarded.')">
+          <button type="submit" class="btn btn-ghost btn-danger">Delete<span class="sr-only"> watch {{.Watch.Name}}</span></button>
         </form>
       </td>
     </tr>
   {{end}}
   </tbody>
 </table>
+</div>
+<h2 id="add-heading" tabindex="-1">Add a watch</h2>
+<div class="panel">{{template "addform" .}}</div>
+<dialog class="dialog" id="confirm-delete" aria-labelledby="confirm-delete-title" aria-describedby="confirm-delete-text">
+  <form method="dialog">
+    <h2 id="confirm-delete-title" class="dialog-title">Delete <span class="mono" data-confirm-name></span>?</h2>
+    <p id="confirm-delete-text" class="dialog-text">It stops now, is removed from {{.ConfigFile}}, and its reading history is discarded. This can't be undone.</p>
+    <div class="dialog-actions">
+      <button type="submit" value="cancel" class="btn btn-outline" autofocus>Cancel</button>
+      <button type="submit" value="delete" class="btn btn-danger-solid">Delete watch</button>
+    </div>
+  </form>
+</dialog>
 {{else}}
-<div class="empty-state">
-  <p>No watches yet.</p>
-  <p class="muted">Point a camera at a screen and add one below.</p>
-</div>
+{{/* First run: the empty state is the add form, with the three steps a
+     watch takes spelled out above it. */}}
+{{/* data-src: index.js polls this page from the empty state too, so a
+     watch created in another tab (or by editing the config file) shows up
+     without a manual reload. */}}
+<section class="panel empty-state" aria-labelledby="add-heading" data-src="{{u "/"}}">
+  <span class="brand-mark empty-mark" aria-hidden="true"></span>
+  <h2 id="add-heading" class="empty-title" tabindex="-1">Add your first watch</h2>
+  <p class="empty-lede">There are no watches yet. Setting one up takes three steps:</p>
+  <ol class="empty-steps">
+    <li>Name it and give the camera's snapshot or stream URL below.</li>
+    <li>On the next page, drag a rectangle over the part of the screen to watch.</li>
+    <li>Choose what should trigger an alert, then save.</li>
+  </ol>
+  {{template "addform" .}}
+</section>
 {{end}}
-</div>
-<h2 id="add-heading">Add a watch</h2>
-{{/* A rejected create comes back here: the typed values stay, the problem
-     sits under its field, and focus goes to the first field to fix. */}}
+<script src="{{u "/static/index.js"}}" defer></script>
+{{template "foot" .}}
+
+{{/* The add form, rendered once per page: inside its own panel under the
+     list, or inside the empty state. A rejected create comes back here:
+     the typed values stay, the problem sits under its field, and focus goes
+     to the first field to fix. The pattern attributes mirror the server's
+     rules (config.validWatchName, config.SourceKind; the name and source are
+     trimmed first), so the browser flags a bad value before the round trip.
+     The name pattern spells out "not just . or .." by length (1, 2, 3+ chars)
+     instead of a lookahead, so the Go test suite can compile it with RE2 and
+     prove it agrees with the server. */}}
+{{define "addform"}}
 {{$nameErr := .Form.Err "name"}}{{$srcErr := .Form.Err "source"}}{{$otherErr := .Form.Err ""}}
-<form class="panel form-inline-add{{if .Form.Errors}} has-errors{{end}}" method="post" action="{{u "/watch/new"}}" aria-labelledby="add-heading">
+<form class="form-inline-add{{if .Form.Errors}} has-errors{{end}}" method="post" action="{{u "/watch/new"}}" aria-labelledby="add-heading">
   {{with .Form.Failure}}
   <div class="form-alert form-alert-inline" role="alert" tabindex="-1" autofocus>
     <p class="form-alert-title">{{.Title}}</p>
@@ -75,16 +119,18 @@
   </div>
   {{end}}
   {{with $otherErr}}<p class="form-error" role="alert">{{.}}</p>{{end}}
-  <div class="field{{if $nameErr}} field-invalid{{end}}">
+  <div class="field field-name{{if $nameErr}} field-invalid{{end}}">
     <label for="new-name">Name</label>
-    <input id="new-name" name="name" placeholder="printer-lcd" required value="{{.Form.Val "name" ""}}" spellcheck="false"{{if $nameErr}} aria-invalid="true" aria-describedby="err-name" autofocus{{end}}>
+    <input id="new-name" name="name" placeholder="printer-lcd" required value="{{.Form.Val "name" ""}}" spellcheck="false" autocapitalize="off" pattern="\s*(?:[^\s\/?#.\p{Cc}]|[^\s\/?#.\p{Cc}][^\s\/?#\p{Cc}]|\.[^\s\/?#.\p{Cc}]|[^\s\/?#\p{Cc}][^\/?#\p{Cc}]+[^\s\/?#\p{Cc}])\s*" title="A name can't contain / ? or #, and can't be just &quot;.&quot; or &quot;..&quot;." aria-describedby="{{if $nameErr}}err-name {{end}}hint-name"{{if $nameErr}} aria-invalid="true" autofocus{{end}}>
     {{with $nameErr}}<p id="err-name" class="field-error">{{.}}</p>{{end}}
+    <p id="hint-name" class="field-hint">Part of the watch's URL, so no / ? or #.</p>
   </div>
   <div class="field field-grow{{if $srcErr}} field-invalid{{end}}">
     <label for="new-source">Source URL</label>
-    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg" required value="{{.Form.Val "source" ""}}" spellcheck="false"{{if $srcErr}} aria-invalid="true" aria-describedby="err-source"{{if not $nameErr}} autofocus{{end}}{{end}}>
+    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg or rtsp://…" required value="{{.Form.Val "source" ""}}" spellcheck="false" autocapitalize="off" inputmode="url" pattern="\s*(?:(?:https?|rtsps?):\/\/|(?:v4l2|dshow|ffmpeg):)\s*\S.*" title="Start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:." aria-describedby="{{if $srcErr}}err-source {{end}}hint-source"{{if $srcErr}} aria-invalid="true"{{if not $nameErr}} autofocus{{end}}{{end}}>
     {{with $srcErr}}<p id="err-source" class="field-error">{{.}}</p>{{end}}
+    <p id="hint-source" class="field-hint">An HTTP(S) snapshot, an <span class="mono">rtsp://</span> stream, a <span class="mono">v4l2:</span> or <span class="mono">dshow:</span> device, or <span class="mono">ffmpeg:</span> input arguments.</p>
   </div>
   <button type="submit" class="btn btn-primary">Create</button>
 </form>
-{{template "foot" .}}
+{{end}}

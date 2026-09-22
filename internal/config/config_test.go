@@ -222,10 +222,15 @@ func TestSourceKind(t *testing.T) {
 			t.Errorf("SourceKind(%q) = %q, want %q", src, got, want)
 		}
 	}
-	for _, bad := range []string{"", "cam.local/snap.jpg", "ftp://cam/x", "rtsp", "file:///tmp/x.png", "ffmpeg:", "ffmpeg:   "} {
+	for _, bad := range []string{"", "cam.local/snap.jpg", "ftp://cam/x", "rtsp", "file:///tmp/x.png", "ffmpeg:", "ffmpeg:   ",
+		// A bare scheme with nothing to read from.
+		"http://", "https://", "rtsp://", "rtsps:// ", "v4l2:", "dshow:  "} {
 		if _, err := SourceKind(bad); err == nil {
 			t.Errorf("SourceKind(%q): expected error", bad)
 		}
+	}
+	if _, err := SourceKind("http://"); err == nil || !strings.Contains(err.Error(), `source "http://" has nothing after http://`) {
+		t.Errorf("a bare scheme should say so, got %v", err)
 	}
 }
 

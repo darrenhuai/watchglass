@@ -32,7 +32,7 @@ img { max-width: 100%; }
   --bg-inset:      #08090b;
   --surface:       #13161b;
   --surface-2:     #181c22;
-  --surface-hover: #1a1f26;
+  --surface-hover: #1d232b; /* ~1.2:1 on --surface: a row hover you can actually see */
   --border:        #22262d;
   --border-strong: #2d323b;
   --border-hair:   rgba(255, 255, 255, 0.06);
@@ -175,6 +175,25 @@ main {
 /* A panel's last paragraph would otherwise add its 12px bottom margin on
    top of the panel padding (24px top vs ~36px bottom). */
 .panel > :last-child, .panel p:last-child { margin-bottom: 0; }
+
+/* Off-screen until focused: the first Tab stop on every page. */
+.skip-link {
+  position: absolute;
+  left: var(--space-4);
+  top: -48px;
+  z-index: 10;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-label);
+  text-decoration: none;
+}
+.skip-link:focus { top: var(--space-2); }
+/* The skip target; programmatic focus there needs no ring. */
+main:focus { outline: none; }
 
 /* ---- Header / topbar ---------------------------------------------------*/
 .topbar {
@@ -355,6 +374,9 @@ button, input[type="submit"], input[type="button"] {
     transform 80ms var(--ease-out);
 }
 .btn:active { transform: translateY(1px); }
+/* Anchors a visually hidden suffix (Delete's "watch <name>") to the button
+   instead of letting it escape to a scroll container or the page. */
+.btn { position: relative; }
 
 .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn-primary:hover {
@@ -375,15 +397,23 @@ button, input[type="submit"], input[type="button"] {
 
 .btn-ghost {
   background: transparent; border-color: transparent; color: var(--text-dim);
-  height: auto; padding: 6px 10px;
+  height: auto; min-height: 30px; padding: 7px 12px;
 }
 .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
 .btn-ghost:active { background: var(--surface-hover); }
-/* Restated after the ghost rules: same specificity, so order decides, and a
-   grey ghost hover/press must never win over Delete's red. */
-.btn-danger { color: var(--red); }
-.btn-danger:hover { background: var(--red-dim); border-color: var(--red-a35); color: var(--red); }
-.btn-danger:active { background: var(--red-a30); }
+/* Delete is quiet until it is the thing being pointed at: red at rest on
+   every row would equal the one real error row. It turns red on row hover,
+   its own hover/focus and press; the confirmation guards the rest.
+   Restated after the ghost rules: same specificity, so order decides. */
+.btn-danger { color: var(--text-faint); }
+.watch-table tbody tr:hover .btn-danger, .btn-danger:focus-visible { color: var(--red); }
+.btn-danger:hover { background: var(--red-a10); border-color: var(--red-a35); color: var(--red); }
+.btn-danger:active { background: var(--red-a30); color: var(--red); }
+/* The committing button of a destructive confirmation. */
+.btn-danger-solid { background: var(--red); border-color: var(--red); color: #1a0808; }
+.btn-danger-solid:hover { background: #ff8484; border-color: #ff8484; color: #1a0808; }
+.btn-danger-solid:active { background: #f05a5a; border-color: #f05a5a; }
+.btn-danger-solid:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
 .btn:disabled, .btn[aria-disabled="true"] {
   background: var(--surface-2);
@@ -393,6 +423,29 @@ button, input[type="submit"], input[type="button"] {
   transform: none;
   cursor: not-allowed;
 }
+/* Working, not unavailable: a primary button that is busy (index.js sets
+   aria-busy and then disables it while the POST runs) keeps its mint and
+   gains a ring so "Creating…" reads as progress, not as a control that was
+   never available. The ring stops turning under reduced motion and stays a
+   static mark. */
+.btn-primary[aria-busy="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  opacity: 0.72;
+  cursor: progress;
+  box-shadow: none;
+}
+.btn-primary[aria-busy="true"]::before {
+  content: "";
+  flex: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: btn-spin 700ms linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
 
 /* ---- Form controls ---------------------------------------------------- */
 input, select, textarea {
@@ -513,6 +566,10 @@ input[type="range"]:focus-visible::-moz-range-thumb {
   box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
 }
 @media (pointer: coarse) {
+  /* Touch: ghost buttons (Delete, dismiss) get a full 44px target on
+     tablets too, not only in the phone layout. */
+  .btn-ghost { min-height: 44px; padding: 12px 14px; }
+  .test-dismiss { min-width: 44px; }
   input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -9px; }
   input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
 }
@@ -597,14 +654,22 @@ fieldset > legend ~ * { clear: both; }
 .form-actions .btn { width: auto; }
 
 /* ---- Index: page head, watch table, empty states ---------------------- */
+/* Title and one-line description on the left, the count and the jump to
+   the add form on the right, centred on the text block. A grid rather than
+   two flex columns so the phone layout can keep the actions beside the
+   title and let the description run full width underneath. */
 .page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--space-4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title actions" "sub actions";
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
   margin-bottom: var(--space-4);
 }
-.page-head h1 { margin-bottom: 4px; }
+.page-head h1 { grid-area: title; margin: 0; }
+.page-sub { grid-area: sub; margin: 0; max-width: 70ch; text-wrap: pretty; }
+.page-head-actions { grid-area: actions; display: flex; align-items: center; gap: var(--space-3); }
 .count-chip {
   font-size: var(--fs-xs);
   color: var(--text-dim);
@@ -612,14 +677,37 @@ fieldset > legend ~ * { clear: both; }
   border-radius: 100px;
   padding: 3px 10px;
   flex: none;
+  white-space: nowrap;
 }
+/* The add form's heading is a jump target (header "Add watch", keyboard
+   users); arriving there shouldn't flash a ring on a non-control. */
+#add-heading:focus { outline: none; }
 
-/* overflow-x is a safety net: the mobile card breakpoint below is set wide
-   enough that .watch-table should never need it, but if a future column
-   ever blows the min content width out again, it scrolls internally with
-   a visible scrollbar instead of leaking into page-level horizontal
-   scroll with the actions column unreachable. */
-.panel-table { position: relative; padding: 0; overflow-x: auto; overflow-y: hidden; } /* relative: the header .sr-only must not escape the scroller into page scroll */
+/* Shown by index.js after three failed refreshes in a row. */
+.index-stale {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.watch-table.is-stale .led { opacity: 0.45; box-shadow: none; }
+.watch-table.is-stale .cell-reading { opacity: 0.7; }
+
+/* overflow-x is a safety net: names, readings and error text all wrap (see
+   overflow-wrap below), so .watch-table should never need it, but if a
+   future column ever blows the min content width out again, it scrolls
+   internally instead of leaking into page-level horizontal scroll with the
+   actions column unreachable. relative: the header .sr-only must not
+   escape the scroller into page scroll. */
+.panel-table { position: relative; padding: 0; overflow-x: auto; overflow-y: hidden; }
 
 .watch-table { width: 100%; border-collapse: collapse; }
 .watch-table th {
@@ -629,24 +717,69 @@ fieldset > legend ~ * { clear: both; }
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border);
 }
+/* Baseline, not top: a row mixes 14px mono names, 12px pills, 13px
+   intervals and 15px readings, and only baseline alignment puts their
+   first lines on one line. (.reading-wrap below makes sure the reading
+   cell's baseline is its text, not its LED.) */
 .watch-table td {
   padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border-hair);
-  vertical-align: top;
+  vertical-align: baseline;
 }
 .watch-table tbody tr:last-child td { border-bottom: 0; }
-.watch-table tbody tr:hover { background: var(--surface-hover); }
+/* The whole row opens the watch: the name link's ::after stretches over
+   the row (tr is its containing block), so the row hover is honest. The
+   delete form and anything carrying a tooltip sit above it. */
+.watch-table tbody tr { position: relative; transition: background-color var(--dur-fast) var(--ease-out); }
+.watch-table tbody tr:hover, .watch-table tbody tr:focus-within { background: var(--surface-hover); }
 .watch-table .cell-name a {
+  display: block;
+  min-width: 16ch; /* overflow-wrap:anywhere lowers the min-content width; this stops a long reading from crushing names to a few characters per line at 721-780px */
+  max-width: 44ch; /* caps the column's claim: a long name takes two lines, not half the table */
   color: var(--text);
   font-weight: var(--fw-strong);
   font-family: var(--font-mono);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
-.watch-table tbody tr:hover .cell-name a, .watch-table .cell-name a:hover { color: var(--accent); }
+.watch-table .cell-name a::after { content: ""; position: absolute; inset: 0; }
+.watch-table .cell-name a:focus-visible { outline: none; }
+.watch-table .cell-name a:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+.watch-table tbody tr:hover .cell-name a, .watch-table .cell-name a:focus-visible { color: var(--accent); }
+.watch-table .delete-form, .watch-table .cell-reading [title] { position: relative; z-index: 1; }
+/* Those tooltip spans would be a dead patch in an otherwise clickable row;
+   index.js (which adds .js-rows) follows the row's link on a plain click
+   there, so the cursor says so. Without the script they stay plain text. */
+.watch-table.js-rows .cell-reading [title] { cursor: pointer; }
+/* index.js puts this one row in when the last watch was deleted elsewhere
+   while the add form is in use (a reload would lose the typing). */
+.watch-table .row-empty td { color: var(--text-faint); font-style: italic; }
+/* Short fixed vocabulary: shrink to fit and never wrap, so the spare width
+   goes to the name and the reading. */
+.watch-table .col-trigger, .watch-table .col-interval, .watch-table .col-actions { width: 1%; white-space: nowrap; }
+.watch-table .col-actions { text-align: right; }
 .watch-table td.col-interval { color: var(--text-dim); font-size: var(--fs-sm); }
-.reading-wrap { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; }
-.reading-wrap > * { min-width: 0; }
-.reading-wrap > .led, .reading-wrap > .tag { flex: none; }
+
+/* The reading cell: LED, then the value. A block flex box (an inline one
+   would sit on the cell's baseline by its empty LED). The value item is
+   the only baseline participant, so the box's baseline is the text's and
+   the cell lines up with its row; the LED is centred on the first line.
+   Every first line is --reading-line tall: the 15px reading and the
+   italic placeholders by line-height, the 19px state tags by margin. */
+.reading-wrap {
+  --reading-line: 1.4375rem; /* 23px */
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+}
+.reading-wrap > .led { flex: none; margin-top: calc((var(--reading-line) - 8px) / 2); }
+.reading-wrap > :not(.led) { align-self: baseline; min-width: 0; overflow-wrap: anywhere; }
+.reading-wrap > .tag, .reading-error > .tag { flex: none; margin-block: calc((var(--reading-line) - 19px) / 2); }
 /* Reading + its "fired" tag share one wrapping box: the tag sits after the
    value when there is room and drops under the value's start when there
    isn't, instead of claiming its own column and squeezing the reading. */
@@ -660,13 +793,20 @@ fieldset > legend ~ * { clear: both; }
 }
 .reading-body > .mono { min-width: 0; }
 .reading-body > .tag { flex: none; }
-/* Narrow table widths (641-899px) left "Last reading" ~70px: readings
+/* Narrow table widths (721-899px) left "Last reading" ~70px: readings
    broke mid-token and the 3-line clamp cut the value off. The floor fits
    "PRINTING 34%" on one line; the tighter cell padding below 900px pays for
-   it so the table still fits a 641px viewport. Cards (<=640) reset both. */
+   it, and below 768px the padding tightens once more so the name and the
+   reading (the two columns that wrap) keep ~40px between them that the
+   fixed-vocabulary columns don't need. Cards (<=720) reset both. */
 .watch-table .reading-wrap { min-width: 8rem; }
 @media (max-width: 899px) {
   .watch-table th, .watch-table td { padding-left: var(--space-3); padding-right: var(--space-3); }
+}
+@media (min-width: 721px) and (max-width: 767px) {
+  .watch-table th, .watch-table td { padding-left: var(--space-2); padding-right: var(--space-2); }
+  .watch-table th:first-child, .watch-table td:first-child { padding-left: var(--space-4); }
+  .watch-table th:last-child, .watch-table td:last-child { padding-right: var(--space-4); }
 }
 /* An OCR reading can be arbitrarily long (ocr_match/ocr_changed triggers
    read whatever text is on screen) — cap it so one row can't balloon to
@@ -676,10 +816,12 @@ fieldset > legend ~ * { clear: both; }
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
 }
-.watch-table .reading-wrap .mono { font-size: var(--fs-read); color: var(--text); }
+.watch-table .reading-wrap .mono { font-size: var(--fs-read); line-height: var(--reading-line); color: var(--text); }
 .watch-table .reading-wrap .mono.fired { color: var(--amber); }
 .reading-pending, .reading-none { color: var(--text-faint); font-style: italic; }
+.watch-table .reading-pending, .watch-table .reading-none { line-height: var(--reading-line); }
 /* The seven-segment decoder's "?": kept in place so the number keeps its
    shape, but faint and dotted-underlined so it never reads as a glyph that
    was actually on the display. */
@@ -696,7 +838,7 @@ fieldset > legend ~ * { clear: both; }
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
   color: var(--text-dim);
   font-size: var(--fs-sm);
@@ -709,12 +851,63 @@ fieldset > legend ~ * { clear: both; }
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-.watch-table th.col-actions, .watch-table td.col-actions { text-align: right; width: 1%; white-space: nowrap; }
 
-.empty-state { padding: var(--space-6) var(--space-5); text-align: center; color: var(--text-dim); }
-.empty-state p { margin: 4px 0; }
-.empty-state p:first-child { margin-top: 0; }
-.empty-state p:first-child { color: var(--text); font-weight: var(--fw-strong); }
+/* First run: the empty state is the add form, introduced by the three
+   steps a watch takes. Left-aligned like every other panel. */
+.empty-state { padding: var(--space-6) var(--space-5) var(--space-5); }
+.empty-mark { display: block; width: 28px; height: 28px; margin-bottom: var(--space-4); border-width: 1.5px; }
+.empty-mark::after { inset: 7px; }
+.empty-title { margin: 0 0 var(--space-2); }
+.empty-lede { margin: 0 0 var(--space-3); color: var(--text-dim); max-width: 65ch; }
+.empty-steps {
+  list-style: none;
+  counter-reset: step;
+  display: grid;
+  gap: var(--space-2);
+  max-width: 65ch;
+  margin: 0 0 var(--space-5);
+}
+.empty-steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+  color: var(--text);
+  text-wrap: pretty;
+}
+.empty-steps li::before {
+  content: counter(step);
+  width: 22px; height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-control);
+  border-radius: 50%;
+  font: var(--fw-label) var(--fs-xs)/1 var(--font-mono);
+  color: var(--text-dim);
+}
+.empty-state .form-inline-add {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Confirmation dialog (index.js; delete) ------------------------------*/
+.dialog {
+  width: min(440px, calc(100vw - 2 * var(--space-4)));
+  max-width: none;
+  padding: var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.dialog[open] { animation: dialog-in 180ms var(--ease-out); }
+.dialog::backdrop { background: rgba(4, 5, 7, 0.72); }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.dialog-title { margin: 0 0 var(--space-2); overflow-wrap: anywhere; }
+.dialog-text { margin: 0; color: var(--text-dim); text-wrap: pretty; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-5); }
 
 /* ---- Error page (error.html) --------------------------------------------
    Only for failures a form can't fix in place (config.yaml unwritable, a
@@ -843,7 +1036,6 @@ fieldset > .field-error { margin-top: var(--space-2); }
   align-items: flex-start;
   gap: var(--space-4);
   flex-wrap: wrap;
-  margin-top: var(--space-5);
 }
 .form-inline-add > .btn { margin-top: calc(20px + 6px); }
 .form-inline-add > .form-error { flex: 1 1 100%; margin: 0; }
@@ -861,8 +1053,18 @@ fieldset > .field-error { margin-top: var(--space-2); }
   background: var(--red);
   vertical-align: middle;
 }
-.field-grow { flex: 1 1 320px; }
+/* 240px: with the 15rem name field, the gaps and Create, the three controls
+   share one row from 721px up (the row layout's floor), so the button's
+   label-line margin never lands on a wrapped button; below that the form
+   stacks (see the mobile block). It still grows to fill wider panels. */
+.field-grow { flex: 1 1 240px; }
 .field input { width: 100%; }
+.field-name { flex: 0 1 15rem; min-width: 10rem; }
+/* Quiet help under an add-form field; like .field-error it wraps to the
+   field's width instead of widening it. */
+.field-hint { margin: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-faint); text-wrap: pretty; }
+.field-hint .mono { font-size: var(--fs-xs); color: var(--text-dim); }
+.form-inline-add .field-hint { width: 0; min-width: 100%; }
 
 /* ---- Detail page header ------------------------------------------------*/
 .detail-head { margin-bottom: var(--space-5); }
@@ -1244,57 +1446,69 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 
 /* ---- Responsive: mobile (~375px demo viewport, up through the table/card
-   seam — pushed to 640px so .watch-table's ~583px min content width always
-   has room once the table layout is actually in effect) -------------------*/
-@media (max-width: 640px) {
+   seam. 720px: below that the five-column table has the room it needs
+   (~583px min content) but not the room it wants — a long name took six
+   lines and a reading three — while the cards read cleanly; 768-wide
+   tablets keep the table.) ------------------------------------------------*/
+@media (max-width: 720px) {
   main { padding: var(--space-4); }
   .topbar { padding: var(--space-3) var(--space-4); }
   /* Not a bare .panel: that would beat .panel-table{padding:0} on order and
      indent the edge-to-edge card table. */
   .panel:not(.panel-table) { padding: var(--space-4); }
 
-  .page-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+  /* Actions stay beside the title; the description runs full width. */
+  .page-head { grid-template-areas: "title actions" "sub sub"; row-gap: 6px; column-gap: var(--space-3); }
+  .page-head-actions { gap: var(--space-2); }
 
-  .watch-table thead { display: none; }
-  .watch-table, .watch-table tbody, .watch-table tr, .watch-table td { display: block; width: 100%; }
-  .watch-table tr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
-  .watch-table td {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 4px 0;
-    border-bottom: 0;
+  /* Cards: a compact grid per watch instead of a label/value form.
+       name ............ Delete
+       trigger  every 6s
+       ● reading
+     The header row stays in the accessibility tree (visually hidden), so
+     screen readers keep the column names the cards no longer print. */
+  .watch-table thead {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
   }
-  .watch-table td::before {
-    content: attr(data-label);
-    flex: none;
-    padding-top: 2px;
-    font: var(--fw-label) var(--fs-xs)/1.3 var(--font-ui);
-    color: var(--text-faint);
+  .watch-table, .watch-table tbody { display: block; width: 100%; }
+  .watch-table tbody tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "name name act" "trig int int" "read read read";
+    align-items: center;
+    column-gap: var(--space-3);
+    row-gap: 6px;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border);
   }
-  /* An unbreakable OCR "Last reading" value must not push the row (and the
-     page) wider than the viewport — flex items default to min-width:auto,
-     so the value column needs an explicit min-width:0 to be allowed to
-     shrink, plus overflow-wrap so a long space-free string breaks instead
-     of overflowing. */
-  .watch-table td > * { min-width: 0; }
-  .watch-table .reading-wrap { min-width: 0; justify-content: flex-end; }
-  .reading-wrap .mono { min-width: 0; overflow-wrap: anywhere; }
-  /* Card values hug the right edge; a wrapped reading, its fired tag and an
-     error block follow that edge instead of starting ragged at the LED. */
-  .reading-body { justify-content: flex-end; }
-  .reading-body > .mono { text-align: right; }
-  /* Error: LED and ERROR tag share the first line at the right edge, the
-     message takes its own full-width right-aligned line under them (a
-     right-aligned column block would strand the LED at the far left). */
-  .reading-wrap-error { flex-wrap: wrap; row-gap: 4px; }
-  .reading-wrap-error .reading-error { display: contents; }
-  .reading-wrap-error .reading-error-msg { flex: 1 1 100%; text-align: right; }
-  .watch-table td.col-actions { justify-content: flex-end; width: 100%; }
-  .watch-table td.col-actions::before { content: none; }
+  .watch-table tbody tr:last-child { border-bottom: 0; }
+  /* The three fixed-vocabulary cells are listed here as well: their
+     desktop `width:1%` (.watch-table .col-x, 0,2,0) would otherwise beat
+     this reset and leave a 3px-wide grid cell with Delete hanging out of
+     the viewport. */
+  .watch-table td, .watch-table td.col-trigger, .watch-table td.col-interval, .watch-table td.col-actions {
+    display: block; width: auto; min-width: 0; padding: 0; border-bottom: 0;
+  }
+  .watch-table td.col-trigger { white-space: normal; }
+  .watch-table td.cell-name { grid-area: name; align-self: center; }
+  .watch-table .cell-name a { min-width: 0; max-width: none; font-size: var(--fs-read); }
+  .watch-table td.col-trigger { grid-area: trig; }
+  .watch-table td.col-interval { grid-area: int; font-size: var(--fs-xs); color: var(--text-faint); }
+  .watch-table td.col-interval::before { content: "every "; font-family: var(--font-ui); }
+  .watch-table td.cell-reading { grid-area: read; }
+  .watch-table td.col-actions { grid-area: act; justify-self: end; }
+  /* The negative margin keeps Delete's hit area from making row 1 taller. */
+  .watch-table td.col-actions .btn { margin: -8px -12px -8px 0; }
+  .watch-table .reading-wrap { min-width: 0; }
+  /* The one-cell "No watches left" row index.js puts in is not a card grid. */
+  .watch-table tbody tr.row-empty { display: block; }
 
-  .form-inline-add { flex-direction: column; align-items: stretch; }
+  /* nowrap matters: in a wrapping column container Chromium sizes each
+     field's height with its hint/error at their 0-width fallback (one
+     word per line), which left a 20-40px void under every hint; as a
+     single-line column the hints are laid out at the real width. */
+  .form-inline-add { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
   .form-inline-add > .btn { margin-top: 0; }
   .error-actions { flex-direction: column-reverse; }
   .error-actions .btn { width: 100%; }
@@ -1316,6 +1530,9 @@ fieldset > .field-error { margin-top: var(--space-2); }
 
   .form-actions { flex-direction: column-reverse; }
   .form-actions .btn { width: 100%; }
+  .dialog-actions { flex-direction: column-reverse; }
+  .dialog-actions .btn { width: 100%; }
+  .field-name { flex: 0 1 auto; min-width: 0; }
 
   .readout-ts { margin-left: 0; }
 
@@ -1331,7 +1548,6 @@ fieldset > .field-error { margin-top: var(--space-2); }
   .btn { height: 40px; }
   .checkbox { padding: 10px 0; }
   .checkbox input[type="checkbox"] { width: 18px; height: 18px; }
-  .btn-ghost { padding: 12px 12px; }
   .test-dismiss { width: 40px; height: 40px; padding: 0; margin: -6px -10px -6px auto; }
   .brand { padding: 8px 0; margin: -8px 0; }
   .back-link { display: inline-block; padding: 10px 0; margin: -10px 0; }
@@ -1339,7 +1555,6 @@ fieldset > .field-error { margin-top: var(--space-2); }
      flex row with its own 44px-ish hit area. */
   .region-manual { margin-top: 2px; }
   .region-manual summary { padding: 10px 0; }
-  .watch-table .cell-name a { display: inline-block; padding: 6px 0; margin: -6px 0; }
 }
 
 /* ---- Forced colors (Windows High Contrast) ------------------------------

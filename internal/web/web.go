@@ -268,7 +268,16 @@ type indexData struct {
 	Rows  []indexRow
 	Flash *flash
 	Form  formState
+	// ConfigFile is the config file's base name, for the delete
+	// confirmation's "is removed from …".
+	ConfigFile string
 }
+
+// pollHeader marks index.js's background refresh of the list. Such a
+// request must not consume the one-shot flash cookie: the confirmation
+// belongs to the page load the user navigated to, not to a poll that
+// happens to land between a redirect's Set-Cookie and its GET.
+const pollHeader = "X-Watchglass-Poll"
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	s.renderIndex(w, r, http.StatusOK, formState{})
@@ -288,8 +297,8 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 			Status: s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		})
 	}
-	data := indexData{Rows: rows, Form: form}
-	if r.Method == http.MethodGet {
+	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile()}
+	if r.Method == http.MethodGet && r.Header.Get(pollHeader) == "" {
 		data.Flash = s.takeFlash(w, r)
 	}
 	s.renderStatus(w, status, "index.html", data)
@@ -559,11 +568,20 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	// A rejected create comes back to the list with the add form still
 	// filled in and the problem next to its field, not to a separate page.
 	form := formState{Values: map[string]string{"name": r.FormValue("name"), "source": r.FormValue("source")}}
+	// Each field is checked on its own so one round trip reports both a bad
+	// name and a bad source; config.Validate (inside mutateConfig below)
+	// stops at the first problem and stays the check that counts.
 	if name == "" {
 		form.Errors = append(form.Errors, fieldError{"name", "Enter a name for the watch."})
+	} else if err := config.ValidWatchName(name); err != nil {
+		form.Errors = append(form.Errors, friendlyConfigError(err))
+	} else if _, taken := s.findWatch(name); taken {
+		form.Errors = append(form.Errors, friendlyConfigError(fmt.Errorf("duplicate watch name %q", name)))
 	}
 	if src == "" {
 		form.Errors = append(form.Errors, fieldError{"source", "Enter the camera's source URL."})
+	} else if _, err := config.SourceKind(src); err != nil {
+		form.Errors = append(form.Errors, friendlyConfigError(err))
 	}
 	if len(form.Errors) > 0 {
 		s.renderIndex(w, r, http.StatusBadRequest, form)
