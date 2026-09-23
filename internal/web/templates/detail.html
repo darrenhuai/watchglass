@@ -102,13 +102,23 @@
       </div>
       <p id="region-manual-error" class="field-error" aria-live="polite"></p>
     </details>
+    {{/* app.js marks it aria-busy while a Test runs, so the result is read
+         out once, when it lands. */}}
     <div id="test-result" aria-live="polite" aria-atomic="true"></div>
-    <section class="live-section">
-      <h2>Live</h2>
+    <section class="live-section" aria-labelledby="live-heading">
+      <h2 id="live-heading">Live</h2>
+      {{/* #live-status and #live-strip are redrawn by app.js's poll and are
+           deliberately not live regions (a new timestamp every tick would be
+           read out forever); app.js says what really changed in
+           #live-announce. #live-notice is the poll's own trouble (watchglass
+           unreachable, a login page in the way, the watch deleted), kept
+           apart from the fragment so it never resets it. */}}
       <div id="live" class="panel live-panel">
-        <div id="live-status" aria-live="polite" aria-atomic="true"><p class="muted">Loading…</p></div>
+        <p id="live-notice" class="live-notice" hidden></p>
+        <div id="live-status"><p class="muted">Loading…</p></div>
         <div id="live-strip"></div>
       </div>
+      <p id="live-announce" class="sr-only" aria-live="polite" aria-atomic="true"></p>
     </section>
   </div>
   <div class="col-config">

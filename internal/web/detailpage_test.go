@@ -28,7 +28,7 @@ func TestDetailCompositionSectionsAndTestBesideStage(t *testing.T) {
 		`<button type="button" id="testbtn" class="btn btn-outline">Test this region</button>`,
 		`<details class="region-manual" id="region-manual">`,
 		`<div id="test-result"`,
-		`<h2>Live</h2>`,
+		`<h2 id="live-heading">Live</h2>`,
 		`<h2 id="config-heading" class="col-heading">Configuration</h2>`,
 		`<form id="watchform" class="panel" method="post" action="/watch/printer/save" aria-labelledby="config-heading">`,
 		`<legend>Trigger</legend>`,

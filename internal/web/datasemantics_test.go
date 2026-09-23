@@ -177,7 +177,7 @@ func TestUnreadableSevenSegReadings(t *testing.T) {
 	if !strings.Contains(live, "led-unsure") || strings.Contains(live, "led-green") ||
 		!strings.Contains(live, `<strong class="readout-value reading-none">No digits read</strong>`) ||
 		!strings.Contains(live, `class="readout-hint">The seven-segment decoder couldn't read any digit.`) ||
-		!strings.Contains(live, `<figcaption class="caption-none">No digits read</figcaption>`) {
+		!strings.Contains(live, `<figcaption class="caption-none" title="No digits read"><span class="cap-body"><span class="cap-text">No digits read</span></span></figcaption>`) {
 		t.Errorf("live readout should name an unreadable reading and say what to do; body:\n%s", live)
 	}
 

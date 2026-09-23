@@ -1,13 +1,15 @@
-{{/* Two top-level blocks on purpose: app.js's poll swaps .live-status and
-     .strip into the page separately, each only when its markup changed, so
-     the screen-reader live region (#live-status in detail.html) announces a
-     real status change and never the filmstrip or a byte-identical
-     re-render. data-state/data-summary/data-message let the poll keep the
-     page header's status pill and error line in step without a reload.
+{{/* Two top-level blocks on purpose: app.js's poll swaps .live-status in
+     only when its markup changed, and reconciles .strip frame by frame
+     (data-key), so a scrolled or focused filmstrip keeps its place and its
+     images. Nothing here is a live region: app.js announces real changes
+     (a state change, a new fire) through #live-announce in detail.html,
+     never a timestamp that moved. data-state/data-summary/data-message keep
+     the page header's status pill and error line in step without a reload;
+     data-fired/data-ts tell a new fire from the one already shown.
      The badges only say how old what's below is; the error itself is shown
      once, under the page title. "Error" is not always a camera (an OCR
      pass can fail too), so the no-readings badge doesn't guess a cause. */}}
-<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-message="{{.Status.Message}}">
+<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-message="{{.Status.Message}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
 {{if eq .Status.State "error"}}
 {{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale — last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
 {{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
@@ -18,9 +20,11 @@
 {{$latest := index .Recent 0}}{{$r := reading .Engine $latest.Reading}}
 <div class="readout">
   <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
-  <span class="readout-label">latest</span>
+  {{/* Two rows at every width (style.css): LED, label, fired tag and the
+       time on the first, the reading full width under them. */}}
+  <span class="readout-label">Latest reading</span>
   {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired</span>{{end}}
-  <time class="readout-ts mono muted" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
+  <time class="readout-ts mono" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
   {{if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>
   {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>{{end}}
 </div>
@@ -28,12 +32,16 @@
 <p class="muted">No readings yet</p>
 {{end}}
 </div>
-{{if .Recent}}
-<div class="strip">
-{{range .Recent}}
-  <figure>
-    <img src="{{b64png .PNG}}" alt="crop">
-    {{$r := reading $.Engine .Reading}}<figcaption {{if .Fired}}class="fired"{{else if $r.Placeholder}}class="caption-none"{{end}}>{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</figcaption>
+{{if .Tiles}}
+{{/* Focusable so the keyboard can scroll it (Safari doesn't make scroll
+     containers tab stops); the captions carry the readings, so the crops
+     themselves are decorative to a screen reader. A run of equal readings
+     is one frame with a count (collapseSamples in livefeed.go). */}}
+<div class="strip" tabindex="0" role="region" aria-label="Recent readings, newest first">
+{{range .Tiles}}
+  {{$r := reading $.Engine .Reading}}<figure data-key="{{.TS.UnixNano}}-{{.Count}}">
+    <img src="{{b64png .PNG}}" alt="">
+    <figcaption{{if .Fired}} class="fired"{{else if $r.Placeholder}} class="caption-none"{{end}} title="{{if .Fired}}Fired: {{end}}{{or $r.Placeholder .Reading}}{{if gt .Count 1}} ({{.Count}} readings in a row){{end}}">{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}<span class="cap-body"><span class="cap-text">{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</span>{{if gt .Count 1}}<span class="tile-count" aria-hidden="true">&times;{{.Count}}</span><span class="sr-only">, {{.Count}} readings in a row</span>{{end}}</span></figcaption>
   </figure>
 {{end}}
 </div>

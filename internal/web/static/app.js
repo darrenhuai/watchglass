@@ -253,6 +253,7 @@
   var coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
   function editing() { return stage.classList.contains("is-editing"); }
   function hintText() {
+    if (retired) return "This watch no longer exists, so its region can't be edited or tested.";
     if (img.hidden) return "No frame to draw on. Set the region manually below.";
     var full = isFull(region());
     var lead = full ? "Whole frame selected. " : "";
@@ -288,7 +289,7 @@
   // region inputs directly, which fires no events, so they call this
   // themselves; the fields a test reads are watched below.
   function markTestStale() {
-    var panel = document.querySelector("#test-result .test-panel");
+    var panel = document.querySelector("#test-result .test-panel:not(.test-pending)");
     if (panel && !panel.classList.contains("is-stale")) panel.classList.add("is-stale");
   }
   if (mx) {
@@ -711,7 +712,7 @@
     next.src = snapURL + "?t=" + Date.now();
     preload = next;
   }
-  setInterval(refreshSnap, refreshMs);
+  var snapTimer = setInterval(refreshSnap, refreshMs);
 
   // Only a successful text/html answer (testresult.html, escaped by
   // html/template) is inserted as markup. An error body is plain text that
@@ -864,11 +865,75 @@
   }
   form.addEventListener("input", testFieldChanged);
   form.addEventListener("change", testFieldChanged);
+  // Test this region. A read takes a few seconds (rapidocr starts cold on
+  // every read), so while it runs the button says so and turns a ring,
+  // a second press does nothing, and the result area holds a placeholder
+  // the size of the crop to come (or, when a result is already there,
+  // dims it: nothing jumps). The button stays focusable (aria-busy, not
+  // disabled: disabling the focused button would drop focus on <body>),
+  // and #test-result is aria-busy meanwhile, so a screen reader hears the
+  // result once, when it lands. manualGate runs first: a bad manual
+  // region value is pointed at instead of testing the last good one.
+  var testing = false, testLabel = testBtn.textContent, testSlowTimer = 0;
+  var SUBPROCESS_ENGINES = { tesseract: 1, rapidocr: 1 };
+  function testEngine() {
+    if (form.elements["ttype"] && form.elements["ttype"].value === "pixel_change") return "";
+    return (form.elements["engine"] && form.elements["engine"].value) || "tesseract";
+  }
+  // The crop's on-screen size, worked out the way .crop-frame img will
+  // lay it out: the region in frame pixels, times Upscale, shrunk to fit
+  // the box and 180px tall. Null when there is no frame to measure.
+  function cropSize(width) {
+    if (img.hidden || !img.naturalWidth) return null;
+    var r = region(), up = parseInt((form.elements["pp_upscale"] || {}).value, 10);
+    if (!(up > 1) || testEngine() === "") up = 1;
+    var w = r.w * img.naturalWidth * up, h = r.h * img.naturalHeight * up;
+    if (!(w >= 1) || !(h >= 1)) return null;
+    var k = Math.min(1, width / w, 180 / h);
+    return [Math.max(Math.round(w * k), 24), Math.max(Math.round(h * k), 16)];
+  }
+  function testPending() {
+    var engine = testEngine();
+    var panel = el("section", "test-panel test-pending");
+    var head = el("div", "test-head");
+    var text = el("div", "test-head-text");
+    text.appendChild(el("p", "test-title", "Testing the region"));
+    if (engine) text.appendChild(el("p", "test-meta mono", engine));
+    head.appendChild(text);
+    panel.appendChild(head);
+    var line = el("p", "test-progress", engine ? "Reading the region with " + engine + "…" : "Grabbing a frame…");
+    panel.appendChild(line);
+    var sk = el("div", "crop-skeleton");
+    sk.setAttribute("aria-hidden", "true");
+    panel.appendChild(sk);
+    testBox.appendChild(panel);
+    // Sized once it is in the box, so the box's width is known.
+    var size = cropSize(Math.max(panel.clientWidth - 34, 60));
+    if (size) { sk.style.width = size[0] + "px"; sk.style.height = size[1] + "px"; }
+    testSlowTimer = setTimeout(function () {
+      line.textContent = SUBPROCESS_ENGINES[engine]
+        ? "Still reading. " + engine + " starts fresh for every read and can take a while when the box is busy."
+        : "Still waiting for the camera.";
+    }, 8000);
+  }
+  function setTesting(on) {
+    testing = on;
+    testBtn.textContent = on ? "Testing…" : testLabel;
+    if (on) testBtn.setAttribute("aria-busy", "true");
+    else testBtn.removeAttribute("aria-busy");
+    testBox.setAttribute("aria-busy", on ? "true" : "false");
+    if (on) {
+      if (!testBox.firstElementChild) testPending();
+      return;
+    }
+    clearTimeout(testSlowTimer);
+    var pending = testBox.querySelector(".test-pending");
+    if (pending) pending.remove();
+  }
   testBtn.addEventListener("click", function () {
-    if (manualGate()) return;
+    if (testing || manualGate()) return;
     var box = testBox;
-    box.textContent = "";
-    box.appendChild(el("p", "muted", "Testing…"));
+    setTesting(true);
     fetch(base + "/watch/" + encodeURIComponent(name) + "/test", {
       method: "POST",
       body: new URLSearchParams(new FormData(form))
@@ -886,45 +951,66 @@
         localizeTimes(tpl.content);
         box.textContent = "";
         box.appendChild(tpl.content);
-        revealTestResult();
         return;
       }
       renderTestError(box, r.text.trim() || "watchglass answered HTTP " + r.status + ".");
-      revealTestResult();
     }).catch(function () {
       renderTestError(box, "watchglass didn't answer. Is it still running?");
+    }).then(function () {
+      setTesting(false);
       revealTestResult();
     });
   });
 
-  // The /live fragment is two blocks (see live.html): .live-status (the
-  // stale/stopped badge + latest readout) and .strip (the filmstrip). Each
-  // lands in its own container and is only swapped in when its markup
-  // actually changed. #live-status is the screen-reader live region: with
-  // aria-atomic it re-announces its whole content on ANY DOM change, so
-  // rewriting the entire panel every 2s — filmstrip included, even when
-  // byte-identical — kept the polite queue full forever. The filmstrip
-  // stays outside the region entirely, and an unchanged status is left
-  // untouched. The fragment's data-state also drives the header's status
-  // pill, so a watch that stops or errors underneath an open page is
-  // reflected there too, not only on the next full reload.
+  // The Live panel. The /live fragment is two blocks (see live.html):
+  // .live-status (the stale/stopped badge + latest readout) and .strip (the
+  // filmstrip). The status is swapped in only when its markup changed; the
+  // strip is reconciled frame by frame (syncStrip), so a user scrolled back
+  // through older crops, or focused on the strip, keeps their place. The
+  // fragment's data-state also drives the header's status pill, so a watch
+  // that stops or errors underneath an open page is reflected there too.
+  //
+  // Neither container is a live region: the readout's timestamp changes on
+  // every reading, and an aria-atomic region re-read the whole panel each
+  // time. #live-announce says what matters, once: a change of state and a
+  // new fire. A reading that merely moved is left in the readout.
+  //
+  // The poll schedules itself (one request in flight, never a pile-up on a
+  // slow link), sleeps while the tab is hidden, and skips the parse when
+  // the server's ETag says nothing changed. It also notices when it can't
+  // do its job (#live-notice): three failures in a row (about 6 s) is
+  // "lost contact", a 404 is a watch deleted or renamed elsewhere, and a
+  // 200 that isn't the fragment (a proxy's login page) is an expired
+  // session. None of those is ever inserted as markup.
   var liveStatus = document.getElementById("live-status");
   var liveStrip = document.getElementById("live-strip");
+  var livePanel = document.getElementById("live");
+  var liveNotice = document.getElementById("live-notice");
+  var liveAnnounce = document.getElementById("live-announce");
   var pill = document.getElementById("status-pill");
   var statusDetail = document.getElementById("status-detail");
   var PILL_LED = { running: "led-green", error: "led-error", stopped: "led-stopped" };
   // The tab title leads with a failing or stopped state (pageTitle in
-  // web.go), so it follows the pill.
-  var baseTitle = document.title.replace(/^\[(error|stopped)\] /, "");
+  // web.go), so it follows the pill; "offline" and "deleted" are the
+  // poll's own states and never come from the server.
+  var TITLE_STATES = /^\[(error|stopped|offline|deleted)\] /;
+  var baseTitle = document.title.replace(TITLE_STATES, "");
+  function setTitleState(state) {
+    var title = (state ? "[" + state + "] " : "") + baseTitle;
+    if (document.title !== title) document.title = title;
+  }
+  function setPill(cls, led, text) {
+    if (!pill) return;
+    pill.className = "status-pill " + cls;
+    var dot = pill.querySelector(".led");
+    if (dot) dot.className = "led " + led;
+    var t = pill.querySelector(".status-text");
+    if (t) t.textContent = text;
+  }
   function updateStatus(state, summary, message) {
     if (!pill || !PILL_LED[state]) return;
-    pill.className = "status-pill status-" + state;
-    var led = pill.querySelector(".led");
-    if (led) led.className = "led " + PILL_LED[state];
-    var text = pill.querySelector(".status-text");
-    if (text) text.textContent = state;
-    var title = (state === "error" || state === "stopped" ? "[" + state + "] " : "") + baseTitle;
-    if (document.title !== title) document.title = title;
+    setPill("status-" + state, PILL_LED[state], state);
+    setTitleState(state === "error" || state === "stopped" ? state : "");
     if (statusDetail) {
       // Only the text nodes change, so an opened "Technical detail" stays
       // open across polls.
@@ -942,41 +1028,279 @@
     // the watch itself reports the source down, and back.
     renderSnapResult();
   }
-  var lastStatus = null, lastStrip = null;
+  // Written only when the words change: a polite region reads each new
+  // sentence once. The text is cleared first so the same sentence twice
+  // (fired, then fired again) is still a change.
+  function announce(text) {
+    if (!liveAnnounce) return;
+    liveAnnounce.textContent = "";
+    setTimeout(function () { liveAnnounce.textContent = text; }, 50);
+  }
+  function readoutText(root) {
+    var v = root.querySelector(".readout-value");
+    return v ? v.textContent.replace(/\s+/g, " ").trim() : null;
+  }
+  // What was last said, so only a change is announced. Null until the
+  // first fragment, which sets the baseline silently (the page already
+  // shows it).
+  var heard = null;
+  var STATE_WORDS = { running: "Watch running.", stopped: "Watch stopped.", error: "Watch error: " };
+  function announceLive(ds, reading) {
+    var firedTs = ds.fired === "true" ? ds.ts : "";
+    var now = { state: ds.state, firedTs: firedTs || (heard && heard.firedTs) || "" };
+    if (heard === null) { heard = now; return false; }
+    var newFire = firedTs !== "" && firedTs !== heard.firedTs;
+    if (ds.state !== heard.state) {
+      announce(STATE_WORDS[ds.state] ? STATE_WORDS[ds.state] + (ds.state === "error" ? (ds.summary || "") : "") : ds.state);
+    } else if (newFire) {
+      announce("Fired: " + (reading || ""));
+    }
+    heard = now;
+    return newFire;
+  }
+  // Arrival: the readout's background glows and fades when the reading
+  // changes (amber for a new fire), a new frame slides into the strip.
+  // Only what changed moves; a timestamp that ticked over doesn't.
+  // style.css keeps all of it under prefers-reduced-motion: no-preference.
+  function tick(prevText, fired) {
+    var ro = liveStatus.querySelector(".readout");
+    if (!ro) return;
+    if (fired) ro.classList.add("tick-fired");
+    else if (prevText !== null && readoutText(liveStatus) !== prevText) ro.classList.add("tick");
+  }
+
+  // The edge fade says "more this way" only while there is more: it sits
+  // on the non-scrolling wrapper and goes when the strip ends in view.
+  function syncFade() {
+    var s = liveStrip.querySelector(".strip");
+    liveStrip.classList.toggle("has-more", !!s && s.scrollLeft + s.clientWidth < s.scrollWidth - 2);
+  }
+  liveStrip.addEventListener("scroll", syncFade, { capture: true, passive: true });
+  liveStrip.addEventListener("load", syncFade, true);
+  // A frame's arrival animation plays once; the class goes so a later move
+  // of the node can't replay it.
+  liveStrip.addEventListener("animationend", function (e) { e.target.classList.remove("tick-in"); });
+  window.addEventListener("resize", syncFade);
+  // What a frame says: its reading and whether it fired. Collapsed runs
+  // (livefeed.go) are split exactly where this changes, so a new first
+  // frame that says the same as the old one is that run grown by a reading
+  // (its key moved with its count), not a new frame arriving.
+  function tileSays(f) {
+    var cap = f && f.querySelector("figcaption");
+    var t = cap && cap.querySelector(".cap-text");
+    return cap ? (cap.classList.contains("fired") ? "fired:" : "") + (t ? t.textContent : "") : null;
+  }
+  // Reconcile the strip with the fragment's: frames are keyed (data-key,
+  // the newest sample's time + the run's count), kept nodes are reused
+  // (their images don't re-decode; focus in the strip survives), new ones
+  // come in, evicted ones go. At the start, the strip stays at the start,
+  // so the newest frame is always the first one seen: it is put back there
+  // explicitly, because Chromium re-snaps (scroll-snap) to the frame it
+  // last snapped to when a frame is inserted before it, and that pushed
+  // the strip one frame further into the past with every reading. When the
+  // user has scrolled away from the start, the first frame they could see
+  // is held where it was.
+  function syncStrip(next) {
+    var cur = liveStrip.querySelector(".strip");
+    if (!next || !cur) {
+      if (next) {
+        liveStrip.textContent = "";
+        liveStrip.appendChild(next);
+      } else if (cur) {
+        liveStrip.textContent = "";
+      }
+      syncFade();
+      return;
+    }
+    var incoming = Array.prototype.slice.call(next.querySelectorAll("figure[data-key]"));
+    var have = {}, want = {}, dup = false;
+    incoming.forEach(function (f) { if (want[f.dataset.key]) dup = true; want[f.dataset.key] = 1; });
+    if (dup) { // never expected; start over rather than guess
+      liveStrip.textContent = "";
+      liveStrip.appendChild(next);
+      syncFade();
+      return;
+    }
+    var old = Array.prototype.slice.call(cur.querySelectorAll("figure[data-key]"));
+    old.forEach(function (f) { have[f.dataset.key] = f; });
+    // Read before anything moves: after an insert the browser may already
+    // have scrolled on its own (the re-snap above).
+    var atStart = cur.scrollLeft <= 2;
+    var wasFirst = tileSays(old[0]);
+    var anchor = null, anchorX = 0;
+    if (!atStart) {
+      old.some(function (f) {
+        if (!want[f.dataset.key] || f.offsetLeft + f.offsetWidth <= cur.scrollLeft) return false;
+        anchor = f;
+        anchorX = f.offsetLeft - cur.scrollLeft;
+        return true;
+      });
+    }
+    old.forEach(function (f) { if (!want[f.dataset.key]) f.remove(); });
+    var ref = cur.firstElementChild, added = [];
+    incoming.forEach(function (f) {
+      var node = have[f.dataset.key];
+      if (!node) { node = f; added.push(f); }
+      if (node !== ref) cur.insertBefore(node, ref);
+      else ref = ref.nextElementSibling;
+    });
+    if (anchor) cur.scrollLeft = anchor.offsetLeft - anchorX;
+    else if (atStart) {
+      if (cur.scrollLeft !== 0) cur.scrollLeft = 0;
+      if (added.length && added[0] === cur.firstElementChild && tileSays(added[0]) !== wasFirst) added[0].classList.add("tick-in");
+    }
+    syncFade();
+  }
+
+  function showNotice(kind) {
+    if (!liveNotice) return;
+    liveNotice.textContent = "";
+    liveNotice.className = "live-notice live-notice-" + kind;
+    var dot = el("span", "led " + (kind === "gone" ? "led-stopped" : "led-off"));
+    dot.setAttribute("aria-hidden", "true");
+    liveNotice.appendChild(dot);
+    var text = el("span", "live-notice-text");
+    if (kind === "offline") {
+      var at = lastLiveOK ? lastLiveOK.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+      text.textContent = (at ? "No answer from watchglass since " + at : "Can't reach watchglass") +
+        ", so what's below may be out of date. Retrying…";
+    } else if (kind === "session") {
+      text.textContent = "Live updates paused: something other than watchglass answered, so your login may have expired. ";
+      var reload = el("button", "link-button", "Reload the page");
+      reload.type = "button";
+      reload.addEventListener("click", function () { location.reload(); });
+      text.appendChild(reload);
+    } else {
+      text.textContent = "This watch no longer exists: it was deleted or renamed. ";
+      var back = el("a", null, "Back to all watches");
+      back.href = base + "/";
+      text.appendChild(back);
+    }
+    liveNotice.appendChild(text);
+    liveNotice.hidden = false;
+    if (livePanel) livePanel.classList.add("is-offline");
+  }
+  // The watch is gone: nothing on the page can act on it any more. Test,
+  // Save and Edit region would only get a 404, and the region editor would
+  // go on drawing on a frame that no longer updates, so those are switched
+  // off and the stage dimmed. The fields stay readable and editable, so
+  // settings typed and not yet saved can still be copied out.
+  var retired = false;
+  function retire() {
+    retired = true;
+    var gone = "This watch no longer exists";
+    var btns = [testBtn, editBtn, form.querySelector("button[type=submit]")];
+    // Disabling a focused button drops focus on <body>; hand it to the
+    // notice's way out instead (showNotice has already run).
+    var hadFocus = btns.indexOf(document.activeElement) >= 0 || document.activeElement === canvas;
+    btns.forEach(function (b) {
+      if (!b) return;
+      b.disabled = true;
+      b.title = gone;
+    });
+    canvas.inert = true;
+    setEditing(false); // also rewrites the hint
+    var grid = document.querySelector(".detail-grid");
+    if (grid) grid.classList.add("is-gone");
+    var out = liveNotice && liveNotice.querySelector("a");
+    if (hadFocus && out) out.focus();
+  }
+  var liveFails = 0, lastLiveOK = null, liveProblem = "", liveEtag = null;
+  var livePending = false, liveTimer = 0, liveStopped = false;
+  // kind: "fail" (counts towards "lost contact"), "session" or "gone".
+  function liveFailed(kind) {
+    if (kind === "fail" && ++liveFails < 3) return;
+    if (kind === "fail") kind = "offline";
+    if (kind === liveProblem) return;
+    liveProblem = kind;
+    showNotice(kind);
+    if (kind === "gone") {
+      liveStopped = true;
+      clearInterval(snapTimer);
+      setPill("status-offline", "led-off", "deleted");
+      setTitleState("deleted");
+      retire();
+      announce("This watch no longer exists.");
+      return;
+    }
+    setPill("status-offline", "led-off", "offline");
+    setTitleState("offline");
+    announce(kind === "session" ? "Live updates paused. Your login may have expired." : "Lost contact with watchglass.");
+  }
+  function liveOK() {
+    liveFails = 0;
+    lastLiveOK = new Date();
+    if (!liveProblem) return;
+    liveProblem = "";
+    if (liveNotice) liveNotice.hidden = true;
+    if (livePanel) livePanel.classList.remove("is-offline");
+    announce("Live updates resumed.");
+  }
+  function applyLive(html, etag) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    var status = tpl.content.querySelector(".live-status");
+    if (!status) { liveFailed("session"); return; }
+    liveEtag = etag;
+    liveOK();
+    var ds = status.dataset;
+    // Compared as the server sent it; localised just before it lands.
+    var statusHTML = status.innerHTML;
+    var reading = readoutText(status);
+    var fire = announceLive(ds, reading);
+    if (statusHTML !== lastStatus) {
+      var prev = lastStatus === null ? null : readoutText(liveStatus);
+      localizeTimes(status);
+      updateAges(status);
+      liveStatus.innerHTML = status.innerHTML;
+      if (lastStatus !== null) tick(prev, fire);
+      lastStatus = statusHTML;
+    }
+    syncStrip(tpl.content.querySelector(".strip"));
+    updateStatus(ds.state, ds.summary, ds.message);
+  }
+  var lastStatus = null;
+  var liveURL = base + "/watch/" + encodeURIComponent(name) + "/live";
+  function schedulePoll() {
+    clearTimeout(liveTimer);
+    if (!liveStopped) liveTimer = setTimeout(poll, 2000);
+  }
   function poll() {
-    fetch(base + "/watch/" + encodeURIComponent(name) + "/live")
-      .then(function (resp) { return resp.ok ? resp.text() : null; })
-      .then(function (html) {
-        if (html === null) return;
-        var tpl = document.createElement("template");
-        tpl.innerHTML = html;
-        var status = tpl.content.querySelector(".live-status");
-        var strip = tpl.content.querySelector(".strip");
-        // Compared as the server sent it; localised just before it lands,
-        // so a real change is announced once and never re-announced by a
-        // rewrite after insertion.
-        var statusHTML = status ? status.innerHTML : html;
-        var stripHTML = strip ? strip.outerHTML : "";
-        if (statusHTML !== lastStatus) {
-          if (status) {
-            localizeTimes(status);
-            updateAges(status);
-            liveStatus.innerHTML = status.innerHTML;
-          } else {
-            liveStatus.innerHTML = statusHTML;
-          }
-          lastStatus = statusHTML;
-        }
-        if (stripHTML !== lastStrip) {
-          liveStrip.innerHTML = stripHTML;
-          lastStrip = stripHTML;
-        }
-        if (status) updateStatus(status.dataset.state, status.dataset.summary, status.dataset.message);
+    if (livePending || liveStopped) return;
+    // A hidden tab has nobody looking; visibilitychange picks it up again.
+    if (document.visibilityState === "hidden") return;
+    clearTimeout(liveTimer);
+    livePending = true;
+    fetch(liveURL)
+      .then(function (resp) {
+        var discard = function () { if (resp.body) resp.body.cancel(); };
+        if (resp.status === 404) { discard(); return { kind: "gone" }; }
+        // Basic auth or a proxy refusing the old credentials.
+        if (resp.status === 401 || resp.status === 403) { discard(); return { kind: "session" }; }
+        if (!resp.ok) { discard(); return { kind: "fail" }; }
+        var ct = resp.headers.get("Content-Type") || "";
+        if (resp.redirected || ct.indexOf("text/html") !== 0) { discard(); return { kind: "session" }; }
+        var etag = resp.headers.get("ETag");
+        // The browser revalidates with If-None-Match on its own and hands
+        // back its copy on a 304; the same tag means the same fragment.
+        if (etag && etag === liveEtag && !liveProblem) { discard(); return { kind: "same" }; }
+        return resp.text().then(function (t) { return { kind: "ok", html: t, etag: etag }; });
       })
-      .catch(function () {});
+      .then(function (r) {
+        if (r.kind === "ok") applyLive(r.html, r.etag);
+        else if (r.kind === "same") liveOK();
+        else liveFailed(r.kind);
+      }, function () { liveFailed("fail"); })
+      .then(null, function (e) { if (window.console) console.error(e); })
+      .then(function () {
+        livePending = false;
+        schedulePoll();
+      });
   }
   poll();
-  setInterval(poll, 2000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") poll();
+  });
   // An unchanged status is never re-swapped, so a stale badge's age is
   // brought up to date here. It is aria-hidden and only written when the
   // wording changes (at most once a minute).
@@ -1139,7 +1463,7 @@
     if (!saveBtn) return;
     saveBtn.textContent = saveLabel;
     saveBtn.removeAttribute("aria-busy");
-    saveBtn.disabled = false;
+    saveBtn.disabled = retired; // a deleted watch keeps Save off (retire)
   }
   if (saveBtn) {
     form.addEventListener("submit", function (e) {
@@ -1214,6 +1538,7 @@
     paint();
     ppSummary();
     restoreSaveBtn();
+    if (testing) setTesting(false);
   }
   resyncFromForm();
 

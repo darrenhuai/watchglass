@@ -316,7 +316,7 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), grabTimeout)
 	defer cancel()
 	src, err := s.NewSource(wc)
 	if err != nil {
@@ -344,7 +344,10 @@ type liveData struct {
 	// in a reading is the seven-segment decoder's "digit not read" or just
 	// text that has a question mark in it.
 	Engine string
+	// Recent is newest first; the readout shows Recent[0]. Tiles is the
+	// filmstrip: Recent with runs of equal readings collapsed.
 	Recent []state.Sample
+	Tiles  []stripTile
 	Status watchStatus
 }
 
@@ -355,10 +358,12 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, "live.html", liveData{
+	recent := s.reg.Recent(name)
+	s.renderCached(w, r, "live.html", liveData{
 		Name:   name,
 		Engine: wc.Engine,
-		Recent: s.reg.Recent(name),
+		Recent: recent,
+		Tiles:  collapseSamples(recent),
 		Status: s.statusFor(name, s.isRunning(name)),
 	})
 }
@@ -815,6 +820,9 @@ type testResult struct {
 	Reading readingView
 	Words   []ocr.Word
 	Note    string
+	// NoteDetail is the raw error behind a failed read, shown under Note
+	// behind "Technical detail".
+	NoteDetail string
 	// Verdict is the trigger's condition checked against this one reading.
 	Verdict *testVerdict
 }
@@ -889,14 +897,15 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
+	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
+	defer cancelGrab()
 	src, err := s.NewSource(wc)
 	if err != nil {
 		sourceError(w, err)
 		return
 	}
-	img, err := src.Grab(ctx)
+	img, err := src.Grab(grabCtx)
+	cancelGrab()
 	if err != nil {
 		grabError(w, err)
 		return
@@ -946,13 +955,20 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		res.Note = upperFirst(fmt.Sprintf("engine unavailable: %v", err)) + "."
 	default:
+		// The read has its own budget, sized for the engine (see
+		// testReadBudgets), after the grab's.
+		budget := testReadBudget(res.Engine)
+		ctx, cancel := context.WithTimeout(r.Context(), budget)
+		defer cancel()
 		if e, ok := engine.(ocr.DetailedEngine); ok {
 			res.Text, res.Words, err = e.RecognizeWords(ctx, prepped)
 		} else {
 			res.Text, err = engine.Recognize(ctx, prepped)
 		}
 		if err != nil {
-			res.Note = upperFirst(fmt.Sprintf("read failed: %v", err))
+			timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+			res.Note = readFailureNote(res.Engine, budget, timedOut)
+			res.NoteDetail = err.Error()
 			break
 		}
 		res.Read = true

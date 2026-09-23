@@ -71,6 +71,7 @@ img { max-width: 100%; }
   --red-a10:     rgba(255, 107, 107, 0.1);
   --red-a30:     rgba(255, 107, 107, 0.3);
   --red-a35:     rgba(255, 107, 107, 0.35);
+  --amber-a15:   rgba(255, 180, 84, 0.15);
   --amber-a55:   rgba(255, 180, 84, 0.55);
   --amber-a65:   rgba(255, 180, 84, 0.65);
 
@@ -102,7 +103,8 @@ img { max-width: 100%; }
   --fs-sm:    0.8125rem; /* 13 — controls, form labels, help text */
   --fs-base:  0.875rem;  /* 14 — body */
   --fs-read:  0.9375rem; /* 15 — a reading in the watch table */
-  --fs-md:    1rem;      /* 16 — section headings, live readout */
+  --fs-md:    1rem;      /* 16 — section headings */
+  --fs-readout: 1.125rem; /* 18 — the Live panel's latest reading */
   --fs-lg:    1.25rem;   /* 20 — page title */
   --ls-caps:  0.07em;
 
@@ -299,6 +301,9 @@ main:focus { outline: none; }
 .status-running { color: var(--accent); border-color: var(--accent-a35); }
 .status-stopped { color: var(--text-dim); border-color: var(--border-control); }
 .status-error   { color: var(--red);    border-color: var(--red-a35); }
+/* The page lost contact with watchglass (or the watch is gone): the
+   watch's real state is unknown, so neutral, with a hollow LED. */
+.status-offline { color: var(--text-faint); border-color: var(--border-strong); }
 /* The detail header's error: one sentence, with the raw chain behind a
    disclosure (the same .tech-detail the error page, the snapshot
    placeholder and a failed Test use). */
@@ -446,11 +451,19 @@ button, input[type="submit"], input[type="button"] {
   transform: none;
   cursor: not-allowed;
 }
-/* Working, not unavailable: a primary button that is busy (index.js sets
-   aria-busy and then disables it while the POST runs) keeps its mint and
-   gains a ring so "Creating…" reads as progress, not as a control that was
-   never available. The ring stops turning under reduced motion and stays a
-   static mark. */
+/* Working, not unavailable: a busy button (aria-busy: Create, Save, Test)
+   keeps its own look and gains a turning ring, so "Testing…" reads as
+   progress, not as a control that was never available. A primary button
+   is also disabled while its POST runs; it keeps its mint at reduced
+   strength. The ring stops turning under reduced motion and stays a static
+   mark. */
+.btn[aria-busy="true"] { cursor: progress; }
+.btn[aria-busy="true"]:active { transform: none; }
+.btn-outline[aria-busy="true"], .btn-outline[aria-busy="true"]:hover {
+  background: var(--surface-2);
+  border-color: var(--border-control);
+  color: var(--text-dim);
+}
 .btn-primary[aria-busy="true"] {
   background: var(--accent);
   border-color: var(--accent);
@@ -459,7 +472,7 @@ button, input[type="submit"], input[type="button"] {
   cursor: progress;
   box-shadow: none;
 }
-.btn-primary[aria-busy="true"]::before {
+.btn[aria-busy="true"]::before {
   content: "";
   flex: none;
   width: 12px; height: 12px;
@@ -469,6 +482,12 @@ button, input[type="submit"], input[type="button"] {
   animation: btn-spin 700ms linear infinite;
 }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
+/* Touch: every shared button is a full 44px target wherever a finger may
+   be the pointer (Save, Create, Test, the dialog's buttons), not only on
+   phones. min-height beats the 36px/40px heights wherever they are set. */
+@media (any-pointer: coarse) {
+  .btn { min-height: 44px; }
+}
 
 /* ---- Form controls ---------------------------------------------------- */
 input, select, textarea {
@@ -1285,12 +1304,11 @@ fieldset > .field-error { margin-top: var(--space-2); }
    is the pressed/"Done" state while the stage is in editing mode. */
 .region-edit { display: none; }
 @media (any-pointer: coarse) { .region-edit { display: inline-flex; } }
-/* Wherever Edit region exists, it and Test are full 44px touch targets
-   (the shared .btn is 36px, 40px on phones), and so is the manual
-   disclosure beside them. The specificity beats both .btn heights and the
-   phone block's summary padding, which come later in the file. */
+/* Wherever Edit region exists (a touch screen), the manual disclosure
+   beside it is a full 44px target too; the buttons get theirs from the
+   shared .btn rule (Buttons). The specificity beats the phone block's
+   summary padding, which comes later in the file. */
 @media (any-pointer: coarse) {
-  .region-btns .btn { height: auto; min-height: 44px; }
   details.region-manual > summary { min-height: 44px; padding-block: 0; }
 }
 .region-edit[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-a15); }
@@ -1449,6 +1467,33 @@ fieldset > .field-error { margin-top: var(--space-2); }
    test has actually run. */
 #test-result { margin-top: var(--space-4); }
 #test-result:empty { display: none; }
+/* A new Test is running over an old result: the old one stays (nothing
+   jumps) but dims until the new one replaces it. */
+#test-result[aria-busy="true"] > :not(.test-pending) { opacity: 0.45; transition: opacity var(--dur-fast) var(--ease-out); }
+/* The first Test: a placeholder panel with a block the size of the crop to
+   come (app.js works it out from the region and the frame). */
+.test-pending .test-head { min-height: 32px; }
+.test-progress {
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+.crop-skeleton {
+  width: 100%;
+  max-width: 100%;
+  height: 72px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .crop-skeleton {
+    background: linear-gradient(90deg, var(--bg-inset) 30%, var(--surface-2) 50%, var(--bg-inset) 70%) 0 0 / 300% 100% var(--bg-inset);
+    animation: skeleton-sweep 1.4s ease-in-out infinite;
+  }
+}
+@keyframes skeleton-sweep { from { background-position: 100% 0; } to { background-position: 0 0; } }
 /* A failed Test: built by app.js from the plain-text error body (never
    inserted as markup). */
 .test-error {
@@ -1524,11 +1569,13 @@ fieldset > .field-error { margin-top: var(--space-2); }
   text-wrap: pretty;
 }
 .test-panel.is-stale .test-stale { display: block; }
-.test-panel > .verdict, .test-panel > .crop-frame, .test-panel > .test-facts, .test-panel > .test-note {
+.test-panel > .verdict, .test-panel > .crop-frame, .test-panel > .test-facts, .test-panel > .test-note,
+.test-panel > .test-note-detail {
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 .test-panel.is-stale > .verdict, .test-panel.is-stale > .crop-frame,
-.test-panel.is-stale > .test-facts, .test-panel.is-stale > .test-note { opacity: 0.45; }
+.test-panel.is-stale > .test-facts, .test-panel.is-stale > .test-note,
+.test-panel.is-stale > .test-note-detail { opacity: 0.45; }
 
 .verdict {
   display: flex;
@@ -1576,6 +1623,8 @@ fieldset > .field-error { margin-top: var(--space-2); }
 /* An engine status line: LED with the text hanging beside it. */
 .test-note-status { display: flex; align-items: baseline; gap: var(--space-2); }
 .test-note-status .led { position: relative; top: -1px; }
+/* A failed read's raw error, under its sentence, level with the text. */
+.test-note-detail { margin: calc(-1 * var(--space-1)) 0 var(--space-2) var(--space-4); }
 .test-note > .digit-unknown { font-family: var(--font-mono); }
 .word-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
 .word-chip {
@@ -1631,20 +1680,39 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .stale-badge .mono { font-size: var(--fs-sm); }
 .stale-age { color: var(--text-dim); }
 
+/* Two rows at every width: the LED, the label, the fired tag and the time
+   (flush right) on the first, the reading full width under them. With the
+   time in the flow it landed after a short reading and alone on a line
+   under a long one. order moves only the painting: the DOM (and a screen
+   reader) still has the value before the tag and the time. The side
+   padding is given back as negative margin so the text stays on the
+   panel's edge and the arrival glow (below) has soft room around it. */
 .readout {
   display: flex;
-  align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
-  padding-bottom: var(--space-3);
-  margin-bottom: var(--space-3);
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 6px;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   border-bottom: 1px solid var(--border);
 }
 .readout-label { font-size: var(--fs-xs); color: var(--text-faint); }
-.readout-value { font-size: var(--fs-md); font-weight: var(--fw-strong); }
-.readout-ts { margin-left: auto; font-size: var(--fs-xs); }
+.readout > .tag { flex: none; }
+.readout-ts { margin-left: auto; font-size: var(--fs-xs); color: var(--text-faint); }
+.readout-value {
+  order: 3;
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: var(--fs-readout);
+  font-weight: var(--fw-strong);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
 .readout-value.reading-none { font-size: var(--fs-base); font-weight: 400; }
 .readout-hint {
+  order: 4;
   flex: 1 1 100%;
   max-width: 72ch;
   margin: 0;
@@ -1654,12 +1722,27 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 .readout-hint > .digit-unknown { font-family: var(--font-mono); }
 
+/* The fade that says "more this way" lives on the wrapper, which doesn't
+   scroll (on the strip itself it scrolled away with the frames and sat
+   over a tile mid-glyph), and only while there is more: app.js toggles
+   .has-more from the strip's scroll position. */
+#live-strip { position: relative; }
+#live-strip.has-more::after {
+  content: "";
+  position: absolute;
+  top: 4px; right: 0; bottom: 8px;
+  width: 28px;
+  background: linear-gradient(to right, transparent, var(--surface));
+  pointer-events: none;
+}
 .strip {
   position: relative;
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   overflow-x: auto;
   padding: 4px 2px 8px;
+  scroll-snap-type: x proximity;
+  scroll-padding-left: 2px;
   /* Firefox has no ::-webkit-scrollbar; give it the standard properties so
      the strip's scrollbar is thin and on-theme there too, not the default. */
   scrollbar-width: thin;
@@ -1668,23 +1751,21 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .strip::-webkit-scrollbar { height: 6px; }
 .strip::-webkit-scrollbar-track { background: transparent; }
 .strip::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
-/* A persistent "there's more" hint at the trailing edge — the custom
-   scrollbar thumb above is easy to miss, especially on touch devices. */
-.strip::after {
-  content: "";
-  position: absolute;
-  top: 4px; right: 0; bottom: 8px;
-  width: 28px;
-  background: linear-gradient(to right, transparent, var(--surface));
-  pointer-events: none;
-}
-.strip figure { flex: none; max-width: 280px; text-align: center; }
+/* A tab stop (live.html), so the ring is drawn inside: the panel edge
+   and the fade would cover an outside one. */
+.strip:focus-visible { outline-offset: -2px; }
+/* The image sets the frame's width; the caption is taken out of sizing
+   (width 0, stretched back to 100%) and truncates at the image's edge
+   instead of widening the frame past it. 64px keeps a tiny square crop's
+   caption from shrinking to a couple of letters. */
+.strip figure { flex: none; min-width: 64px; max-width: 280px; text-align: center; scroll-snap-align: start; }
 .strip img {
   /* Natural aspect ratio: a crop of a status line is wide, a numeric
      readout is square-ish — cropping either to a fixed tile destroys
      the text the crop exists to show. */
   display: block;
   width: auto; height: auto;
+  margin-inline: auto;
   max-height: 72px;
   max-width: 280px;
   background: var(--bg-inset);
@@ -1692,21 +1773,97 @@ fieldset > .field-error { margin-top: var(--space-2); }
   border-radius: var(--radius-sm);
 }
 .strip figure:has(figcaption.fired) img { border-color: var(--amber-a55); }
+/* The fired tag, then the reading with a run's count after it (.cap-body).
+   On a frame too narrow for both, the reading wraps under the tag and gets
+   the frame's whole width; a reading still too long takes a second line
+   and only then gives way, with an ellipsis. The tag and the count stay
+   whole. On a 126px crop "PRINTER-01 PRINTING 94%" reads in full over two
+   lines instead of "FIRED PRINTER-0…", which lost the part that tells the
+   frames apart. */
 .strip figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 2px 6px;
+  width: 0;
+  min-width: 100%;
   margin-top: 6px;
   font: var(--fs-xs)/1.3 var(--font-mono);
   color: var(--text-dim);
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.strip figcaption .tag { padding: 2px 5px; vertical-align: 1px; } /* the template's space is the gap */
+.strip figcaption .tag { flex: none; padding: 2px 5px; }
+.cap-body { display: flex; justify-content: center; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
+.cap-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  min-width: 0;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
 /* .strip figcaption's own color rule (class+tag) outranks the bare .fired
    utility class on specificity alone — restate it here so a fired crop's
    caption still reads amber instead of silently losing the color. */
 .strip figcaption.fired { color: var(--amber); }
 .strip figcaption.caption-none { font-family: var(--font-ui); font-style: italic; color: var(--text-faint); }
+/* A run of equal readings shown once, counted after the reading (not on
+   the crop, which is what the frame is for). */
+.tile-count { flex: none; font-style: normal; color: var(--text-faint); }
+
+/* The poll's own trouble (app.js): lost contact, a login page in the way,
+   the watch gone. A neutral status line (it is not the watch's error),
+   and what it describes is dimmed underneath. */
+.live-notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-wrap: pretty;
+}
+.live-notice .led { position: relative; top: -1px; }
+.live-notice a, .link-button { white-space: nowrap; }
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-control);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link-button:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
+#live.is-offline #live-status, #live.is-offline #live-strip { opacity: 0.5; transition: opacity var(--dur-fast) var(--ease-out); }
+/* The watch was deleted underneath the page (app.js retire): the frame
+   and its region no longer mean anything, and Test/Edit region/Save are
+   disabled. */
+.detail-grid.is-gone .stage-frame { opacity: 0.45; transition: opacity var(--dur-fast) var(--ease-out); }
+
+/* Arrival (app.js): the readout glows and fades when the reading changes,
+   amber when a new fire arrives; a new frame slides into the strip. Only
+   what changed moves, and nothing moves under reduced motion (the value is
+   already there either way). */
+@media (prefers-reduced-motion: no-preference) {
+  .readout.tick { animation: readout-tick 900ms var(--ease-out); }
+  .readout.tick-fired { animation: readout-fire 1600ms var(--ease-out); }
+  .strip figure.tick-in { animation: strip-in 240ms var(--ease-out); }
+}
+@keyframes readout-tick { from { background-color: var(--accent-a15); } to { background-color: transparent; } }
+@keyframes readout-fire { from { background-color: var(--amber-a15); } to { background-color: transparent; } }
+@keyframes strip-in { from { opacity: 0.2; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
 
 /* ---- Responsive: tablet -------------------------------------------------
    919px: the width just under where the two detail columns fit side by
@@ -1816,7 +1973,6 @@ fieldset > .field-error { margin-top: var(--space-2); }
   .dialog-actions .btn { width: 100%; }
   .field-name { flex: 0 1 auto; min-width: 0; }
 
-  .readout-ts { margin-left: 0; }
 
   /* A frame sized to fill the whole visible strip leaves no sliver of the
      next frame showing, and the custom scrollbar thumb is easy to miss —

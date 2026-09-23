@@ -35,4 +35,8 @@
   {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{end}}
   {{with .Note}}<p class="test-note test-note-status"><span class="led led-off" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}
+  {{with .NoteDetail}}<details class="tech-detail test-note-detail">
+    <summary>Technical detail</summary>
+    <p class="tech-raw mono">{{.}}</p>
+  </details>{{end}}
 </section>

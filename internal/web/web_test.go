@@ -169,9 +169,11 @@ func TestDetailRendersEditor(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	for _, want := range []string{"id=\"stage\"", "id=\"overlay\"", "name=\"ttype\"", "name=\"pp_threshold\"", "/static/app.js",
-		// app.js's poll targets: the narrowed live region, the strip
-		// container outside it, and the status pill it keeps in step.
-		"id=\"live\"", "id=\"live-status\"", "aria-live=\"polite\"", "id=\"live-strip\"", "id=\"status-pill\""} {
+		// app.js's poll targets: the readout and strip containers (not live
+		// regions: see TestLiveAnnouncesChangesNotTicks), the sr-only region
+		// that says what changed, the poll's notice, and the status pill.
+		"id=\"live\"", `<div id="live-status">`, `<p id="live-announce" class="sr-only" aria-live="polite" aria-atomic="true"></p>`,
+		`<p id="live-notice" class="live-notice" hidden></p>`, "id=\"live-strip\"", "id=\"status-pill\""} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail page missing %s", want)
 		}
@@ -1981,8 +1983,8 @@ func TestFiredIsAVisibleTag(t *testing.T) {
 	if n := strings.Count(live, tag); n != 2 {
 		t.Errorf("live fragment should tag the readout and the fired strip frame (2), got %d; body:\n%s", n, live)
 	}
-	// The caption is inline text: without a separator it reads "firedPRINT COMPLETE".
-	if !strings.Contains(live, tag+" PRINT COMPLETE</figcaption>") {
+	// Without a separator the caption's text reads "firedPRINT COMPLETE".
+	if !strings.Contains(live, tag+` <span class="cap-body"><span class="cap-text">PRINT COMPLETE</span></span></figcaption>`) {
 		t.Errorf("strip caption should separate the fired tag from the reading with a space; body:\n%s", live)
 	}
 	if strings.Contains(body+live, `<span class="sr-only">, fired</span>`) {

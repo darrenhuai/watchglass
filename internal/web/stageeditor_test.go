@@ -104,9 +104,9 @@ func TestStageEditorMarkupStylesAndScript(t *testing.T) {
 		".region-manual-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
 		// The slate's text stays copyable inside the selection-locked frame.
 		".snap-error { user-select: text; -webkit-user-select: text; }",
-		// Edit region, Test and the manual disclosure are 44px touch targets
-		// wherever a coarse pointer exists.
-		".region-btns .btn { height: auto; min-height: 44px; }",
+		// Edit region, Test (every shared .btn since W8, see
+		// TestSharedButtonsAreTouchTargets) and the manual disclosure are
+		// 44px touch targets wherever a coarse pointer exists.
 		"details.region-manual > summary { min-height: 44px; padding-block: 0; }",
 		"#region-manual-error:empty::before { display: none; }",
 	} {
