@@ -10,6 +10,10 @@
       fw = form.elements["w"], fh = form.elements["h"];
   var name = stage.dataset.name;
   var base = stage.dataset.base || "";
+  // Called after the drag or the manual fields change the region inputs
+  // (in code, so the form sees no event); bound to the dirty check at the
+  // end of this script.
+  var regionEdited = function () {};
 
   function sizeCanvas() {
     canvas.hidden = false;
@@ -93,6 +97,7 @@
     if (mh.value !== "") fh.value = mh.value;
     paint();
     markTestStale();
+    regionEdited();
   }
   // A test result describes the region and settings it was run with. Once
   // either changes it stays on screen (it's still useful to compare) but
@@ -132,6 +137,7 @@
     fh.value = Math.abs(y1 - drag.y0).toFixed(4);
     drawRect();
     markTestStale();
+    regionEdited();
   });
   canvas.addEventListener("pointerup", function () { drag = null; });
   // A touch drag the browser turns into a scroll ends in pointercancel, not
@@ -623,13 +629,26 @@
   var rowPattern = document.getElementById("row-pattern");
   var rowOp = document.getElementById("row-op");
   var rowEngine = document.getElementById("row-engine");
+  var rowThreshold = document.getElementById("row-threshold");
   var fsPreprocess = document.getElementById("fs-preprocess");
   var ttypeHelp = document.getElementById("ttype-help");
+  var thresholdHelp = document.getElementById("threshold-help");
+  var engineNote = document.getElementById("engine-note");
+  // What each type does, in the words of the labels next to it. Facts
+  // from trigger.go: pixel_change fires at pct >= threshold and again on
+  // every reading still over it (cooldown permitting); numeric fires on
+  // the crossing only and takes the number from Pattern's first group.
+  var opDefaulted = false; // Compare was set to "gt" by updateTriggerFields, not the user
   var TRIGGER_HELP = {
-    pixel_change: "Fires when at least Threshold% of the region's pixels change between readings.",
-    ocr_match: "Fires when the region's recognized text matches the Pattern regex.",
-    ocr_changed: "Fires whenever the region's recognized text changes to a new stable value.",
-    numeric: "Extracts a number from the region's text (Pattern, optional) and fires when it crosses Threshold using Op."
+    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed.",
+    ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
+    ocr_changed: "Fires each time the text read from the region settles on a new value.",
+    numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
+  };
+  // config.go rejects a pixel_change threshold of 0, hence "above 0".
+  var THRESHOLD_HELP = {
+    pixel_change: "Percent of the region that must change, above 0 and up to 100.",
+    numeric: "The value to compare against. Can be negative."
   };
   // Without tesseract (or rapidocr) the server locks the OCR types
   // (data-needs-tesseract / data-needs-rapidocr) for a watch on that
@@ -638,11 +657,12 @@
   // row also stays visible for a pixel_change watch on a box without
   // tesseract, and whenever the selected engine is missing (a rapidocr
   // watch on a box without rapidocr) — with every OCR type locked it's the
-  // only way to reach them at all. The saved type is never locked (see the
-  // template).
+  // only way to reach them at all. The selected type is never locked (see
+  // the template): a text type on an engine that can't run it is instead
+  // shown as blocked (.needs-engine on both selects, the engine note in
+  // its warn state), and the server refuses to save that change.
   var tesseractPresent = !engineSel || engineSel.dataset.tesseract !== "0";
   var rapidPresent = !engineSel || engineSel.dataset.rapidocr !== "0";
-  var savedType = ttypeSel ? ttypeSel.value : "";
   // engineMissing names the external engine the selected Engine needs but
   // the box lacks, or "" when the selection can run.
   function engineMissing() {
@@ -651,52 +671,119 @@
     if (e === "rapidocr") return rapidPresent ? "" : "rapidocr";
     return tesseractPresent ? "" : "tesseract";
   }
-  function syncTypeOptions() {
+  // The engine note's copy, the same sentences as engineNoteFor in
+  // formview.go (which renders the saved state); "" hides the note.
+  var SEVENSEG_ALT = "sevenseg (the seven-segment decoder)";
+  function engineNoteFor(t, missing) {
+    var pixel = t === "pixel_change";
+    if (missing === "") {
+      return pixel ? "Not used by pixel_change. It only matters if Type becomes a text trigger." : "";
+    }
+    if (missing === "rapidocr") {
+      return pixel
+        ? "Not used by pixel_change. rapidocr isn't available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine."
+        : "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.";
+    }
+    if (pixel) {
+      return "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to " +
+        (rapidPresent ? "rapidocr or " : "") + SEVENSEG_ALT + " first, or install tesseract.";
+    }
+    return "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to " +
+      (rapidPresent ? "rapidocr for printed text or " : "") + SEVENSEG_ALT + " for digit displays, or install tesseract.";
+  }
+  // Everything the Engine and Type selection decide together: which Type
+  // options are locked and how they read, whether the selection is
+  // blocked, whether the Engine row shows, and what its note says.
+  function syncEngineUI() {
     if (!ttypeSel) return;
     var missing = engineMissing();
+    var t = ttypeSel.value;
+    var pixel = t === "pixel_change";
     Array.prototype.forEach.call(ttypeSel.options, function (o) {
       if (o.dataset.needsTesseract !== "1" && o.dataset.needsRapidocr !== "1") return;
       // The selected option is never disabled: a disabled selected option is
-      // left out of the form, and the save would carry no ttype at all.
-      o.disabled = missing !== "" && o.value !== ttypeSel.value;
-      o.textContent = o.value + (missing ? " (needs " + missing + ")" : "");
+      // left out of the form, and the save would carry no ttype at all. The
+      // lock suffix goes on the others, so the closed select never shows it.
+      var lock = missing !== "" && o.value !== t;
+      o.disabled = lock;
+      o.textContent = (o.dataset.label || o.value) + (lock ? " (needs " + missing + ")" : "");
     });
+    var blocked = missing !== "" && !pixel;
+    ttypeSel.classList.toggle("needs-engine", blocked);
+    if (engineSel) engineSel.classList.toggle("needs-engine", blocked);
+    if (rowEngine) rowEngine.hidden = pixel && tesseractPresent && missing === "";
+    if (engineNote) {
+      var text = engineNoteFor(t, missing);
+      engineNote.textContent = text;
+      // A refused save says the same thing under Type (err-ttype) until
+      // the selection moves; the warn note doesn't repeat it meanwhile.
+      engineNote.hidden = text === "" || !!(rowEngine && rowEngine.hidden) || (blocked && !!document.getElementById("err-ttype"));
+      engineNote.classList.toggle("is-warn", blocked);
+    }
+  }
+  // The server's objection to a submitted Type/Engine pair (err-ttype)
+  // stands while that pair does. Once either select moves it is retired
+  // and the live engine note takes over, so the form never explains a
+  // selection the user has already left, in red, under a different row.
+  function retireTypeError() {
+    var err = document.getElementById("err-ttype");
+    if (!err) return;
+    var row = err.parentNode;
+    row.removeChild(err);
+    row.classList.remove("field-invalid");
+    ttypeSel.removeAttribute("aria-invalid");
+    ttypeSel.setAttribute("aria-describedby", (ttypeSel.getAttribute("aria-describedby") || "").replace(/\berr-ttype\b\s*/, "").trim());
   }
   function updateTriggerFields() {
     if (!ttypeSel) return;
     var t = ttypeSel.value;
     if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
     if (rowOp) rowOp.hidden = t !== "numeric";
-    if (rowEngine) rowEngine.hidden = t === "pixel_change" && tesseractPresent && engineMissing() === "";
+    if (rowThreshold) rowThreshold.hidden = !(t === "pixel_change" || t === "numeric");
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
+    if (thresholdHelp) thresholdHelp.textContent = THRESHOLD_HELP[t] || "";
+    // Compare: the validator only takes gt or lt for numeric, so a type
+    // switched to numeric starts on "above" rather than on a choice that
+    // always fails; required only while the row shows (a required control
+    // in a hidden row would block the submit with nothing to focus). A
+    // default the user never touched goes back to blank when the type
+    // leaves numeric, so a look at numeric and back leaves the form clean.
+    var opSel = form.elements["op"];
+    if (opSel) {
+      if (t === "numeric" && opSel.value === "") { opSel.value = "gt"; opDefaulted = true; }
+      else if (t !== "numeric" && opDefaulted && opSel.value === "gt") { opSel.value = ""; opDefaulted = false; }
+      opSel.required = t === "numeric";
+    }
   }
   if (ttypeSel) {
-    ttypeSel.addEventListener("change", updateTriggerFields);
-    updateTriggerFields();
+    ttypeSel.addEventListener("change", function () { retireTypeError(); updateTriggerFields(); syncEngineUI(); });
   }
   if (engineSel) {
-    engineSel.addEventListener("change", syncTypeOptions);
-    syncTypeOptions();
+    engineSel.addEventListener("change", function () { retireTypeError(); syncEngineUI(); });
+  }
+  if (form.elements["op"]) {
+    form.elements["op"].addEventListener("change", function () { opDefaulted = false; });
   }
 
   // Save & restart: show that it's working while the POST and the restart
   // run, and don't take a second click. Disabled a tick later so the
-  // submission itself isn't cancelled. A page restored from the
-  // back/forward cache (Back from an error page) gets the button back.
+  // submission itself isn't cancelled. resyncFromForm (below) gives the
+  // button back on every pageshow, so a page restored from the
+  // back/forward cache never keeps it stuck.
   var saveBtn = form.querySelector("button[type=submit]");
+  var saveLabel = saveBtn ? saveBtn.textContent : "";
+  function restoreSaveBtn() {
+    if (!saveBtn) return;
+    saveBtn.textContent = saveLabel;
+    saveBtn.removeAttribute("aria-busy");
+    saveBtn.disabled = false;
+  }
   if (saveBtn) {
-    var saveLabel = saveBtn.textContent;
     form.addEventListener("submit", function () {
       saveBtn.textContent = "Saving…";
       saveBtn.setAttribute("aria-busy", "true");
       setTimeout(function () { saveBtn.disabled = true; }, 0);
-    });
-    window.addEventListener("pageshow", function (e) {
-      if (!e.persisted) return;
-      saveBtn.textContent = saveLabel;
-      saveBtn.removeAttribute("aria-busy");
-      saveBtn.disabled = false;
     });
   }
   // A rejected save lands with the error summary focused (autofocus), so
@@ -714,13 +801,18 @@
     });
   }
 
+  // Binarize: 0 is "off", and an off slider's thumb is unlit (.is-off)
+  // rather than the same accent as Save and the running LED.
   var range = form.elements["pp_threshold"];
   var out = document.getElementById("ppt-val");
-  if (range && out) {
-    var sync = function () { out.textContent = range.value === "0" ? "off" : range.value; };
-    range.addEventListener("input", sync);
-    sync();
+  function syncRange() {
+    if (!range || !out) return;
+    var off = range.value === "0";
+    out.textContent = off ? "off" : range.value;
+    range.classList.toggle("is-off", off);
+    out.classList.toggle("is-off", off);
   }
+  if (range && out) range.addEventListener("input", syncRange);
   // The folded Preprocess section's readout ("off", "grayscale · binarize
   // 128 · 2×"): the server renders it (preprocessSummary in web.go) and
   // this keeps it in step with the controls, so a closed section still
@@ -740,6 +832,61 @@
   if (ppSummaryEl) {
     form.addEventListener("input", function (e) { if (e.target && /^pp_/.test(e.target.name || "")) ppSummary(); });
     form.addEventListener("change", function (e) { if (e.target && /^pp_/.test(e.target.name || "")) ppSummary(); });
-    ppSummary();
   }
+
+  // Everything derived from the form's controls, in one place, run now
+  // and again on every pageshow: a page that comes back through Back
+  // (bfcache or a fresh load) has its controls restored by the browser
+  // AFTER this script ran, without change or input events, so whatever
+  // was derived at script time (locks, rows, notes, the manual region
+  // fields, the slider readout, the busy Save button) is stale until
+  // this runs again. The region inputs are restorable text inputs (see
+  // the template), so the manual fields are re-read from them, not the
+  // other way round.
+  function resyncFromForm() {
+    updateTriggerFields();
+    syncEngineUI();
+    syncRange();
+    syncManualFields();
+    paint();
+    ppSummary();
+    restoreSaveBtn();
+  }
+  resyncFromForm();
+
+  // Unsaved changes: the form as loaded (after the syncs above, so a
+  // default Compare or a reformatted value never counts) against the form
+  // now. While they differ the Save bar says so in place of the file note,
+  // and leaving the page asks first. The drag and the manual fields write
+  // the region inputs in code, which fires no form event, so they call
+  // checkDirty themselves; a submit clears the guard. A rejected or failed
+  // save comes back as a new page showing the submitted values, which
+  // differ from the file by definition: there is no clean state to
+  // snapshot, so that page is dirty from the start (the server renders the
+  // bar that way too) until a save goes through.
+  var serialize = function () { return new URLSearchParams(new FormData(form)).toString(); };
+  var clean = formErrors ? null : serialize();
+  var dirtyNote = document.getElementById("dirty-note");
+  var saveNote = form.querySelector(".save-note");
+  var submitting = false;
+  function checkDirty() {
+    var d = !submitting && (clean === null || serialize() !== clean);
+    if (dirtyNote) dirtyNote.hidden = !d;
+    if (saveNote) saveNote.hidden = d;
+    return d;
+  }
+  form.addEventListener("input", checkDirty);
+  form.addEventListener("change", checkDirty);
+  form.addEventListener("submit", function () { submitting = true; checkDirty(); });
+  window.addEventListener("beforeunload", function (e) {
+    if (!checkDirty()) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+  regionEdited = checkDirty;
+  window.addEventListener("pageshow", function () {
+    submitting = false;
+    resyncFromForm();
+    checkDirty();
+  });
 })();

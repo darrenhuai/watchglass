@@ -40,7 +40,7 @@ func TestDetailCompositionSectionsAndTestBesideStage(t *testing.T) {
 		`<fieldset id="fs-preprocess" class="fs-fold" aria-labelledby="pp-label">`,
 		`<span id="pp-label" class="fold-title">Preprocess</span>`,
 		`name="pp_threshold"`,
-		`<legend>Notify <span class="legend-note">one shoutrrr URL per line</span></legend>`,
+		`<legend>Notify <span class="legend-note">one URL per line · <a href="https://containrrr.dev/shoutrrr/" target="_blank" rel="noopener">shoutrrr format</a></span></legend>`,
 		`<div class="form-actions">`,
 		`<p class="save-note" title="Merged into config.yaml: comments, key order and quoting are kept. See the README for the few things YAML can't round-trip."><span class="save-note-file">Writes to <code>config.yaml</code></span><span class="save-note-more">· comments kept</span></p>`,
 		`<button type="submit" class="btn btn-primary">Save &amp; restart watch</button>`,
@@ -87,7 +87,7 @@ func TestDetailCompositionSectionsAndTestBesideStage(t *testing.T) {
 			t.Errorf("missing short select %q", sel)
 		}
 	}
-	for _, full := range []string{`<select id="f-ttype" name="ttype">`, `<select id="f-engine" name="engine" data-`, `<input id="f-pattern" name="pattern"`} {
+	for _, full := range []string{`<select id="f-ttype" name="ttype" aria-describedby="ttype-help">`, `<select id="f-engine" name="engine" aria-describedby="engine-note" data-`, `<input id="f-pattern" name="pattern"`} {
 		if !strings.Contains(body, full) {
 			t.Errorf("%q should keep the full width (no control-short)", full)
 		}
@@ -213,6 +213,19 @@ func TestSaveNoteWrapsFileAndCaveatSeparately(t *testing.T) {
 	for _, decl := range []string{"display: flex;", "flex-wrap: wrap;", "min-width: 0;", "overflow: hidden;"} {
 		if !strings.Contains(noteRule, decl) {
 			t.Errorf(".save-note rule missing %q:\n%s", decl, noteRule)
+		}
+	}
+	// A row's hint sits on the control's edge like its error, so the amber
+	// and red dots line up; the label column is sized to the widest label
+	// so the Type/Engine option text fits the control at the 920px floor.
+	hintRule := css[strings.Index(css, ".field-row > .field-hint {"):]
+	hintRule = hintRule[:strings.Index(hintRule, "}")]
+	if !strings.Contains(hintRule, "grid-column: 2;") {
+		t.Errorf(".field-row > .field-hint should share the control column:\n%s", hintRule)
+	}
+	for _, rule := range []string{"--field-label-w: 5.5rem;", ".col-stage  { flex: 1 1 440px;", ".col-config { flex: 1 1 400px;", ".field-row > .field-hint { grid-column: 1; }"} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("style.css missing %q", rule)
 		}
 	}
 	_, js := get(t, h, "/static/app.js")

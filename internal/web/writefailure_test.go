@@ -39,6 +39,9 @@ func TestSaveWriteFailureRerendersFormWithSubmittedValues(t *testing.T) {
 		`id="f-cooldown" name="cooldown" value="33s"`,
 		`id="f-interval" name="interval" value="7s"`,
 		`id="watchform"`,
+		// What the form shows is not what the file holds: dirty from the start.
+		`<span id="dirty-note" class="dirty-note"><span class="led led-amber"`,
+		`<p class="save-note" hidden title="`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("re-rendered form missing %q; body:\n%s", want, body)

@@ -178,7 +178,7 @@ var configFieldErrors = []struct {
 }{
 	{"interval must be >= 1s", "interval", "Interval must be at least 1s, for example 5s or 1m30s."},
 	{"max_interval must be >= interval", "max_interval", "Max interval can't be shorter than Interval. Leave it empty to turn it off."},
-	{"health_after must be >= 0", "health_after", "Health after can't be negative."},
+	{"health_after must be >= 0", "health_after", "Down after can't be negative."},
 	{"region must be finite", "region", "The region isn't a valid rectangle. Drag on the snapshot to draw it again."},
 	{"region must be normalized", "region", "The region must fit inside the frame. Drag on the snapshot to draw it again."},
 	{"unknown trigger type", "ttype", "Choose a trigger type."},
@@ -186,7 +186,8 @@ var configFieldErrors = []struct {
 	{"trigger threshold must be finite", "tthreshold", "Threshold must be a number."},
 	{"pixel_change threshold must be > 0", "tthreshold", "Threshold must be above 0: the percent of the region that has to change."},
 	{"ocr_match requires a pattern", "pattern", "ocr_match needs a pattern to look for, for example (?i)print complete."},
-	{"numeric op must be gt or lt", "op", "Choose gt or lt: whether the reading must go above or below Threshold."},
+	{"numeric needs Compare set to", "op", "Under Compare, choose whether the reading must go above or below Threshold."},
+	{"numeric op must be gt or lt", "op", "Under Compare, choose whether the reading must go above or below Threshold."},
 	{"preprocess threshold must be 0-255", "pp_threshold", "Binarize must be between 0 and 255."},
 	{"preprocess upscale must be 0-4", "pp_upscale", "Upscale must be off, 2x, 3x or 4x."},
 	{"notify: empty URL", "notify", "Remove the empty notify line."},

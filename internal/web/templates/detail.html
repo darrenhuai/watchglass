@@ -89,84 +89,104 @@
   <div class="col-config">
     <h2 id="config-heading" class="col-heading">Configuration</h2>
     <form id="watchform" class="panel" method="post" action="{{watchURL .Watch.Name "/save"}}" aria-labelledby="config-heading">
-      <input type="hidden" name="x" value="{{.Watch.Region.X}}">
-      <input type="hidden" name="y" value="{{.Watch.Region.Y}}">
-      <input type="hidden" name="w" value="{{.Watch.Region.W}}">
-      <input type="hidden" name="h" value="{{.Watch.Region.H}}">
+      {{/* The region the drag and the manual fields write to. Text inputs
+           under the hidden attribute rather than type=hidden: browsers
+           restore text inputs on Back (type=hidden never), so a region
+           drawn before leaving the page comes back in step with the manual
+           fields instead of quietly reverting to the saved one. */}}
+      <input type="text" name="x" value="{{.Watch.Region.X}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="y" value="{{.Watch.Region.Y}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="w" value="{{.Watch.Region.W}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="h" value="{{.Watch.Region.H}}" hidden tabindex="-1" aria-hidden="true">
       <fieldset>
         <legend>Trigger</legend>
         {{/* The OCR types are locked only while the watch would read them
              with an external engine that isn't there — tesseract for a
              tesseract watch, rapidocr for a rapidocr watch; the built-in
              seven-segment decoder runs them without either. app.js
-             re-derives the lock from data-needs-tesseract /
+             (syncEngineUI) re-derives the lock from data-needs-tesseract /
              data-needs-rapidocr as the Engine select changes. */}}
         {{$onTess := or (eq .Watch.Engine "") (eq .Watch.Engine "tesseract")}}
         {{$onRapid := eq .Watch.Engine "rapidocr"}}
         {{$tessLocked := and (not .TesseractAvailable) $onTess}}
         {{$locked := or $tessLocked (and (not .RapidOCRAvailable) $onRapid)}}
         {{$needs := ""}}{{if $locked}}{{if $onRapid}}{{$needs = " (needs rapidocr)"}}{{else}}{{$needs = " (needs tesseract)"}}{{end}}{{end}}
+        {{/* A saved text type on an engine this box can't run: the selects
+             are marked blocked and the engine note (below) says why. */}}
+        {{$blocked := and $locked (ne .Watch.Trigger.Type "pixel_change")}}
+        {{$note := engineNote .Watch .TesseractAvailable .RapidOCRAvailable}}
         <div class="field-row{{if .Form.Err "ttype"}} field-invalid{{end}}">
           <label for="f-ttype">Type</label>
-          <select id="f-ttype" name="ttype"{{with .Form.Err "ttype"}} aria-invalid="true" aria-describedby="err-ttype"{{end}}>
-            <option value="pixel_change" {{if eq .Watch.Trigger.Type "pixel_change"}}selected{{end}}>pixel_change</option>
+          <select id="f-ttype" name="ttype"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "ttype"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "ttype"}}err-ttype {{end}}ttype-help">
+            <option value="pixel_change" {{if eq .Watch.Trigger.Type "pixel_change"}}selected{{end}} data-label="pixel_change — {{trigLabel "pixel_change"}}">pixel_change — {{trigLabel "pixel_change"}}</option>
             {{/* The watch's current type is never disabled, even without an
                  engine: a disabled option is left out of the form's entry
                  list, so the save would carry no ttype at all and be
                  rejected as `unknown trigger type ""` — every other field of
                  an existing OCR watch would be unsaveable on a box without
-                 tesseract. Kept enabled, it saves as before and the restart
-                 error says honestly that the type needs an OCR engine. */}}
-            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_match{{$needs}}</option>
-            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_changed{{$needs}}</option>
-            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}}{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>numeric{{$needs}}</option>
+                 tesseract. Kept enabled, it saves as before; the locked
+                 suffix goes on the other options only, and the engine note
+                 explains the selected one. */}}
+            <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}} data-label="ocr_match — {{trigLabel "ocr_match"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_match — {{trigLabel "ocr_match"}}{{if ne .Watch.Trigger.Type "ocr_match"}}{{$needs}}{{end}}</option>
+            <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}} data-label="ocr_changed — {{trigLabel "ocr_changed"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_changed — {{trigLabel "ocr_changed"}}{{if ne .Watch.Trigger.Type "ocr_changed"}}{{$needs}}{{end}}</option>
+            <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}} data-label="numeric — {{trigLabel "numeric"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>numeric — {{trigLabel "numeric"}}{{if ne .Watch.Trigger.Type "numeric"}}{{$needs}}{{end}}</option>
           </select>
           {{with .Form.Err "ttype"}}<p id="err-ttype" class="field-error">{{.}}</p>{{end}}
+          {{/* What the selected type does; app.js (TRIGGER_HELP) fills it. */}}
+          <p id="ttype-help" class="field-hint"></p>
         </div>
-        {{/* The tesseract note's locked branch is gated on the tesseract
-             lock alone: a rapidocr watch locked by a missing rapidocr is
-             not unlocked by installing tesseract, so it gets the short
-             sentence plus the rapidocr note below. */}}
-        {{if not .TesseractAvailable}}<p class="muted trigger-note">tesseract isn't on PATH — {{if $tessLocked}}OCR-based trigger types (ocr_match, ocr_changed, numeric) {{if eq .Watch.Trigger.Type "pixel_change"}}are disabled{{else}}won't run (this watch's current type stays selectable so its other fields can still be saved){{end}} until it's installed. The seven-segment decoder works without it: a digit display can switch Engine to sevenseg instead.{{else}}text OCR is unavailable; {{if eq .Watch.Trigger.Type "pixel_change"}}the OCR trigger types will use {{if $onRapid}}rapidocr{{else}}the seven-segment decoder{{end}}, which works without it{{else if $onRapid}}this watch reads with rapidocr, which works without it{{else}}this watch reads with the seven-segment decoder, which works without it{{end}}.{{end}}</p>{{end}}
-        {{if and $onRapid (not .RapidOCRAvailable)}}<p class="muted trigger-note">rapidocr isn't available on this box (python with the rapidocr package) — pip install rapidocr onnxruntime, or switch Engine.</p>{{end}}
-        <p id="ttype-help" class="muted trigger-note"></p>
         <div class="field-row{{if .Form.Err "engine"}} field-invalid{{end}}" id="row-engine">
           <label for="f-engine">Engine</label>
-          <select id="f-engine" name="engine"{{with .Form.Err "engine"}} aria-invalid="true" aria-describedby="err-engine"{{end}} data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}" data-rapidocr="{{if .RapidOCRAvailable}}1{{else}}0{{end}}">
-            <option value="tesseract" {{if $onTess}}selected{{end}}>tesseract — text (needs tesseract on PATH)</option>
-            <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits (built in)</option>
-            <option value="rapidocr" {{if $onRapid}}selected{{end}}>rapidocr — printed text, hard cases (needs python + rapidocr)</option>
+          <select id="f-engine" name="engine"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "engine"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "engine"}}err-engine {{end}}engine-note" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}" data-rapidocr="{{if .RapidOCRAvailable}}1{{else}}0{{end}}">
+            <option value="tesseract" {{if $onTess}}selected{{end}}>tesseract — text{{if not .TesseractAvailable}} (not installed){{end}}</option>
+            <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits</option>
+            <option value="rapidocr" {{if $onRapid}}selected{{end}}>rapidocr — text{{if .RapidOCRAvailable}}, harder cases{{else}} (not installed){{end}}</option>
           </select>
           {{with .Form.Err "engine"}}<p id="err-engine" class="field-error">{{.}}</p>{{end}}
+          {{/* The one engine note: what the selected engine means for the
+               selected type on this box (engineNoteFor in formview.go;
+               app.js keeps it live). Warn = the selection can't run. A
+               refused save already says that under Type (err-ttype), so
+               the warn note waits until the selection moves and the
+               error is retired (app.js). */}}
+          <p id="engine-note" class="field-hint engine-note{{if $note.Warn}} is-warn{{end}}"{{if or (not $note.Show) (and $note.Warn (.Form.Err "ttype"))}} hidden{{end}}>{{$note.Text}}</p>
         </div>
-        <div class="field-row{{if .Form.Err "pattern"}} field-invalid{{end}} field-row-wide" id="row-pattern">
+        <div class="field-row{{if .Form.Err "pattern"}} field-invalid{{end}}" id="row-pattern">
           <label for="f-pattern">Pattern</label>
           <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete" spellcheck="false"{{with .Form.Err "pattern"}} aria-invalid="true" aria-describedby="err-pattern"{{end}}>
           {{with .Form.Err "pattern"}}<p id="err-pattern" class="field-error">{{.}}</p>{{end}}
         </div>
+        {{/* Compare keeps name="op" and the gt/lt values: they are the
+             tokens a hand-edited config.yaml uses. app.js picks gt when
+             the type becomes numeric with nothing chosen and marks the
+             select required while it is shown. */}}
         <div class="field-row{{if .Form.Err "op"}} field-invalid{{end}}" id="row-op">
-          <label for="f-op">Op</label>
+          <label for="f-op">Compare</label>
           <select id="f-op" name="op" class="control-short"{{with .Form.Err "op"}} aria-invalid="true" aria-describedby="err-op"{{end}}>
-            <option value="" {{if eq .Watch.Trigger.Op ""}}selected{{end}}>-</option>
-            <option value="gt" {{if eq .Watch.Trigger.Op "gt"}}selected{{end}}>gt</option>
-            <option value="lt" {{if eq .Watch.Trigger.Op "lt"}}selected{{end}}>lt</option>
+            <option value="" {{if eq .Watch.Trigger.Op ""}}selected{{end}}>choose…</option>
+            <option value="gt" {{if eq .Watch.Trigger.Op "gt"}}selected{{end}}>above (gt)</option>
+            <option value="lt" {{if eq .Watch.Trigger.Op "lt"}}selected{{end}}>below (lt)</option>
           </select>
           {{with .Form.Err "op"}}<p id="err-op" class="field-error">{{.}}</p>{{end}}
         </div>
-        <div class="field-row{{if .Form.Err "tthreshold"}} field-invalid{{end}}">
+        <div class="field-row{{if .Form.Err "tthreshold"}} field-invalid{{end}}" id="row-threshold">
           <label for="f-threshold">Threshold</label>
-          <input class="control-short" id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Form.Val "tthreshold" (printf "%v" .Watch.Trigger.Threshold)}}"{{with .Form.Err "tthreshold"}} aria-invalid="true" aria-describedby="err-tthreshold"{{end}} title="pixel_change: percent of the region that must change, 0-100. numeric: the compare value — can be negative (e.g. a sub-zero reading).">
+          <input class="control-short" id="f-threshold" name="tthreshold" type="number" step="any" value="{{.Form.Val "tthreshold" (printf "%v" .Watch.Trigger.Threshold)}}"{{with .Form.Err "tthreshold"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "tthreshold"}}err-tthreshold {{end}}threshold-help">
           {{with .Form.Err "tthreshold"}}<p id="err-tthreshold" class="field-error">{{.}}</p>{{end}}
+          {{/* Per-type meaning, filled by app.js (THRESHOLD_HELP). */}}
+          <p id="threshold-help" class="field-hint"></p>
         </div>
         <div class="field-row{{if .Form.Err "confirm"}} field-invalid{{end}}">
-          <label for="f-confirm">Confirm</label>
-          <input class="control-short" id="f-confirm" name="confirm" type="number" min="1" step="1" value="{{.Form.Val "confirm" (printf "%d" .Watch.Trigger.Confirm)}}"{{with .Form.Err "confirm"}} aria-invalid="true" aria-describedby="err-confirm"{{end}} title="Consecutive identical readings required before a state is believed (must be at least 1).">
+          <label for="f-confirm">Confirm after</label>
+          <input class="control-short" id="f-confirm" name="confirm" type="number" min="1" step="1" value="{{.Form.Val "confirm" (printf "%d" .Watch.Trigger.Confirm)}}"{{with .Form.Err "confirm"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "confirm"}}err-confirm {{end}}confirm-help">
           {{with .Form.Err "confirm"}}<p id="err-confirm" class="field-error">{{.}}</p>{{end}}
+          <p id="confirm-help" class="field-hint">Readings in a row that must agree before a change counts. Blank means 3.</p>
         </div>
         <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}">
           <label for="f-cooldown">Cooldown</label>
-          <input class="control-short" id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true" aria-describedby="err-cooldown"{{end}}>
+          <input class="control-short" id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "cooldown"}}err-cooldown {{end}}cooldown-help">
           {{with .Form.Err "cooldown"}}<p id="err-cooldown" class="field-error">{{.}}</p>{{end}}
+          <p id="cooldown-help" class="field-hint">Quiet period after a notification, e.g. 10m. A change that still holds when it ends notifies then.</p>
         </div>
       </fieldset>
       {{/* Watch-level timing (config.Watch, not the trigger): how often the
@@ -175,18 +195,21 @@
         <legend>Polling</legend>
         <div class="field-row{{if .Form.Err "interval"}} field-invalid{{end}}">
           <label for="f-interval">Interval</label>
-          <input class="control-short" id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true" aria-describedby="err-interval"{{end}}>
+          <input class="control-short" id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "interval"}}err-interval {{end}}interval-help">
           {{with .Form.Err "interval"}}<p id="err-interval" class="field-error">{{.}}</p>{{end}}
+          <p id="interval-help" class="field-hint">How often to grab a frame: at least 1s, e.g. 5s or 1m30s.</p>
         </div>
         <div class="field-row{{if .Form.Err "max_interval"}} field-invalid{{end}}">
           <label for="f-maxinterval">Max interval</label>
-          <input class="control-short" id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true" aria-describedby="err-max-interval"{{end}}>
+          <input class="control-short" id="f-maxinterval" name="max_interval" value="{{.Form.Val "max_interval" (or (and .Watch.MaxInterval (dur .Watch.MaxInterval)) "")}}" placeholder="off" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="Empty for off, or a duration at least as long as Interval, like 10m" spellcheck="false"{{with .Form.Err "max_interval"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "max_interval"}}err-max-interval {{end}}max-interval-help">
           {{with .Form.Err "max_interval"}}<p id="err-max-interval" class="field-error">{{.}}</p>{{end}}
+          <p id="max-interval-help" class="field-hint">Slow polling down to this while nothing changes. Blank = fixed interval.</p>
         </div>
         <div class="field-row{{if .Form.Err "health_after"}} field-invalid{{end}}">
-          <label for="f-health">Health after</label>
-          <input class="control-short" id="f-health" name="health_after" type="number" min="1" step="1" value="{{.Form.Val "health_after" (printf "%d" .Watch.HealthAfter)}}"{{with .Form.Err "health_after"}} aria-invalid="true" aria-describedby="err-health-after"{{end}} title="Consecutive failed reads before the watch counts as down.">
+          <label for="f-health">Down after</label>
+          <input class="control-short" id="f-health" name="health_after" type="number" min="1" step="1" value="{{.Form.Val "health_after" (printf "%d" .Watch.HealthAfter)}}" placeholder="3"{{with .Form.Err "health_after"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "health_after"}}err-health-after {{end}}health-help">
           {{with .Form.Err "health_after"}}<p id="err-health-after" class="field-error">{{.}}</p>{{end}}
+          <p id="health-help" class="field-hint">Failed grabs in a row before the stream is marked down (one notification).</p>
         </div>
       </fieldset>
       {{/* Preprocess folds away while every option is at its default (the
@@ -222,9 +245,9 @@
         </details>
       </fieldset>
       <fieldset>
-        <legend>Notify <span class="legend-note">one shoutrrr URL per line</span></legend>
-        <label for="f-notify" class="sr-only">Notify URLs</label>
-        <textarea id="f-notify" class="mono" name="notify" rows="3" cols="42"{{with .Form.Err "notify"}} aria-invalid="true" aria-describedby="err-notify"{{end}}>{{range .Watch.Notify}}{{.}}
+        <legend>Notify <span class="legend-note">one URL per line · <a href="https://containrrr.dev/shoutrrr/" target="_blank" rel="noopener">shoutrrr format</a></span></legend>
+        <label for="f-notify" class="sr-only">Notification URLs</label>
+        <textarea id="f-notify" class="mono" name="notify" rows="3" spellcheck="false" autocapitalize="off" placeholder="ntfy://ntfy.sh/my-topic&#10;telegram://token@telegram?chats=@channel"{{with .Form.Err "notify"}} aria-invalid="true" aria-describedby="err-notify"{{end}}>{{range .Watch.Notify}}{{.}}
 {{end}}</textarea>
         {{with .Form.Err "notify"}}<p id="err-notify" class="field-error">{{.}}</p>{{end}}
       </fieldset>
@@ -233,7 +256,12 @@
            note says where the save goes; the README covers what YAML can't
            round-trip (blank lines, end-of-line comment alignment). */}}
       <div class="form-actions">
-        <p class="save-note" title="Merged into {{.ConfigFile}}: comments, key order and quoting are kept. See the README for the few things YAML can't round-trip."><span class="save-note-file">Writes to <code>{{.ConfigFile}}</code></span><span class="save-note-more">· comments kept</span></p>
+        {{/* app.js shows this in place of the note while the form differs
+             from what was loaded, and asks before the page is left. A
+             refused or failed save comes back with the submitted values,
+             which differ from the file by definition, so it starts dirty. */}}
+        <span id="dirty-note" class="dirty-note"{{if not .Form.Rejected}} hidden{{end}}><span class="led led-amber" aria-hidden="true"></span>Unsaved changes</span>
+        <p class="save-note"{{if .Form.Rejected}} hidden{{end}} title="Merged into {{.ConfigFile}}: comments, key order and quoting are kept. See the README for the few things YAML can't round-trip."><span class="save-note-file">Writes to <code>{{.ConfigFile}}</code></span><span class="save-note-more">· comments kept</span></p>
         <button type="submit" class="btn btn-primary">Save &amp; restart watch</button>
       </div>
     </form>

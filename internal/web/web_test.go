@@ -1001,11 +1001,14 @@ func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
 	// newTestServer's supervisor is built with a fixed fake OCR engine, so
 	// this needs its own server whose supervisor genuinely has none —
 	// otherwise Restart would succeed and there'd be nothing to test.
+	// The file already says ocr_match (a hand edit, or tesseract gone since):
+	// the save changes neither type nor engine, so it is not refused up
+	// front (see TestSaveRefusesTypeThatCannotRunHere) and reaches Restart.
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &config.Config{Watches: []config.Watch{{
 		Name: "printer", Source: "http://unused.invalid/snap.jpg",
 		Interval: config.Duration(time.Second), Region: config.Region{X: 0, Y: 0, W: 1, H: 1},
-		Trigger: config.Trigger{Type: "pixel_change", Threshold: 10},
+		Trigger: config.Trigger{Type: "ocr_match", Pattern: "(?i)done"},
 	}}}
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatal(err)
@@ -1019,7 +1022,10 @@ func TestSaveRestartFailureStopsWatchAndRendersErrorPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: testImage()}, nil }
-	if err := sup.Start(context.Background(), cfg.Watches[0]); err != nil {
+	// It was running as pixel_change when the file was edited underneath it.
+	running := cfg.Watches[0]
+	running.Trigger = config.Trigger{Type: "pixel_change", Threshold: 10}
+	if err := sup.Start(context.Background(), running); err != nil {
 		t.Fatalf("start printer: %v", err)
 	}
 
@@ -1116,12 +1122,21 @@ func TestDetailKeepsCurrentOCRTypeEnabledWithoutEngine(t *testing.T) {
 	if !strings.Contains(cur, "selected") || strings.Contains(cur, "disabled") {
 		t.Errorf("current type must be selected and NOT disabled: %q", cur)
 	}
-	if !strings.Contains(cur, "needs tesseract") {
-		t.Errorf("current type should still be annotated: %q", cur)
+	// The lock suffix belongs to the locked options: the selected one is
+	// explained by the engine note and the blocked styling instead, so the
+	// closed select never reads "(needs tesseract)".
+	if strings.Contains(cur, "needs tesseract") {
+		t.Errorf("current type must not carry the lock suffix: %q", cur)
 	}
 	for _, other := range []string{"ocr_changed", "numeric"} {
-		if line := optionLine(other); !strings.Contains(line, "disabled") {
-			t.Errorf("option %q should stay disabled without an OCR engine: %q", other, line)
+		if line := optionLine(other); !strings.Contains(line, "disabled") || !strings.Contains(line, "(needs tesseract)") {
+			t.Errorf("option %q should stay disabled and say why without an OCR engine: %q", other, line)
+		}
+	}
+	for _, want := range []string{`<select id="f-ttype" name="ttype" class="needs-engine"`, `<select id="f-engine" name="engine" class="needs-engine"`,
+		`<p id="engine-note" class="field-hint engine-note is-warn">Tesseract isn&#39;t on PATH, so this trigger can&#39;t run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or install tesseract.</p>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a blocked selection should be marked and explained; missing %q in body:\n%s", want, body)
 		}
 	}
 	// And the save round-trips: editing only Cooldown keeps ttype intact.
@@ -1163,8 +1178,159 @@ func TestSaveDropsPatternAndOpForTypesThatIgnoreThem(t *testing.T) {
 		t.Fatalf("ocr_match save status = %d, body: %s", resp.StatusCode, body)
 	}
 	got, _ = config.Load(cfgPath)
-	if tr := got.Watches[0].Trigger; tr.Pattern != "(?i)done" || tr.Op != "" {
-		t.Errorf("ocr_match should keep pattern and drop op: %+v", tr)
+	if tr := got.Watches[0].Trigger; tr.Pattern != "(?i)done" || tr.Op != "" || tr.Threshold != 0 {
+		t.Errorf("ocr_match should keep pattern and drop op and the hidden threshold: %+v", tr)
+	}
+	form.Set("ttype", "ocr_changed")
+	form.Set("tthreshold", "7")
+	if resp, body := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("ocr_changed save status = %d, body: %s", resp.StatusCode, body)
+	}
+	got, _ = config.Load(cfgPath)
+	if tr := got.Watches[0].Trigger; tr.Pattern != "" || tr.Op != "" || tr.Threshold != 0 {
+		t.Errorf("ocr_changed reads none of pattern/op/threshold: %+v", tr)
+	}
+}
+
+// A change of Type or Engine into a state this box can't run (a text
+// type on tesseract without tesseract) is refused before anything is
+// written: saving it would only stop the watch. The error sits under Type
+// and the form comes back with the blocked selection marked. A watch
+// already in that state still saves its other fields (the current type is
+// never disabled), and switching to an engine that runs is fine.
+func TestSaveRefusesTypeThatCannotRunHere(t *testing.T) {
+	s, cfgPath := newTestServer(t)
+	s.engines.Tesseract = nil
+	form := url.Values{
+		"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"},
+		"ttype": {"ocr_match"}, "pattern": {"(?i)done"}, "engine": {"tesseract"},
+		"tthreshold": {"0"}, "confirm": {"1"}, "cooldown": {"9s"}, "interval": {"5s"},
+	}
+	resp, body := postForm(t, s.Handler(), "/watch/printer/save", form)
+	if resp.StatusCode != 400 {
+		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	want := `<p id="err-ttype" class="field-error">ocr_match reads text with tesseract, and tesseract isn&#39;t installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to sevenseg, or install tesseract.</p>`
+	if !strings.Contains(body, want) || !strings.Contains(body, `<select id="f-ttype" name="ttype" class="needs-engine" aria-invalid="true" aria-describedby="err-ttype ttype-help">`) {
+		t.Errorf("refused save should explain under Type and mark the selects; body:\n%s", body)
+	}
+	if got, _ := config.Load(cfgPath); got.Watches[0].Trigger.Type != "pixel_change" || time.Duration(got.Watches[0].Trigger.Cooldown) == 9*time.Second {
+		t.Errorf("a refused save must write nothing: %+v", got.Watches[0].Trigger)
+	}
+	// The page shows the submitted values, which differ from the file: the
+	// Save bar starts on "Unsaved changes" (app.js keeps it there and asks
+	// before the page is left), and the warn note under Engine stays out of
+	// the way while the error under Type says the same thing.
+	for _, want := range []string{
+		`<span id="dirty-note" class="dirty-note"><span class="led led-amber"`,
+		`<p class="save-note" hidden title="`,
+		`<p id="engine-note" class="field-hint engine-note is-warn" hidden>Tesseract isn&#39;t on PATH, so this trigger can&#39;t run.`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refused save page missing %q; body:\n%s", want, body)
+		}
+	}
+	// The same change onto an engine that runs here goes through.
+	form.Set("engine", "sevenseg")
+	if resp, body := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Errorf("ocr_match on sevenseg should save: status %d, body: %s", resp.StatusCode, body)
+	}
+	// Back onto tesseract is an engine change into the blocked state.
+	form.Set("engine", "tesseract")
+	if resp, _ := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 400 {
+		t.Errorf("switching a text watch onto a missing engine should be refused: status %d", resp.StatusCode)
+	}
+	// With rapidocr present the message offers it.
+	s.engines.RapidOCR = fakeRapid{}
+	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, "switch Engine to sevenseg or rapidocr, or install tesseract.") {
+		t.Errorf("message should offer rapidocr when it is installed; body:\n%s", body)
+	}
+	// A rapidocr watch without rapidocr: the rapidocr wording.
+	s.engines.RapidOCR = nil
+	form.Set("engine", "rapidocr")
+	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, `<p id="err-ttype" class="field-error">ocr_match reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime, or switch Engine.</p>`) {
+		t.Errorf("rapidocr wording missing; body:\n%s", body)
+	}
+	// pixel_change never needs an engine, whatever Engine says.
+	form.Set("ttype", "pixel_change")
+	form.Set("engine", "tesseract")
+	form.Set("tthreshold", "10")
+	if resp, body := postForm(t, s.Handler(), "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Errorf("pixel_change on a missing engine still saves: status %d, body: %s", resp.StatusCode, body)
+	}
+}
+
+// The engine note and the trigger labels, at the source: the copy app.js
+// mirrors (engineNoteFor / data-label) and the pill title on the index.
+func TestEngineNoteAndTriggerLabels(t *testing.T) {
+	w := func(typ, engine string) config.Watch {
+		return config.Watch{Engine: engine, Trigger: config.Trigger{Type: typ}}
+	}
+	cases := []struct {
+		name        string
+		w           config.Watch
+		tess, rapid bool
+		want        engineNote
+	}{
+		{"pixel on tesseract, all present: row hidden", w("pixel_change", ""), true, true, engineNote{}},
+		{"text on tesseract, present: nothing to say", w("ocr_match", ""), true, false, engineNote{}},
+		{"text on sevenseg: nothing to say", w("numeric", "sevenseg"), false, false, engineNote{}},
+		{"pixel on sevenseg without tesseract: hint", w("pixel_change", "sevenseg"), false, false,
+			engineNote{Text: "Not used by pixel_change. It only matters if Type becomes a text trigger.", Show: true}},
+		{"text on tesseract, missing", w("ocr_changed", "tesseract"), false, false,
+			engineNote{Text: "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or install tesseract.", Warn: true, Show: true}},
+		{"text on tesseract, missing, rapidocr here", w("ocr_changed", ""), false, true,
+			engineNote{Text: "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to rapidocr for printed text or sevenseg (the seven-segment decoder) for digit displays, or install tesseract.", Warn: true, Show: true}},
+		{"pixel on tesseract, missing", w("pixel_change", ""), false, false,
+			engineNote{Text: "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to sevenseg (the seven-segment decoder) first, or install tesseract.", Show: true}},
+		{"pixel on tesseract, missing, rapidocr here", w("pixel_change", ""), false, true,
+			engineNote{Text: "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to rapidocr or sevenseg (the seven-segment decoder) first, or install tesseract.", Show: true}},
+		{"text on rapidocr, missing", w("numeric", "rapidocr"), true, false,
+			engineNote{Text: "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.", Warn: true, Show: true}},
+		{"pixel on rapidocr, missing", w("pixel_change", "rapidocr"), true, false,
+			engineNote{Text: "Not used by pixel_change. rapidocr isn't available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine.", Show: true}},
+		{"text on rapidocr, present, no tesseract: nothing to say", w("ocr_match", "rapidocr"), false, true, engineNote{}},
+	}
+	for _, c := range cases {
+		if got := engineNoteFor(c.w, c.tess, c.rapid); got != c.want {
+			t.Errorf("%s:\n got  %+v\n want %+v", c.name, got, c.want)
+		}
+	}
+	for typ, want := range map[string]string{"pixel_change": "pixels change", "ocr_match": "text matches pattern", "ocr_changed": "text changes", "numeric": "number vs threshold", "bogus": ""} {
+		if got := triggerLabel(typ); got != want {
+			t.Errorf("triggerLabel(%q) = %q, want %q", typ, got, want)
+		}
+	}
+	// The Type options carry "id — label" as text and data-label (app.js
+	// rebuilds the text from it), and the index pill titles the id.
+	s, _ := newTestServer(t)
+	_, body := get(t, s.Handler(), "/watch/printer")
+	for _, want := range []string{
+		`data-label="pixel_change — pixels change">pixel_change — pixels change</option>`,
+		`data-label="ocr_match — text matches pattern"`, `>ocr_match — text matches pattern</option>`,
+		`data-label="numeric — number vs threshold"`, `>numeric — number vs threshold</option>`,
+		`<label for="f-op">Compare</label>`, `<option value="" selected>choose…</option>`, `<option value="gt" >above (gt)</option>`, `<option value="lt" >below (lt)</option>`,
+		`<label for="f-confirm">Confirm after</label>`, `<label for="f-health">Down after</label>`,
+		`<p id="confirm-help" class="field-hint">`, `<p id="cooldown-help" class="field-hint">`, `<p id="interval-help" class="field-hint">`, `<p id="max-interval-help" class="field-hint">`, `<p id="health-help" class="field-hint">`,
+		`<div class="field-row" id="row-threshold">`, `aria-describedby="threshold-help"`, `<p id="threshold-help" class="field-hint"></p>`,
+		`<div class="field-row" id="row-pattern">`,
+		`<span id="dirty-note" class="dirty-note" hidden>`,
+		`placeholder="ntfy://ntfy.sh/my-topic&#10;telegram://token@telegram?chats=@channel"`,
+		`<input type="text" name="x" value="0" hidden tabindex="-1" aria-hidden="true">`,
+		`<input type="text" name="w" value="1" hidden tabindex="-1" aria-hidden="true">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page missing %q", want)
+		}
+	}
+	for _, gone := range []string{`type="hidden"`, `title="pixel_change: percent`, `title="Consecutive`, "field-row-wide", ">-</option>", "Health after", ">gt</option>"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("detail page still contains %q", gone)
+		}
+	}
+	_, index := get(t, s.Handler(), "/")
+	if !strings.Contains(index, `<span class="pill mono" title="pixels change">pixel_change</span>`) {
+		t.Errorf("index pill should title the id with its label; body:\n%s", index)
 	}
 }
 
@@ -1532,8 +1698,8 @@ func TestDetailRendersRapidOCROption(t *testing.T) {
 	if strings.Contains(line, "selected") {
 		t.Errorf("rapidocr must not be selected for the default engine: %q", line)
 	}
-	if !strings.Contains(line, "printed text") || !strings.Contains(line, "rapidocr") {
-		t.Errorf("rapidocr option should say what it is: %q", line)
+	if !strings.HasSuffix(line, ">rapidocr — text (not installed)") {
+		t.Errorf("rapidocr option should say what it is and that it is missing: %q", line)
 	}
 	if !strings.Contains(body, `data-rapidocr="0"`) {
 		t.Errorf("engine select should carry data-rapidocr=0 when the engine is absent; body:\n%s", body)
@@ -1567,11 +1733,8 @@ func TestDetailRapidOCRWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 	s.mu.Unlock()
 	_, body := get(t, s.Handler(), "/watch/printer")
 	cur := optionLine(t, body, "ocr_match")
-	if !strings.Contains(cur, "selected") || strings.Contains(cur, "disabled") {
-		t.Errorf("current type must be selected and NOT disabled: %q", cur)
-	}
-	if !strings.Contains(cur, "(needs rapidocr)") {
-		t.Errorf("current type should be annotated with the missing engine: %q", cur)
+	if !strings.Contains(cur, "selected") || strings.Contains(cur, "disabled") || strings.Contains(cur, "needs ") {
+		t.Errorf("current type must be selected, NOT disabled and carry no lock suffix: %q", cur)
 	}
 	for _, other := range []string{"ocr_changed", "numeric"} {
 		line := optionLine(t, body, other)
@@ -1582,11 +1745,12 @@ func TestDetailRapidOCRWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 			t.Errorf("%s: tesseract is present, only the rapidocr lock applies: %q", other, line)
 		}
 	}
-	if !strings.Contains(body, "rapidocr isn't available on this box") || !strings.Contains(body, "pip install rapidocr onnxruntime") {
+	// One note, in its warn state, naming the missing engine and the fix.
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note is-warn">rapidocr isn&#39;t available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.</p>`) {
 		t.Errorf("note should say rapidocr is missing and how to install it; body:\n%s", body)
 	}
-	if strings.Contains(body, "tesseract isn't on PATH") {
-		t.Errorf("tesseract is present; its note must not render; body:\n%s", body)
+	if strings.Contains(body, "Tesseract isn&#39;t on PATH") || strings.Count(body, `id="engine-note"`) != 1 {
+		t.Errorf("tesseract is present; only the rapidocr note renders; body:\n%s", body)
 	}
 	// The saved type round-trips like the tesseract case.
 	form := url.Values{
@@ -1602,13 +1766,16 @@ func TestDetailRapidOCRWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 	s.cfg.Watches[0].Engine = "sevenseg"
 	s.mu.Unlock()
 	_, body = get(t, s.Handler(), "/watch/printer")
-	if strings.Contains(body, "rapidocr isn't available") {
+	if strings.Contains(body, "rapidocr isn&#39;t available") || !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note" hidden></p>`) {
 		t.Errorf("a sevenseg watch must not carry the rapidocr note; body:\n%s", body)
 	}
 	for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
 		if line := optionLine(t, body, typ); strings.Contains(line, "disabled") || strings.Contains(line, "needs ") {
 			t.Errorf("%s must be usable with the sevenseg engine: %q", typ, line)
 		}
+	}
+	if strings.Contains(body, "needs-engine") {
+		t.Errorf("a sevenseg watch is not blocked; body:\n%s", body)
 	}
 }
 
@@ -1635,20 +1802,23 @@ func TestDetailRapidOCRWatchUnlockedWithRapidOCRAndNoTesseract(t *testing.T) {
 	if !strings.Contains(body, `data-tesseract="0"`) || !strings.Contains(body, `data-rapidocr="1"`) {
 		t.Errorf("engine select should carry both availability flags; body:\n%s", body)
 	}
-	if strings.Contains(body, "rapidocr isn't available") {
-		t.Errorf("rapidocr is present; its note must not render; body:\n%s", body)
+	// The watch reads with rapidocr, which is here, so no engine note: the
+	// tesseract option's "(not installed)" suffix says all there is to say.
+	if strings.Contains(body, "isn&#39;t available") || strings.Contains(body, "isn&#39;t on PATH") || strings.Contains(body, "needs-engine") {
+		t.Errorf("a runnable rapidocr watch must carry no engine note or blocked styling; body:\n%s", body)
 	}
-	if !strings.Contains(body, "tesseract isn't on PATH") {
-		t.Errorf("the tesseract note still renders when tesseract is absent; body:\n%s", body)
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note" hidden></p>`) {
+		t.Errorf("the note element should render hidden for app.js; body:\n%s", body)
 	}
-	if strings.Contains(body, "this watch reads with the seven-segment decoder") {
-		t.Errorf("a rapidocr watch does not read with the seven-segment decoder; body:\n%s", body)
+	if line := optionLine(t, body, "tesseract"); !strings.HasSuffix(line, ">tesseract — text (not installed)") {
+		t.Errorf("the tesseract option should say it is not installed: %q", line)
 	}
-	if !strings.Contains(body, "this watch reads with rapidocr") {
-		t.Errorf("note should say the watch reads with rapidocr; body:\n%s", body)
+	if line := optionLine(t, body, "rapidocr"); !strings.HasSuffix(line, ">rapidocr — text, harder cases") {
+		t.Errorf("the rapidocr option should not claim to be missing: %q", line)
 	}
-	// The pixel_change branch of the note names rapidocr too, not the
-	// seven-segment decoder the OCR types would otherwise fall back to.
+	// A pixel_change watch on rapidocr shows the Engine row (tesseract is
+	// missing, so the row is the way to the text types) with the hint that
+	// pixel_change doesn't use it, and no warning.
 	s.mu.Lock()
 	s.cfg.Watches[0].Trigger = config.Trigger{Type: "pixel_change", Threshold: 5}
 	s.mu.Unlock()
@@ -1656,8 +1826,8 @@ func TestDetailRapidOCRWatchUnlockedWithRapidOCRAndNoTesseract(t *testing.T) {
 	if strings.Contains(body, "seven-segment decoder") {
 		t.Errorf("a pixel_change rapidocr watch's OCR types would use rapidocr, not the seven-segment decoder; body:\n%s", body)
 	}
-	if !strings.Contains(body, "the OCR trigger types will use rapidocr, which works without it") {
-		t.Errorf("note should say the OCR types will use rapidocr; body:\n%s", body)
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note">Not used by pixel_change. It only matters if Type becomes a text trigger.</p>`) {
+		t.Errorf("note should say pixel_change does not use the engine; body:\n%s", body)
 	}
 	for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
 		if line := optionLine(t, body, typ); strings.Contains(line, "disabled") || strings.Contains(line, "needs ") {
@@ -1689,11 +1859,12 @@ func TestDetailRapidOCRPixelChangeWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 	if !strings.Contains(body, `data-tesseract="1"`) || !strings.Contains(body, `data-rapidocr="0"`) {
 		t.Errorf("engine select must carry both flags so app.js keeps the Engine row reachable; body:\n%s", body)
 	}
-	if !strings.Contains(body, "rapidocr isn't available on this box") || !strings.Contains(body, "or switch Engine") {
-		t.Errorf("note should point at the Engine select; body:\n%s", body)
+	// Not a warning (pixel_change runs), but the note says what the row is for.
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note">Not used by pixel_change. rapidocr isn&#39;t available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine.</p>`) {
+		t.Errorf("note should point at the Engine select without warning; body:\n%s", body)
 	}
-	if strings.Contains(body, "tesseract isn't on PATH") {
-		t.Errorf("tesseract is present; its note must not render; body:\n%s", body)
+	if strings.Contains(body, "isn&#39;t on PATH") || strings.Contains(body, "needs-engine") {
+		t.Errorf("tesseract is present and pixel_change runs: no tesseract note, nothing blocked; body:\n%s", body)
 	}
 }
 
@@ -1708,19 +1879,26 @@ func TestDetailRapidOCRWatchWithoutEitherEngine(t *testing.T) {
 		s.cfg.Watches[0].Trigger = trig
 		s.mu.Unlock()
 		_, body := get(t, s.Handler(), "/watch/printer")
-		for _, wrong := range []string{"until it's installed", "switch Engine to sevenseg instead", "seven-segment decoder"} {
+		for _, wrong := range []string{"until it's installed", "switch Engine to sevenseg instead", "seven-segment decoder", "isn&#39;t on PATH"} {
 			if strings.Contains(body, wrong) {
 				t.Errorf("%s: tesseract note claims %q for a rapidocr-locked watch; body:\n%s", trig.Type, wrong, body)
 			}
 		}
-		for _, want := range []string{"tesseract isn't on PATH — text OCR is unavailable", "rapidocr isn't available on this box", "pip install rapidocr onnxruntime"} {
+		for _, want := range []string{"rapidocr isn&#39;t available on this box", "pip install rapidocr onnxruntime", ">tesseract — text (not installed)</option>", ">rapidocr — text (not installed)</option>"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s: body should contain %q; body:\n%s", trig.Type, want, body)
 			}
 		}
+		if strings.Count(body, `id="engine-note"`) != 1 {
+			t.Errorf("%s: exactly one engine note expected; body:\n%s", trig.Type, body)
+		}
 		for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
 			line := optionLine(t, body, typ)
-			if !strings.Contains(line, "(needs rapidocr)") || strings.Contains(line, "needs tesseract") {
+			if typ == trig.Type {
+				if strings.Contains(line, "needs ") {
+					t.Errorf("%s: the selected type carries no lock suffix: %q", trig.Type, line)
+				}
+			} else if !strings.Contains(line, "(needs rapidocr)") || strings.Contains(line, "needs tesseract") {
 				t.Errorf("%s: %s should be annotated with rapidocr, the watch's own missing engine: %q", trig.Type, typ, line)
 			}
 			if typ != trig.Type && !strings.Contains(line, "disabled") {

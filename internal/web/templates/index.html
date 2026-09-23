@@ -31,7 +31,7 @@
   {{range .Rows}}
     <tr role="row" data-name="{{.Watch.Name}}">
       <td role="cell" class="cell-name" data-label="Name"><a href="{{watchURL .Watch.Name ""}}">{{.Watch.Name}}</a></td>
-      <td role="cell" class="col-trigger" data-label="Trigger"><span class="pill mono">{{.Watch.Trigger.Type}}</span></td>
+      <td role="cell" class="col-trigger" data-label="Trigger"><span class="pill mono" title="{{trigLabel .Watch.Trigger.Type}}">{{.Watch.Trigger.Type}}</span></td>
       <td role="cell" class="mono col-interval" data-label="Interval">{{dur .Watch.Interval}}</td>
       <td role="cell" class="cell-reading" data-label="Last reading">
         <span class="reading-wrap{{if eq .Status.State "error"}} reading-wrap-error{{end}}">

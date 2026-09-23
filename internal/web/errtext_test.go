@@ -70,7 +70,8 @@ func TestFriendlyConfigError(t *testing.T) {
 		{"watch \"cam\": trigger: pattern: error parsing regexp: invalid or unsupported Perl syntax: `(?=`", "pattern", `Pattern isn't a valid regular expression. "(?=" isn't supported: Go regular expressions have no lookarounds`},
 		{"watch \"cam\": trigger: pattern: error parsing regexp: some future code: `x`", "pattern", `Pattern isn't a valid regular expression. Some future code near "x".`},
 		{`watch "cam": trigger: ocr_match requires a pattern`, "pattern", "ocr_match needs a pattern"},
-		{`watch "cam": trigger: numeric op must be gt or lt, got ""`, "op", "Choose gt or lt"},
+		{`watch "cam": trigger: numeric needs Compare set to above (gt) or below (lt), got ""`, "op", "Under Compare, choose whether the reading must go above or below Threshold."},
+		{`numeric op must be gt or lt, got ""`, "op", "Under Compare, choose whether the reading must go above or below Threshold."},
 		{`watch "cam": notify: invalid URL "nope" (must include a scheme, e.g. ntfy://...)`, "notify", `Notify URL "nope" needs a scheme`},
 		{`mqtt: broker is required`, "", "Mqtt: broker is required"},
 	}

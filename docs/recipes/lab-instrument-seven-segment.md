@@ -38,7 +38,7 @@ preprocessing to tune. This recipe is that setup.
 3. Hit **Test this region**. You should see the reading and one chip per
    glyph. If a digit reads `?` or scores low, the usual causes are in
    [Caveats](#caveats) below.
-4. Set Pattern, Op and Threshold, and **Save**.
+4. Set Pattern, Compare (above/below) and Threshold, and **Save**.
 
 ## Watches config
 

@@ -86,7 +86,11 @@ img { max-width: 100%; }
   --space-6: 32px;
 
   --content-max: 1160px; /* main's width; the topbar aligns its edges to it */
-  --field-label-w: 128px;
+  /* 5.5rem = 88px: the widest form label ("Confirm after", ~76px) and a
+     little air, no more. The rest of a row is the control, and at the 920px
+     floor of the two-column layout the Type/Engine option text needs every
+     pixel of it (see .col-config). */
+  --field-label-w: 5.5rem;
 
   --font-ui:   -apple-system, "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
@@ -269,6 +273,9 @@ main:focus { outline: none; }
   line-height: 1.5;
   white-space: nowrap;
 }
+/* The trigger-type pill holds the config.yaml id: mono at the token size,
+   with the human wording in its title. */
+.pill.mono { font-size: var(--fs-token); letter-spacing: 0.02em; }
 /* The one uppercase voice: state tokens. */
 .status-pill, .tag {
   font: var(--fw-strong) var(--fs-token)/1 var(--font-mono);
@@ -575,8 +582,14 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 0 3px var(--accent-a15);
   cursor: pointer;
 }
+/* Binarize at 0 is off: the thumb goes unlit so an unused step doesn't
+   glow like Save and the running LED. app.js toggles .is-off. Separate
+   rules on purpose: one unknown pseudo-element in a list drops the rule. */
+input[type="range"].is-off::-webkit-slider-thumb { background: var(--surface-2); border-color: var(--border-strong); box-shadow: none; }
+input[type="range"].is-off::-moz-range-thumb { background: var(--surface-2); border-color: var(--border-strong); box-shadow: none; }
 /* Same reasoning as .btn-primary:focus-visible above: the thumb is already
-   solid accent-green, so a near-white ring with a dark gap reads instead. */
+   solid accent-green, so a near-white ring with a dark gap reads instead.
+   After the off rules so the ring still shows on an off slider. */
 input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 2px var(--bg-inset), 0 0 0 4px var(--text);
 }
@@ -620,10 +633,29 @@ fieldset > legend ~ * { clear: both; }
   color: var(--text-faint);
   margin-left: 6px;
 }
-/* should_fix 1/2: the one-line description under the Type dropdown
-   (#ttype-help, text supplied by app.js) and the tesseract-missing note
-   that appears there when the server has no OCR engine configured. */
-.trigger-note { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--text-faint); text-wrap: pretty; }
+/* A reference link inside a legend note stays as quiet as the note. */
+.legend-note a { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.legend-note a:hover { color: var(--accent); }
+/* A selected trigger type that can't run on the selected engine on this
+   box (no tesseract / no rapidocr): both selects read as blocked, and the
+   engine note under them (.engine-note.is-warn) says why. The open list
+   keeps the plain text colour. Amber here means "needs attention", the
+   same family as the fired state, never the error red. */
+select.needs-engine { border-color: var(--amber-a65); color: var(--amber); }
+select.needs-engine option { color: var(--text); }
+/* The one note under the Engine select (engineNoteFor in formview.go,
+   kept live by app.js). In its warn state it leads with an amber dot,
+   the shape .form-error uses for red, so the state isn't colour alone. */
+.engine-note.is-warn { color: var(--text-dim); }
+.engine-note.is-warn::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin: 0 8px 1px 1px;
+  border-radius: 50%;
+  background: var(--amber);
+  vertical-align: middle;
+}
 
 /* A section that folds (Preprocess): the summary stands in for the legend
    at the legend's size and weight, with the shared chevron in front and a
@@ -648,8 +680,9 @@ fieldset > legend ~ * { clear: both; }
 .fold-summary + .field-row { border-top: none; }
 
 /* Label-left / field-right grid — replaces the old inline paragraph flow.
-   The Pattern row stacks its label above the input via .field-row-wide
-   since a regex benefits from the room a fixed label column can't give it. */
+   A row's hint (.field-hint, third child) takes the next grid row under
+   the control, on the control's left edge like a field error (so the
+   amber and red dots line up), pulled up to sit 4px under it. */
 .field-row {
   display: grid;
   grid-template-columns: var(--field-label-w) 1fr;
@@ -671,9 +704,12 @@ fieldset > legend ~ * { clear: both; }
    "24.5"), not the whole column. Text, patterns and long selects keep the
    full width. */
 .control-short { max-width: 10rem; }
-.field-row-wide { grid-template-columns: 1fr; }
-.field-row-wide > label { margin-bottom: 4px; }
-.field-row-wide input { font-family: var(--font-mono); }
+#f-pattern { font-family: var(--font-mono); }
+.field-row > .field-hint {
+  grid-column: 2;
+  margin-top: calc(4px - var(--space-3));
+  max-width: 65ch;
+}
 .field-row-check {
   display: flex;
   align-items: center;
@@ -683,6 +719,7 @@ fieldset > legend ~ * { clear: both; }
 .range-field { display: flex; align-items: center; gap: 10px; min-height: 36px; max-width: 18rem; }
 .range-field input[type="range"] { flex: 1; margin: 0; }
 .ppt-val { min-width: 3ch; text-align: right; font-size: var(--fs-xs); color: var(--text-dim); }
+.ppt-val.is-off { color: var(--text-faint); }
 
 /* The Save bar. It sticks to the bottom of the viewport while the form
    runs past it (a long form on a laptop, any form on a phone), spanning
@@ -709,6 +746,16 @@ fieldset > legend ~ * { clear: both; }
    otherwise zero the bottom margin and leave the panel padding under the bar. */
 .panel > .form-actions { margin-bottom: calc(-1 * var(--panel-pad)); }
 .form-actions .btn { width: auto; flex: none; }
+/* Shown in the note's place while the form differs from what was loaded
+   (app.js checkDirty): an amber LED and the words, small and quiet. */
+.dirty-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: var(--fs-sm);
+  color: var(--amber);
+}
 /* The note is one line tall beside Save, whatever the file name and the
    column width: it is a wrapping flex row clipped to its first line, so
    the "· comments kept" half shows only while it fits on that line and
@@ -1133,7 +1180,6 @@ input:user-invalid:focus, select:user-invalid:focus, textarea:user-invalid:focus
 }
 input[type="range"][aria-invalid="true"] { border: 0; }
 .field-row > .field-error { grid-column: 2; margin-top: -4px; }
-.field-row-wide > .field-error { grid-column: 1; margin-top: 4px; }
 fieldset > .field-error { margin-top: var(--space-2); }
 .field-error-region { margin-top: var(--space-2); }
 
@@ -1192,15 +1238,19 @@ fieldset > .field-error { margin-top: var(--space-2); }
    Stage (snapshot, region actions, test result, Live) on the left, the
    configuration form on the right. The bases plus the gap come to 872px,
    so with main's padding the columns sit side by side from a 920px
-   viewport; the tablet block below stacks them under that. */
+   viewport; the tablet block below stacks them under that. The split
+   (440/400) gives the form 400px at that floor: with the panel padding,
+   the label column and the gap that leaves the Type and Engine selects
+   250px, and their longest option ("ocr_match — text matches pattern",
+   198px at 13px) plus the select's own padding and chevron needs ~240. */
 .detail-grid {
   display: flex;
   align-items: flex-start;
   gap: var(--space-6);
   flex-wrap: wrap;
 }
-.col-stage  { flex: 1 1 460px; min-width: 0; }
-.col-config { flex: 1 1 380px; min-width: 0; }
+.col-stage  { flex: 1 1 440px; min-width: 0; }
+.col-config { flex: 1 1 400px; min-width: 0; }
 .col-heading { margin: 0 0 var(--space-3); }
 /* Side by side, the stage stays in view while the (longer) form scrolls.
    --stage-gap is also app.js's cue that the column is pinned (unset in the
@@ -1656,6 +1706,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   .error-reason, .error-panel .tech-detail { margin-left: 0; }
   .tech-detail summary { padding: 10px 0; margin: -6px 0; }
   .field-row > .field-error { grid-column: 1; margin-top: 0; }
+  .field-row > .field-hint { grid-column: 1; }
   /* .field-grow's 320px flex-basis is meant to grow the field horizontally
      in the desktop row layout — once the form stacks to a column, that
      basis is read as a height instead, leaving a tall empty gap above the

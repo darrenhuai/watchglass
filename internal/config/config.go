@@ -333,7 +333,7 @@ func (c *Config) Validate() error {
 			}
 		case "numeric":
 			if w.Trigger.Op != "gt" && w.Trigger.Op != "lt" {
-				return fmt.Errorf("watch %q: trigger: numeric op must be gt or lt, got %q", w.Name, w.Trigger.Op)
+				return fmt.Errorf("watch %q: trigger: numeric needs Compare set to above (gt) or below (lt), got %q", w.Name, w.Trigger.Op)
 			}
 			// Pattern is optional for numeric (trigger.New falls back to a
 			// generic number pattern); only validate it when set.

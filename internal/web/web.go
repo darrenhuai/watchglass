@@ -119,6 +119,10 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"isoTime":   isoTime,
 		"ppSet":     preprocessSet,
 		"ppSummary": preprocessSummary,
+		"trigLabel": triggerLabel,
+		"engineNote": func(w config.Watch, tess, rapid bool) engineNote {
+			return engineNoteFor(w, tess, rapid)
+		},
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -529,6 +533,12 @@ func (f formState) Val(name, fallback string) string {
 	}
 	return fallback
 }
+
+// Rejected is true when the page is a save that was refused or couldn't be
+// written: the form shows the submitted values, which differ from the file,
+// so it is dirty from the start (the Save bar says so and app.js asks
+// before the page is left).
+func (f formState) Rejected() bool { return len(f.Errors) > 0 || f.Failure != nil }
 
 // Err is the error for field name, or "".
 func (f formState) Err(name string) string {
@@ -1046,7 +1056,7 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	w.HealthAfter = 0
 	if v := strings.TrimSpace(r.FormValue("health_after")); v != "" {
 		if n, err := strconv.Atoi(v); err != nil {
-			fail("health_after", "Health after must be a whole number of failed polls.")
+			fail("health_after", "Down after must be a whole number of failed grabs.")
 			w.HealthAfter = base.HealthAfter
 		} else {
 			w.HealthAfter = n
@@ -1069,17 +1079,20 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	}
 	w.Notify = notifyURLs
 	w.Trigger = trig
-	// The detail form hides Pattern/Op for the types that never read them
-	// (app.js's updateTriggerFields mirrors trigger.New's switch), but a
-	// hidden control still submits, so whatever was left in it would be
-	// persisted unvalidated — config.Validate only compiles Pattern for
-	// ocr_match/numeric — and, invisible in the UI, could never be cleared,
-	// only to break a later hand edit of the type. Drop what the type ignores.
+	// The detail form hides Pattern/Compare/Threshold for the types that
+	// never read them (app.js's updateTriggerFields mirrors trigger.New's
+	// switch), but a hidden control still submits, so whatever was left in
+	// it would be persisted unvalidated — config.Validate only compiles
+	// Pattern for ocr_match/numeric — and, invisible in the UI, could never
+	// be cleared, only to break a later hand edit of the type. Drop what
+	// the type ignores.
 	switch w.Trigger.Type {
-	case "pixel_change", "ocr_changed":
+	case "pixel_change":
 		w.Trigger.Pattern, w.Trigger.Op = "", ""
+	case "ocr_changed":
+		w.Trigger.Pattern, w.Trigger.Op, w.Trigger.Threshold = "", "", 0
 	case "ocr_match":
-		w.Trigger.Op = ""
+		w.Trigger.Op, w.Trigger.Threshold = "", 0
 	}
 	return w, errs
 }
@@ -1188,6 +1201,10 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		rejected(updated, ferrs)
 		return
 	}
+	if msg := s.blockedTrigger(base, updated); msg != "" {
+		rejected(updated, []fieldError{{"ttype", msg}})
+		return
+	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	err := s.mutateConfig(func(c *config.Config) error {
@@ -1259,6 +1276,31 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	s.notifyConfigChanged()
 	s.setFlash(w, "saved", time.Now().UTC().Format(time.RFC3339), "")
 	http.Redirect(w, r, s.watchURL(name, ""), http.StatusSeeOther)
+}
+
+// blockedTrigger says why the submitted trigger can't run on this box: a
+// text trigger type on an engine whose reader isn't installed. Writing
+// that config would only stop the watch (Restart fails right after the
+// save), so a CHANGE of type or engine into that state is refused before
+// anything is written. A watch already saved in that state (a hand-edited
+// file, or the engine gone since) still saves its other fields: its type
+// is never disabled in the form, and the restart failure page says why.
+func (s *Server) blockedTrigger(base, updated config.Watch) string {
+	t := updated.Trigger.Type
+	if t == "pixel_change" || (t == base.Trigger.Type && engineName(updated.Engine) == engineName(base.Engine)) {
+		return ""
+	}
+	switch missingEngine(updated.Engine, s.engines.Tesseract != nil, s.engines.RapidOCR != nil) {
+	case "tesseract":
+		alt := "sevenseg"
+		if s.engines.RapidOCR != nil {
+			alt = "sevenseg or rapidocr"
+		}
+		return t + " reads text with tesseract, and tesseract isn't installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to " + alt + ", or install tesseract."
+	case "rapidocr":
+		return t + " reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime, or switch Engine."
+	}
+	return ""
 }
 
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
