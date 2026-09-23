@@ -1,2 +1,8 @@
 # Test fixtures are byte-compared; keep them identical on every checkout.
 internal/config/testdata/* text eol=lf
+
+# The web UI's static files and templates are embedded in the binary and some
+# tests match multi-line snippets in them; keep them LF on every checkout so
+# Windows builds embed the same bytes and those tests see the same text.
+internal/web/static/* text eol=lf
+internal/web/templates/* text eol=lf

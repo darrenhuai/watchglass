@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"image"
@@ -199,7 +200,7 @@ func TestLiveAnnouncesChangesNotTicks(t *testing.T) {
 	if strings.Contains(body, `id="live-status" aria-live`) || strings.Contains(body, `<div id="live-status" aria-`) {
 		t.Errorf("#live-status must not be a live region; body:\n%s", body)
 	}
-	js, err := os.ReadFile("static/app.js")
+	js, err := readSourceLF("static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +254,7 @@ func TestLiveAnnouncesChangesNotTicks(t *testing.T) {
 			t.Errorf("app.js still has %q", gone)
 		}
 	}
-	css, err := os.ReadFile("static/style.css")
+	css, err := readSourceLF("static/style.css")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,7 @@ func TestLiveAnnouncesChangesNotTicks(t *testing.T) {
 
 // Test this region shows it is working and takes one press at a time.
 func TestTestButtonHasABusyState(t *testing.T) {
-	js, err := os.ReadFile("static/app.js")
+	js, err := readSourceLF("static/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +302,7 @@ func TestTestButtonHasABusyState(t *testing.T) {
 	if i, j := strings.Index(src, "setTesting(false);\n      revealTestResult();"), strings.Index(src, "function setTesting(on)"); i < 0 || j < 0 {
 		t.Error("revealTestResult must run right after setTesting(false)")
 	}
-	css, _ := os.ReadFile("static/style.css")
+	css, _ := readSourceLF("static/style.css")
 	for _, want := range []string{`.btn[aria-busy="true"]::before {`, `#test-result[aria-busy="true"] > :not(.test-pending)`, ".crop-skeleton {"} {
 		if !strings.Contains(string(css), want) {
 			t.Errorf("style.css missing %q", want)
@@ -311,7 +312,7 @@ func TestTestButtonHasABusyState(t *testing.T) {
 
 // Every shared button is a 44px target wherever a coarse pointer exists.
 func TestSharedButtonsAreTouchTargets(t *testing.T) {
-	css, err := os.ReadFile("static/style.css")
+	css, err := readSourceLF("static/style.css")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,4 +331,13 @@ func TestLiveOfGoneWatchIs404(t *testing.T) {
 	if resp, _ := get(t, s.Handler(), "/watch/nope/live"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
+}
+
+// readSourceLF reads a static source file with CRLF folded to LF, so the
+// multi-line snippets below match on a Windows checkout that converted line
+// endings (.gitattributes pins these files to LF, but an older clone may not
+// have been renormalized).
+func readSourceLF(name string) ([]byte, error) {
+	b, err := os.ReadFile(name)
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), err
 }
