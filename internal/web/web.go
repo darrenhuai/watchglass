@@ -769,6 +769,10 @@ func parseRegion(r *http.Request) (config.Region, error) {
 	if reg.H, err = f("h"); err != nil {
 		return reg, err
 	}
+	// A region dragged to the frame's edge can arrive with x+w a rounding
+	// step past 1 (each edge rounded to four decimals on its own); that is
+	// the edge, not a region outside the frame.
+	reg = reg.Clamp()
 	if reg.W <= 0 || reg.H <= 0 || reg.X < 0 || reg.Y < 0 || reg.X+reg.W > 1 || reg.Y+reg.H > 1 {
 		return reg, errors.New("region must fit inside the frame: X and Y at least 0, W and H above 0, X+W and Y+H at most 1")
 	}

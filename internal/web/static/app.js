@@ -14,19 +14,33 @@
   // (in code, so the form sees no event); bound to the dirty check at the
   // end of this script.
   var regionEdited = function () {};
+  var ACCENT = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7fd4a8";
 
+  // The editor works in CSS px throughout (pointer positions, hit-testing,
+  // painting); only the backing store is scaled by devicePixelRatio, so
+  // the 2px stroke and the handles stay crisp on phones and retina
+  // screens instead of being upscaled bitmaps. cssW/cssH are the canvas's
+  // on-screen size, 0 until an image has loaded.
+  var cssW = 0, cssH = 0;
   function sizeCanvas() {
     canvas.hidden = false;
+    var w = img.clientWidth, h = img.clientHeight, d = window.devicePixelRatio || 1;
+    var bw = Math.round(w * d), bh = Math.round(h * d);
     // A same-size reload (the periodic snapshot refresh) only needs the
     // rectangle repainted. Resizing goes through drawRect, which also
     // rewrites the manual region fields — and would clobber a value the
-    // user is mid-keystroke in.
-    if (canvas.width === img.clientWidth && canvas.height === img.clientHeight) {
+    // user is mid-keystroke in. The backing size is compared too, so a
+    // DPR change (browser zoom, a move to another monitor) resizes.
+    if (w === cssW && h === cssH && canvas.width === bw && canvas.height === bh) {
       paint();
       return;
     }
-    canvas.width = img.clientWidth;
-    canvas.height = img.clientHeight;
+    cssW = w;
+    cssH = h;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    canvas.width = bw;
+    canvas.height = bh;
     drawRect();
   }
   function region() {
@@ -35,11 +49,40 @@
       w: parseFloat(fw.value) || 0, h: parseFloat(fh.value) || 0
     };
   }
+  // The region inputs hold four decimals, so every edge lives on a 1e-4
+  // grid. Both edges are snapped to that grid as integers (0..GRID) and
+  // the width is their difference: x + w as decimal strings can then never
+  // come out above 1.0000, which rounding each of x and w on its own did
+  // (0.0063 + 0.9938) and the server rejected.
+  var GRID = 1e4;
+  function toGrid(v) { return Math.round(Math.min(Math.max(v, 0), 1) * GRID); }
+  function fmt(g) { return (g / GRID).toFixed(4); }
+  function setRegion(x, y, w, h) {
+    fx.value = fmt(x);
+    fy.value = fmt(y);
+    fw.value = fmt(w);
+    fh.value = fmt(h);
+  }
+  // A new watch starts on the whole frame; that region is drawn as a
+  // dashed edge with nothing dimmed, and a press inside it draws a new
+  // one (there is no "outside" to press on).
+  function isFull(r) { return r.x <= 0.001 && r.y <= 0.001 && r.w >= 0.999 && r.h >= 0.999; }
+  // A region that nearly fills the frame (what a drag into a corner saves,
+  // e.g. 0.0056/0.0066/0.9944/0.9934) has no room to move on either axis
+  // and no exterior wide enough to start a new drag on, so a press inside
+  // it would be a move clamped to nothing. It behaves like the full frame:
+  // off its handles, a press draws a new rectangle. Uses DRAG_START_PX
+  // (below) at call time.
+  function roomless(r) {
+    var room = 2 * DRAG_START_PX;
+    return (1 - r.w) * cssW < room && (1 - r.h) * cssH < room;
+  }
   // should_fix 7: keyboard/switch/screen-reader users can't drive the
   // pointerdown/pointermove drag below at all, so "Set region manually"
-  // (four number inputs revealed by a <details>) is the only other input
-  // path to fx/fy/fw/fh. Both paths funnel through region()/paint(), so
-  // whichever one last touched the hidden fields stays authoritative.
+  // (four number inputs revealed by a <details>) is the other input path
+  // to fx/fy/fw/fh, beside the arrow keys on the focused canvas. All paths
+  // funnel through region()/paint(), so whichever one last touched the
+  // hidden fields stays authoritative.
   //
   // syncManualFields and paint are kept deliberately separate from each
   // other (see drawRect vs. applyManualFields below): syncManualFields
@@ -51,6 +94,29 @@
   // typing "0.5" gets clobbered back to "0.0000" after the first "0").
   var mx = document.getElementById("m-x"), my = document.getElementById("m-y"),
       mw = document.getElementById("m-w"), mh = document.getElementById("m-h");
+  var MANUAL = mx ? [mx, my, mw, mh] : [];
+  var MANUAL_NAMES = ["Left", "Top", "Width", "Height"];
+  var manual = document.getElementById("region-manual");
+  var manualErr = document.getElementById("region-manual-error");
+  function setManualValidity(el, msg) {
+    el.setCustomValidity(msg);
+    el.setAttribute("aria-invalid", msg ? "true" : "false");
+  }
+  // The first problem, named, under the fields; the fields carry
+  // aria-invalid (red) themselves. Hidden when there is none.
+  function showManualError() {
+    if (!manualErr) return;
+    var text = "";
+    MANUAL.some(function (el, i) {
+      if (!el.validationMessage) return false;
+      text = MANUAL_NAMES[i] + ": " + el.validationMessage + ".";
+      return true;
+    });
+    // A polite live region that is always rendered (empty collapses to
+    // nothing in CSS), written only when the message changes, so a screen
+    // reader hears the reason once, not on every keystroke.
+    if (manualErr.textContent !== text) manualErr.textContent = text;
+  }
   function syncManualFields() {
     if (!mx) return;
     var r = region();
@@ -58,24 +124,61 @@
     my.value = r.y.toFixed(4);
     mw.value = r.w.toFixed(4);
     mh.value = r.h.toFixed(4);
+    MANUAL.forEach(function (el) { setManualValidity(el, ""); });
+    showManualError();
+  }
+  // The stroke is inset 1px so a region on the frame's edge keeps its edge
+  // inside #stage's clip; the handle centres are kept inside the canvas the
+  // same way. hitTest reads the same numbers paint draws, so a grab lands
+  // where the handle is.
+  var HANDLE = 8, INSET = 1;
+  function geom(r) {
+    var x0 = Math.round(r.x * cssW), y0 = Math.round(r.y * cssH);
+    var x1 = Math.round((r.x + r.w) * cssW), y1 = Math.round((r.y + r.h) * cssH);
+    var sx = Math.max(x0, INSET), sy = Math.max(y0, INSET);
+    var ex = Math.min(x1, cssW - INSET), ey = Math.min(y1, cssH - INSET);
+    var m = HANDLE / 2 + 1;
+    function c(v, max) { return Math.min(Math.max(v, m), max - m); }
+    return {
+      x0: x0, y0: y0, x1: x1, y1: y1, sx: sx, sy: sy, ex: ex, ey: ey,
+      corners: {
+        nw: [c(sx, cssW), c(sy, cssH)], ne: [c(ex, cssW), c(sy, cssH)],
+        sw: [c(sx, cssW), c(ey, cssH)], se: [c(ex, cssW), c(ey, cssH)]
+      }
+    };
   }
   function paint() {
+    syncHint();
+    if (!cssW || !cssH) return;
     var ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(canvas.width / cssW, 0, 0, canvas.height / cssH, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
     var r = region();
     if (!(r.w > 0) || !(r.h > 0)) return;
-    var rx = r.x * canvas.width, ry = r.y * canvas.height,
-        rw = r.w * canvas.width, rh = r.h * canvas.height;
-    ctx.fillStyle = "rgba(127, 212, 168, 0.12)";
-    ctx.fillRect(rx, ry, rw, rh);
-    ctx.strokeStyle = "#7fd4a8";
+    var g = geom(r), full = isFull(r);
+    // What is outside the region is dimmed rather than the inside tinted:
+    // a 12% mint tint vanished on the bright frames the region is often
+    // meant to watch. The stroke sits on a dark halo for the same reason.
+    if (!full) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.fillRect(0, 0, cssW, cssH);
+      ctx.clearRect(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0);
+    }
+    ctx.setLineDash(full ? [6, 4] : []);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
     ctx.lineWidth = 2;
+    ctx.strokeStyle = ACCENT;
+    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
     ctx.setLineDash([]);
-    ctx.strokeRect(rx, ry, rw, rh);
-    var hs = 6;
-    ctx.fillStyle = "#7fd4a8";
-    [[rx, ry], [rx + rw, ry], [rx, ry + rh], [rx + rw, ry + rh]].forEach(function (c) {
-      ctx.fillRect(c[0] - hs / 2, c[1] - hs / 2, hs, hs);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillStyle = ACCENT;
+    Object.keys(g.corners).forEach(function (k) {
+      var c = g.corners[k];
+      ctx.fillRect(c[0] - HANDLE / 2, c[1] - HANDLE / 2, HANDLE, HANDLE);
+      ctx.strokeRect(c[0] - HANDLE / 2 + 0.5, c[1] - HANDLE / 2 + 0.5, HANDLE - 1, HANDLE - 1);
     });
   }
   // drawRect is the drag/load path: it syncs the manual fields to match
@@ -84,21 +187,101 @@
     syncManualFields();
     paint();
   }
+  // Each field's problem, in field order, "" where there is none: blank,
+  // not a number, outside 0..1, a zero size, or the two edges together
+  // running past the frame. The cross-field check allows a rounding hair
+  // so a four-decimal region on the edge is never flagged.
+  function manualProblems() {
+    var v = MANUAL.map(function (el) { return el.value === "" ? NaN : parseFloat(el.value); });
+    var msgs = MANUAL.map(function (el, i) {
+      if (el.value === "") return "Required";
+      if (isNaN(v[i])) return "Must be a number";
+      if (v[i] < 0 || v[i] > 1) return "Must be between 0 and 1";
+      if (i >= 2 && v[i] <= 0) return "Must be greater than 0";
+      return "";
+    });
+    if (!msgs[0] && !msgs[2] && v[0] + v[2] > 1 + 5e-5) msgs[2] = "Left + Width can't exceed 1";
+    if (!msgs[1] && !msgs[3] && v[1] + v[3] > 1 + 5e-5) msgs[3] = "Top + Height can't exceed 1";
+    return msgs;
+  }
   // applyManualFields is the manual-entry path: the manual fields ARE the
-  // source of the change and must be left exactly as typed, so this only
-  // repaints — never calls syncManualFields. A field that is empty (or
-  // holds a partial entry the browser reports as "") leaves its hidden
-  // counterpart alone rather than zeroing it: one keystroke in X must not
-  // silently rewrite Y/W/H.
+  // source of the change and must be left exactly as typed, so this never
+  // calls syncManualFields. The hidden fields are written only once all
+  // four values make a region; until then the painted rectangle is the
+  // last valid one and the red field says which value is the problem.
   function applyManualFields() {
-    if (mx.value !== "") fx.value = mx.value;
-    if (my.value !== "") fy.value = my.value;
-    if (mw.value !== "") fw.value = mw.value;
-    if (mh.value !== "") fh.value = mh.value;
+    var msgs = manualProblems();
+    MANUAL.forEach(function (el, i) { setManualValidity(el, msgs[i]); });
+    showManualError();
+    if (msgs.join("")) return;
+    var v = MANUAL.map(function (el) { return parseFloat(el.value); });
+    var x = toGrid(v[0]), y = toGrid(v[1]);
+    setRegion(x, y, Math.min(toGrid(v[2]), GRID - x), Math.min(toGrid(v[3]), GRID - y));
     paint();
     markTestStale();
     regionEdited();
   }
+  // Arrow keys in a manual field step by 0.01 (Shift 0.1, Alt 0.001); the
+  // native step would be 1 with step=any, and the 0.0001 of old took ten
+  // thousand presses to cross the frame.
+  function manualStep(e) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    var step = e.altKey ? 10 : e.shiftKey ? 1000 : 100;
+    var cur = parseFloat(e.target.value);
+    var g = toGrid(isNaN(cur) ? 0 : cur) + (e.key === "ArrowUp" ? step : -step);
+    e.target.value = fmt(Math.min(Math.max(g, 0), GRID));
+    applyManualFields();
+  }
+  // Test and Save read the region inputs, which a bad manual value never
+  // reached: rather than run on the last valid region, open the fields and
+  // point at the problem. The inputs sit outside #watchform (they carry no
+  // name), so the form's own validation can't see them.
+  function manualGate(e) {
+    var bad = null;
+    MANUAL.some(function (el) { if (!el.checkValidity()) { bad = el; return true; } return false; });
+    if (!bad) return false;
+    if (e) e.preventDefault();
+    if (manual) manual.open = true;
+    bad.reportValidity();
+    return true;
+  }
+  // The hint under the stage, from state: nothing to draw on, touch editing
+  // on or off, the whole frame selected. One function, so the three
+  // never overwrite each other.
+  var hint = document.getElementById("region-hint");
+  var coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  function editing() { return stage.classList.contains("is-editing"); }
+  function hintText() {
+    if (img.hidden) return "No frame to draw on. Set the region manually below.";
+    var full = isFull(region());
+    var lead = full ? "Whole frame selected. " : "";
+    var aim = full ? "narrow it" : "select the region to watch";
+    if (editing()) return lead + "Drag on the image to " + aim + ". Tap Done when you're finished.";
+    if (coarse) return lead + "Tap Edit region, then drag on the image to " + aim + ".";
+    return lead + "Drag on the image to " + aim + ", or set it manually below.";
+  }
+  function syncHint() {
+    if (!hint) return;
+    var t = hintText();
+    if (hint.textContent !== t) hint.textContent = t;
+  }
+  // Touch editing mode (see #stage canvas in style.css): off, a finger on
+  // the snapshot scrolls the page; on, it draws. Save turns it off.
+  var editBtn = document.getElementById("region-edit");
+  function setEditing(on) {
+    stage.classList.toggle("is-editing", on);
+    if (editBtn) {
+      editBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      editBtn.textContent = on ? "Done" : "Edit region";
+    }
+    syncHint();
+  }
+  if (editBtn) editBtn.addEventListener("click", function () { setEditing(!editing()); });
+  form.addEventListener("submit", function (e) {
+    if (manualGate(e)) return;
+    setEditing(false);
+  });
   // A test result describes the region and settings it was run with. Once
   // either changes it stays on screen (it's still useful to compare) but
   // says it is out of date. The drag and the manual fields write the hidden
@@ -109,8 +292,15 @@
     if (panel && !panel.classList.contains("is-stale")) panel.classList.add("is-stale");
   }
   if (mx) {
-    [mx, my, mw, mh].forEach(function (el) {
+    MANUAL.forEach(function (el) {
       el.addEventListener("input", applyManualFields);
+      el.addEventListener("keydown", manualStep);
+    });
+    // Leaving a field reformats it to four decimals (0.5 becomes 0.5000)
+    // once every value is good; a field left blank or out of range keeps
+    // what was typed, marked, so the problem stays visible.
+    manual.addEventListener("change", function () {
+      if (!manualProblems().join("")) syncManualFields();
     });
     // Populate from the configured region right away, not only from the
     // image-load path (drawRect): when the camera is down the image never
@@ -118,31 +308,144 @@
     // must start from the real values, not from blanks.
     syncManualFields();
   }
+
+  // The drag. A press picks a mode from what is under the pointer: a
+  // corner handle resizes from the opposite corner, the inside moves the
+  // rectangle whole, anywhere else draws a new one. Nothing is written
+  // until the pointer has travelled DRAG_START_PX, and a press that ends
+  // before that, is cancelled, or leaves a region under MIN_REGION_PX in
+  // either direction puts the region the press started from back: a
+  // click, a jitter or a resting thumb used to replace the saved region
+  // with a speck, silently. Only the primary pointer's main button
+  // draws; a second finger or the right button changes nothing.
+  var DRAG_START_PX = 6, MIN_REGION_PX = 4;
+  var CURSORS = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", move: "move", "new": "crosshair" };
+  function pointerPos(e) {
+    var b = canvas.getBoundingClientRect();
+    return [e.clientX - b.left, e.clientY - b.top];
+  }
+  // What a press at (px, py) CSS px would do; tol is the handle's reach
+  // (wider for a finger). Corners are tested before the inside, so a tiny
+  // region whose handles overlap its inside can still be resized.
+  function hitTest(px, py, tol) {
+    var r = region();
+    if (!cssW || !(r.w > 0) || !(r.h > 0)) return "new";
+    var g = geom(r), hit = null;
+    Object.keys(g.corners).some(function (k) {
+      var c = g.corners[k];
+      if (Math.abs(px - c[0]) <= tol && Math.abs(py - c[1]) <= tol) { hit = k; return true; }
+      return false;
+    });
+    if (hit) return hit;
+    if (isFull(r) || roomless(r)) return "new";
+    return px >= g.x0 && px <= g.x1 && py >= g.y0 && py <= g.y1 ? "move" : "new";
+  }
   var drag = null;
   canvas.addEventListener("pointerdown", function (e) {
-    var b = canvas.getBoundingClientRect();
-    var cx = Math.min(Math.max((e.clientX - b.left) / b.width, 0), 1);
-    var cy = Math.min(Math.max((e.clientY - b.top) / b.height, 0), 1);
-    drag = { x0: cx, y0: cy };
+    if (drag || !e.isPrimary || e.button !== 0) return;
+    // A finger draws only in editing mode; otherwise the browser has the
+    // gesture (touch-action pan-y) and the page scrolls.
+    if (e.pointerType === "touch" && !editing()) return;
+    var p = pointerPos(e), r = region();
+    var mode = hitTest(p[0], p[1], e.pointerType === "touch" ? 14 : 10);
+    drag = { id: e.pointerId, mode: mode, px: e.clientX, py: e.clientY, live: false,
+      saved: [fx.value, fy.value, fw.value, fh.value] };
+    if (mode === "move") {
+      drag.w = toGrid(r.w);
+      drag.h = toGrid(r.h);
+      drag.dx = p[0] / cssW - r.x;
+      drag.dy = p[1] / cssH - r.y;
+    } else if (mode === "new") {
+      drag.ax = p[0] / cssW;
+      drag.ay = p[1] / cssH;
+    } else {
+      // Resize: the anchor is the corner opposite the one grabbed.
+      drag.ax = mode === "nw" || mode === "sw" ? r.x + r.w : r.x;
+      drag.ay = mode === "nw" || mode === "ne" ? r.y + r.h : r.y;
+    }
     canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = CURSORS[mode];
   });
   canvas.addEventListener("pointermove", function (e) {
-    if (!drag) return;
-    var b = canvas.getBoundingClientRect();
-    var x1 = Math.min(Math.max((e.clientX - b.left) / b.width, 0), 1);
-    var y1 = Math.min(Math.max((e.clientY - b.top) / b.height, 0), 1);
-    fx.value = Math.min(drag.x0, x1).toFixed(4);
-    fy.value = Math.min(drag.y0, y1).toFixed(4);
-    fw.value = Math.abs(x1 - drag.x0).toFixed(4);
-    fh.value = Math.abs(y1 - drag.y0).toFixed(4);
+    if (!drag) {
+      if (e.pointerType !== "touch") {
+        var q = pointerPos(e);
+        canvas.style.cursor = CURSORS[hitTest(q[0], q[1], 10)];
+      }
+      return;
+    }
+    if (e.pointerId !== drag.id) return;
+    if (!drag.live) {
+      if (Math.abs(e.clientX - drag.px) < DRAG_START_PX && Math.abs(e.clientY - drag.py) < DRAG_START_PX) return;
+      drag.live = true;
+    }
+    var p = pointerPos(e);
+    var x = Math.min(Math.max(p[0] / cssW, 0), 1), y = Math.min(Math.max(p[1] / cssH, 0), 1);
+    if (drag.mode === "move") {
+      setRegion(Math.min(toGrid(x - drag.dx), GRID - drag.w), Math.min(toGrid(y - drag.dy), GRID - drag.h), drag.w, drag.h);
+    } else {
+      var xa = toGrid(Math.min(drag.ax, x)), xb = toGrid(Math.max(drag.ax, x));
+      var ya = toGrid(Math.min(drag.ay, y)), yb = toGrid(Math.max(drag.ay, y));
+      setRegion(xa, ya, xb - xa, yb - ya);
+    }
     drawRect();
     markTestStale();
     regionEdited();
   });
-  canvas.addEventListener("pointerup", function () { drag = null; });
-  // A touch drag the browser turns into a scroll ends in pointercancel, not
-  // pointerup; without this the stale drag would pause the snapshot refresh.
-  canvas.addEventListener("pointercancel", function () { drag = null; });
+  function endDrag(e, cancelled) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var r = region();
+    if (cancelled || !drag.live || r.w * cssW < MIN_REGION_PX || r.h * cssH < MIN_REGION_PX) {
+      fx.value = drag.saved[0];
+      fy.value = drag.saved[1];
+      fw.value = drag.saved[2];
+      fh.value = drag.saved[3];
+      drawRect();
+      regionEdited();
+    } else {
+      announceRegion();
+    }
+    drag = null;
+    var p = pointerPos(e);
+    canvas.style.cursor = e.pointerType === "touch" ? "" : CURSORS[hitTest(p[0], p[1], 10)];
+  }
+  canvas.addEventListener("pointerup", function (e) { endDrag(e, false); });
+  // A touch drag the browser takes for a scroll ends in pointercancel, not
+  // pointerup; the region goes back and the stale drag no longer pauses
+  // the snapshot refresh.
+  canvas.addEventListener("pointercancel", function (e) { endDrag(e, true); });
+  // Keyboard: arrows move the region by 1% of the frame, Shift+arrows
+  // resize it (right/down grow), Alt makes either 0.1%. Nothing under 1%
+  // wide or tall, nothing past the frame. The readout announces the result
+  // once per key, on keyup, not on every repeat.
+  var readout = document.getElementById("region-readout");
+  var KEY_DX = { ArrowLeft: -1, ArrowRight: 1 }, KEY_DY = { ArrowUp: -1, ArrowDown: 1 };
+  function announceRegion() {
+    if (!readout) return;
+    var r = region();
+    function pct(v) { return Math.round(v * 100) + "%"; }
+    readout.textContent = "Left " + pct(r.x) + ", top " + pct(r.y) + ", width " + pct(r.w) + ", height " + pct(r.h);
+  }
+  canvas.addEventListener("keydown", function (e) {
+    var dx = KEY_DX[e.key] || 0, dy = KEY_DY[e.key] || 0;
+    if ((!dx && !dy) || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    var step = e.altKey ? 10 : 100, r = region();
+    var x = toGrid(r.x), y = toGrid(r.y), w = Math.max(toGrid(r.w), 100), h = Math.max(toGrid(r.h), 100);
+    if (e.shiftKey) {
+      w = Math.min(Math.max(w + dx * step, 100), GRID - x);
+      h = Math.min(Math.max(h + dy * step, 100), GRID - y);
+    } else {
+      x = Math.min(Math.max(x + dx * step, 0), GRID - w);
+      y = Math.min(Math.max(y + dy * step, 0), GRID - h);
+    }
+    setRegion(x, y, w, h);
+    drawRect();
+    markTestStale();
+    regionEdited();
+  });
+  canvas.addEventListener("keyup", function (e) { if (KEY_DX[e.key] || KEY_DY[e.key]) announceRegion(); });
+  canvas.addEventListener("focus", announceRegion);
   img.addEventListener("load", sizeCanvas);
   window.addEventListener("resize", sizeCanvas);
 
@@ -240,18 +543,76 @@
     snapError.appendChild(el("p", "snap-cause", snapCause.summary || "No further detail available."));
     if (snapCause.raw) snapError.appendChild(techDetail(snapCause.raw));
   }
-  function showSnapError() {
+  // The slate: an LED, a heading, and (syncSnapCause) the cause under it.
+  // The class says how bad it is (style.css): is-checking while the
+  // diagnosis runs, is-slow when the watch itself is fine and only the
+  // preview is missing, is-down when the source is unreachable.
+  function renderSnap(cls, led, heading) {
+    snapError.className = "snap-error " + cls;
+    snapError.textContent = "";
+    var h = el("strong");
+    var dot = el("span", "led " + led);
+    dot.setAttribute("aria-hidden", "true");
+    h.appendChild(dot);
+    h.appendChild(el("span", null, heading));
+    snapError.appendChild(h);
+  }
+  // With no image there is nothing to drag on: the hint says so and the
+  // manual fields open (and close again on the next image, but only if it
+  // was this that opened them; a user who opened them keeps them).
+  var manualAutoOpened = false;
+  function noImage() {
     img.hidden = true;
-    snapCause = null;
     // The never-sized canvas (300x150 by default) would otherwise sit on top
     // of the placeholder, catching a text-select drag across the error
     // message as a region drag. sizeCanvas unhides it once an image loads.
     canvas.hidden = true;
+    syncHint();
+    if (manual && !manual.open) {
+      manual.open = true;
+      manualAutoOpened = true;
+    }
+  }
+  img.addEventListener("load", function () {
+    if (manualAutoOpened && manual) {
+      manual.open = false;
+      manualAutoOpened = false;
+    }
+  });
+  // The last failed diagnosis: its HTTP status (0: no answer at all) and
+  // the split error text. The heading depends on the status pill too (a
+  // running watch with no preview is a slow camera, not a dead one), so
+  // it is re-rendered when the pill changes, but only then: a rebuild on
+  // every poll would close an opened technical detail.
+  var snapLast = null;
+  function pillIsError() {
+    var p = document.getElementById("status-pill");
+    return !!p && p.classList.contains("status-error");
+  }
+  function renderSnapResult() {
+    if (!snapLast || !snapError || snapError.hidden) return;
+    var st = snapLast.status, heading, down;
+    if (st === 200) { heading = "Frame failed to load"; down = false; }
+    else if (st === 400) { heading = "Source misconfigured"; down = true; }
+    else if (st === 0) { heading = "watchglass didn't answer"; down = true; }
+    else if (pillIsError()) { heading = "Camera unreachable"; down = true; }
+    else { heading = "No frame from camera"; down = false; }
+    var key = heading + (down ? "!" : "");
+    if (key === snapLast.key) return;
+    snapLast.key = key;
+    renderSnap(down ? "is-down" : "is-slow", down ? "led-error" : "led-amber", heading);
+    snapCause = { summary: snapLast.summary, raw: snapLast.raw };
+    snapCauseHeader = null;
+    syncSnapCause();
+  }
+  function showSnapError() {
+    noImage();
+    snapCause = null;
+    snapLast = null;
     if (!snapError) return;
     snapError.hidden = false;
-    snapError.textContent = "";
-    snapError.appendChild(el("strong", null, "No image from the camera"));
-    snapError.appendChild(el("p", "snap-cause", "Checking why…"));
+    renderSnap("is-checking", "led-amber", "No frame yet");
+    snapError.appendChild(el("p", "snap-cause", "Checking the camera…"));
     fetch(snapURL)
       .then(function (resp) {
         // Whenever the body isn't read as text below, cancel it: an
@@ -270,27 +631,24 @@
             img.src = snapURL + "?r=" + Date.now();
             return null;
           }
-          return "The camera answered a retry but failed again. It may be overloaded; retrying automatically.";
+          return { status: 200, text: "The camera answered but the image didn't arrive. Retrying automatically." };
         }
         var ct = resp.headers.get("Content-Type") || "";
         if (ct.indexOf("text/") !== 0) {
           discard();
-          return "watchglass answered HTTP " + resp.status;
+          return { status: resp.status, text: "watchglass answered HTTP " + resp.status };
         }
-        return resp.text();
+        return resp.text().then(function (t) { return { status: resp.status, text: t }; });
       })
-      .then(function (text) {
-        if (text === null) return;
-        snapError.textContent = "";
-        snapError.appendChild(el("strong", null, "No image from the camera"));
-        snapCause = splitError(text);
-        snapCauseHeader = null;
-        syncSnapCause();
+      .then(function (r) {
+        if (r === null) return;
+        var e = splitError(r.text);
+        snapLast = { status: r.status, summary: e.summary, raw: e.raw, key: "" };
+        renderSnapResult();
       })
       .catch(function () {
-        snapError.textContent = "";
-        snapError.appendChild(el("strong", null, "No image from the camera"));
-        snapError.appendChild(el("p", "snap-cause", "watchglass didn't answer. Is it still running?"));
+        snapLast = { status: 0, summary: "The snapshot request failed. Is watchglass still running?", raw: "", key: "" };
+        renderSnapResult();
       });
   }
   img.addEventListener("error", showSnapError);
@@ -507,6 +865,7 @@
   form.addEventListener("input", testFieldChanged);
   form.addEventListener("change", testFieldChanged);
   testBtn.addEventListener("click", function () {
+    if (manualGate()) return;
     var box = testBox;
     box.textContent = "";
     box.appendChild(el("p", "muted", "Testing…"));
@@ -579,6 +938,9 @@
       statusDetail.hidden = state !== "error";
       syncSnapCause();
     }
+    // A placeholder that was amber ("no frame from camera") turns red once
+    // the watch itself reports the source down, and back.
+    renderSnapResult();
   }
   var lastStatus = null, lastStrip = null;
   function poll() {
@@ -780,7 +1142,8 @@
     saveBtn.disabled = false;
   }
   if (saveBtn) {
-    form.addEventListener("submit", function () {
+    form.addEventListener("submit", function (e) {
+      if (e.defaultPrevented) return; // a bad manual region field stopped it (manualGate)
       saveBtn.textContent = "Saving…";
       saveBtn.setAttribute("aria-busy", "true");
       setTimeout(function () { saveBtn.disabled = true; }, 0);
@@ -877,7 +1240,7 @@
   }
   form.addEventListener("input", checkDirty);
   form.addEventListener("change", checkDirty);
-  form.addEventListener("submit", function () { submitting = true; checkDirty(); });
+  form.addEventListener("submit", function (e) { if (e.defaultPrevented) return; submitting = true; checkDirty(); });
   window.addEventListener("beforeunload", function (e) {
     if (!checkDirty()) return;
     e.preventDefault();

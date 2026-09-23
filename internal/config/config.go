@@ -98,6 +98,27 @@ type Region struct {
 	H float64 `yaml:"h"`
 }
 
+// regionSlack is how far past 1 a region's far edge (x+w, y+h) may land and
+// still count as on the edge. The editor works on a 1e-4 grid, so an
+// overshoot of one grid step is rounding — binary float noise in the sum,
+// or a client that rounded the two edges separately (0.0063 + 0.9938) —
+// not a region that reaches outside the frame. Set halfway to the second
+// step, so neither 1.0001 nor 1.0002 sits on the boundary in binary.
+const regionSlack = 1.5e-4
+
+// Clamp pulls a far edge that overshoots 1 by less than regionSlack back
+// onto it, so a region drawn to the frame's edge never fails the bounds
+// check over rounding. Anything further out is left for Validate to reject.
+func (r Region) Clamp() Region {
+	if s := r.X + r.W; s > 1 && s-1 < regionSlack {
+		r.W = 1 - r.X
+	}
+	if s := r.Y + r.H; s > 1 && s-1 < regionSlack {
+		r.H = 1 - r.Y
+	}
+	return r
+}
+
 type Trigger struct {
 	Type      string  `yaml:"type"`      // pixel_change | ocr_match | ocr_changed | numeric
 	Pattern   string  `yaml:"pattern"`   // regex for ocr_match / numeric extraction
@@ -303,9 +324,13 @@ func (c *Config) Validate() error {
 		if nonFinite(r.X) || nonFinite(r.Y) || nonFinite(r.W) || nonFinite(r.H) {
 			return fmt.Errorf("watch %q: region must be finite", w.Name)
 		}
+		// A far edge a rounding step past 1 is on the edge; the clamped
+		// region is what runs and what a later Save writes back.
+		r = r.Clamp()
 		if r.W <= 0 || r.H <= 0 || r.X < 0 || r.Y < 0 || r.X+r.W > 1 || r.Y+r.H > 1 {
 			return fmt.Errorf("watch %q: region must be normalized 0-1 with positive size", w.Name)
 		}
+		w.Region = r
 		if !validTypes[w.Trigger.Type] {
 			return fmt.Errorf("watch %q: unknown trigger type %q", w.Name, w.Trigger.Type)
 		}

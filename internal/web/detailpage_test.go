@@ -26,7 +26,7 @@ func TestDetailCompositionSectionsAndTestBesideStage(t *testing.T) {
 		`<div class="stage-frame">`,
 		`<div class="region-actions">`,
 		`<button type="button" id="testbtn" class="btn btn-outline">Test this region</button>`,
-		`<details class="region-manual">`,
+		`<details class="region-manual" id="region-manual">`,
 		`<div id="test-result"`,
 		`<h2>Live</h2>`,
 		`<h2 id="config-heading" class="col-heading">Configuration</h2>`,

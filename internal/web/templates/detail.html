@@ -48,34 +48,59 @@
   <div class="col-stage">
     <div class="stage-frame">
       <div id="stage" data-name="{{.Watch.Name}}" data-base="{{.Base}}">
-        <img id="snap" src="{{watchURL .Watch.Name "/snapshot"}}" alt="snapshot">
-        <canvas id="overlay"></canvas>
-        <div id="snap-error" class="snap-error" hidden></div>
+        {{/* The alt names the watch, not the source: sources carry user:pass
+             URLs a screen reader would spell out, and the text also shows as
+             the broken-image caption before app.js swaps the placeholder in. */}}
+        <img id="snap" src="{{watchURL .Watch.Name "/snapshot"}}" alt="Latest frame from {{.Watch.Name}}">
+        {{/* The region editor (app.js): drag to draw, drag a corner to
+             resize, drag inside to move. Focusable, so the keyboard drives
+             it too; the sr-only readout below announces the region after
+             each key. */}}
+        <canvas id="overlay" tabindex="0" role="application" aria-label="Region editor. Arrow keys move the region, Shift+Arrow resizes it, Alt for fine steps." aria-describedby="region-readout"></canvas>
+        <div id="snap-error" class="snap-error" role="status" hidden></div>
       </div>
+      <span id="region-readout" class="sr-only" aria-live="polite"></span>
     </div>
     <div class="region-actions">
-      <p class="hint muted">Drag on the image to select the region to watch.</p>
-      <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
+      {{/* app.js rewrites the hint from state: no image, touch editing on or
+           off, whole frame selected. */}}
+      <p id="region-hint" class="hint muted">Drag on the image to select the region to watch, or set it manually below.</p>
+      <div class="region-btns">
+        {{/* Touch screens only (style.css): a finger on the snapshot scrolls
+             the page until Edit region is on, so the frame can't trap a
+             swipe. The mouse and pen draw without it. */}}
+        <button type="button" id="region-edit" class="btn btn-outline region-edit" aria-pressed="false">Edit region</button>
+        <button type="button" id="testbtn" class="btn btn-outline">Test this region</button>
+      </div>
     </div>
     {{with .Form.Err "region"}}<p id="err-region" class="field-error field-error-region">{{.}}</p>{{end}}
-    <details class="region-manual">
+    {{/* The keyboard/screen-reader path to the same region inputs the drag
+         writes (app.js applyManualFields validates and copies them over,
+         syncManualFields writes them back after a drag). step=any: a drag
+         leaves values like 0.0312 that a fixed step would call invalid;
+         app.js gives the arrow keys 0.01 steps instead. */}}
+    <details class="region-manual" id="region-manual">
       <summary>Set region manually</summary>
-      <div class="field-row">
-        <label for="m-x">X (0–1)</label>
-        <input id="m-x" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
+      <p class="region-manual-hint">Fractions of the frame from its top-left corner, 0 to 1 (0.5 = halfway). Arrow keys step by 0.01.</p>
+      <div class="region-manual-grid">
+        <div class="field-row">
+          <label for="m-x">Left</label>
+          <input id="m-x" type="number" step="any" min="0" max="1" inputmode="decimal" placeholder="0–1" aria-describedby="region-manual-error">
+        </div>
+        <div class="field-row">
+          <label for="m-y">Top</label>
+          <input id="m-y" type="number" step="any" min="0" max="1" inputmode="decimal" placeholder="0–1" aria-describedby="region-manual-error">
+        </div>
+        <div class="field-row">
+          <label for="m-w">Width</label>
+          <input id="m-w" type="number" step="any" min="0" max="1" inputmode="decimal" placeholder="0–1" aria-describedby="region-manual-error">
+        </div>
+        <div class="field-row">
+          <label for="m-h">Height</label>
+          <input id="m-h" type="number" step="any" min="0" max="1" inputmode="decimal" placeholder="0–1" aria-describedby="region-manual-error">
+        </div>
       </div>
-      <div class="field-row">
-        <label for="m-y">Y (0–1)</label>
-        <input id="m-y" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
-      </div>
-      <div class="field-row">
-        <label for="m-w">W (0–1)</label>
-        <input id="m-w" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
-      </div>
-      <div class="field-row">
-        <label for="m-h">H (0–1)</label>
-        <input id="m-h" type="number" step="0.0001" min="0" max="1" inputmode="decimal">
-      </div>
+      <p id="region-manual-error" class="field-error" aria-live="polite"></p>
     </details>
     <div id="test-result" aria-live="polite" aria-atomic="true"></div>
     <section class="live-section">

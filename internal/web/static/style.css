@@ -1231,7 +1231,11 @@ fieldset > .field-error { margin-top: var(--space-2); }
   flex-wrap: wrap;
   margin-top: 10px;
 }
-.detail-title-row h1 { margin: 0; font-family: var(--font-mono); }
+/* The name is an identifier, so it breaks anywhere rather than truncating:
+   a hyphen-free 68-character name used to run off the phone's edge and
+   widen the whole page (the h1 is a flex item, so min-width:auto held it
+   at its one-line width). */
+.detail-title-row h1 { margin: 0; font-family: var(--font-mono); min-width: 0; overflow-wrap: anywhere; }
 .source-line { margin: 6px 0 0; max-width: 72ch; font-size: var(--fs-sm); word-break: break-all; }
 
 /* ---- Detail two-column grid ---------------------------------------------
@@ -1276,35 +1280,75 @@ fieldset > .field-error { margin-top: var(--space-2); }
   margin-top: var(--space-3);
 }
 .region-actions .hint { margin: 0; flex: 1 1 16rem; max-width: 72ch; }
-.region-actions .btn { flex: none; margin-left: auto; }
+.region-btns { display: flex; flex: none; gap: var(--space-2); margin-left: auto; }
+/* Edit region exists for touch screens only (see #stage canvas below); it
+   is the pressed/"Done" state while the stage is in editing mode. */
+.region-edit { display: none; }
+@media (any-pointer: coarse) { .region-edit { display: inline-flex; } }
+/* Wherever Edit region exists, it and Test are full 44px touch targets
+   (the shared .btn is 36px, 40px on phones), and so is the manual
+   disclosure beside them. The specificity beats both .btn heights and the
+   phone block's summary padding, which come later in the file. */
+@media (any-pointer: coarse) {
+  .region-btns .btn { height: auto; min-height: 44px; }
+  details.region-manual > summary { min-height: 44px; padding-block: 0; }
+}
+.region-edit[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-a15); }
 
 /* ---- Stage: snapshot + canvas overlay -----------------------------------
-   #stage/#snap/#overlay geometry is load-bearing for app.js (canvas is
-   sized from img.clientWidth/clientHeight) — the frame decoration lives on
-   the wrapping .stage-frame, never as padding/border on #stage itself.
-   #stage stays position:relative with #stage img display:block;max-width:100%
-   exactly as contracted. Rounding+clipping happens once, on #stage itself
+   #stage/#snap/#overlay geometry is load-bearing for app.js (the canvas is
+   sized from img.clientWidth/clientHeight in CSS px, its backing store by
+   devicePixelRatio) — the frame decoration lives on the wrapping
+   .stage-frame, never as padding/border on #stage itself. #stage stays
+   position:relative with #stage img display:block;max-width:100% exactly
+   as contracted. Rounding+clipping happens once, on #stage itself
    (overflow:hidden + border-radius, sized to the img it tightly wraps via
    inline-block), so there is never a seam between a corner radius and the
-   canvas drawn on top of it. */
+   canvas drawn on top of it. The frame centres the stage: a camera frame
+   narrower than the column (640px at tablet width) sits in the middle of
+   the letterbox rather than against its left edge; it is never upscaled,
+   which would soften the OCR preview. */
 #stage {
   position: relative;
   display: inline-block;
+  vertical-align: top;
   max-width: 100%;
   overflow: hidden;
   border-radius: var(--radius-md);
 }
-#stage img { display: block; max-width: 100%; }
-#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; touch-action: none; }
+/* No image: the placeholder takes the frame's full width instead of the
+   inline-block shrinking to the width of its text. Reverts by itself when
+   the img is shown again; the canvas is hidden meanwhile (app.js). */
+#stage:has(> #snap-error:not([hidden])) { display: block; }
+#stage img { display: block; max-width: 100%; -webkit-user-drag: none; }
+/* A finger on the snapshot scrolls the page (pan-y) unless the stage is in
+   editing mode (the Edit region toggle, touch screens only): with
+   touch-action none on a canvas that fills the phone's width, no swipe
+   could start there and every one of them drew a region. The mouse and pen
+   draw at any time; app.js sets the cursor from what is under the pointer
+   (a corner, the inside, elsewhere). */
+#stage canvas { position: absolute; left: 0; top: 0; cursor: crosshair; touch-action: pan-y pinch-zoom; }
+#stage.is-editing canvas { touch-action: none; }
+/* The editor is keyboard-driven too (arrow keys); #stage clips, so the
+   ring is drawn inside the edge. */
+#stage canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .stage-frame {
   position: relative;
   display: block;
+  text-align: center;
+  /* Never part of a text selection: a press inside a selection starts a
+     native drag of it, which cancels the region drag (pointercancel), and
+     the img underneath would start its own drag. */
+  user-select: none;
+  -webkit-user-select: none;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 10px;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
+.stage-frame:has(#stage.is-editing) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-a35); }
 .stage-frame::before {
   content: "";
   position: absolute;
@@ -1323,34 +1367,61 @@ fieldset > .field-error { margin-top: var(--space-2); }
 }
 .hint { margin-top: var(--space-3); font-size: var(--fs-sm); }
 
-/* ---- Snapshot error placeholder (#snap-error) ---------------------------
+/* ---- Snapshot placeholder (#snap-error) ----------------------------------
    must_fix 2: shown in place of the <img>'s generic broken-image glyph when
-   /snapshot 502s (unreachable source, no successful frame yet). Sized with
-   its own min-height rather than inheriting the image's natural size, since
-   #stage's own sizing (inline-block, wrapping the img) collapses once the
-   img is hidden. */
+   /snapshot 502s (unreachable source, no successful frame yet). A slate the
+   size of a frame (the frame's full width at 16:9, since #stage is block
+   while it shows; the ratio is a floor, an opened technical detail grows
+   it) with an LED and a heading whose colour says how bad it is: amber
+   while app.js is still checking or the watch is running fine and only
+   the preview is late (.is-slow), red once the source is unreachable or
+   misconfigured (.is-down). The base text is neutral. */
 .snap-error {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 220px;
+  width: 100%;
+  /* No min-height: an explicit one would replace the automatic minimum
+     that lets an aspect-ratio box grow past the ratio for its content (an
+     opened technical detail at phone width), and #stage clips. */
+  aspect-ratio: 16 / 9;
   padding: var(--space-4);
   text-align: center;
   color: var(--text-dim);
   background: var(--bg-inset);
   font-size: var(--fs-sm);
 }
-.snap-error strong { color: var(--text); font-size: var(--fs-base); font-weight: var(--fw-strong); }
+.snap-error strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-strong);
+}
+.snap-error.is-down strong { color: var(--red); }
+.snap-error.is-slow strong { color: var(--amber); }
+/* The checking LED breathes; the reduced-motion block at the end zeroes it
+   to a steady dot. */
+@keyframes led-pulse { 50% { opacity: 0.35; } }
+.snap-error.is-checking .led { animation: led-pulse 1.2s ease-in-out infinite; }
 .snap-error .snap-cause { margin: 0; color: var(--text-dim); max-width: 46ch; text-wrap: pretty; overflow-wrap: anywhere; }
 .snap-error .tech-detail { width: 100%; max-width: 52ch; text-align: center; }
 .snap-error .tech-raw { text-align: left; }
+/* The slate's words stay selectable (the raw chain is often the only copy
+   of the error on the page, and it belongs in a terminal or an issue).
+   The .stage-frame lock above is for the image and canvas; the canvas is
+   hidden while the slate shows, so there is no region drag to cancel. */
+.snap-error { user-select: text; -webkit-user-select: text; }
 
 /* ---- Manual region entry (should_fix 7) ----------------------------------
    Keyboard/switch/screen-reader path to the same fx/fy/fw/fh fields the
    pointer-drag overlay writes to; a <details> disclosure so it stays out of
-   the way for pointer users who don't need it. */
+   the way for pointer users who don't need it. The four fields share one
+   row (two on phones) with their label above: four six-character values
+   don't need four full-width rows. */
 .region-manual { margin-top: var(--space-3); }
 /* Marker, layout and transition come from the shared disclosure rule
    (.tech-detail summary, .region-manual summary). */
@@ -1359,8 +1430,18 @@ fieldset > .field-error { margin-top: var(--space-2); }
   gap: 8px;
 }
 .region-manual summary:hover { color: var(--accent); }
-.region-manual .field-row { grid-template-columns: 60px 1fr; }
 .region-manual[open] summary { margin-bottom: var(--space-2); }
+.region-manual-hint { margin: 0 0 var(--space-3); font-size: var(--fs-sm); line-height: 1.45; color: var(--text-faint); text-wrap: pretty; max-width: 65ch; }
+.region-manual-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.region-manual-grid .field-row { grid-template-columns: 1fr; gap: 4px; padding: 0; min-height: 0; border-top: 0; }
+.region-manual-grid input { font-family: var(--font-mono); }
+/* One line under the fields naming the first problem (app.js); the field
+   itself carries aria-invalid, which the shared rule paints red. */
+#region-manual-error { margin-top: var(--space-2); }
+/* Always rendered (a live region has to exist before its text changes);
+   empty, it takes no space and draws no dot. */
+#region-manual-error:empty { margin-top: 0; }
+#region-manual-error:empty::before { display: none; }
 
 /* ---- Test result fragment (#test-result) --------------------------------
    Injected via innerHTML — no <style>/<script> inside the fragment; every
@@ -1719,7 +1800,10 @@ fieldset > .field-error { margin-top: var(--space-2); }
   /* A 44px-ish hit area for the fold's summary, without moving the rows. */
   .fold-summary { padding: 12px 0; margin: -12px 0; }
   .fold[open] > .fold-summary { margin-bottom: calc(var(--space-2) - 12px); }
-  .region-actions .btn { width: 100%; }
+  /* Test (and Edit region on touch screens) share the full width. */
+  .region-btns { width: 100%; }
+  .region-btns .btn { flex: 1 1 0; }
+  .region-manual-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* iOS Safari zooms the page on focus for any control under 16px. */
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="submit"]), select, textarea { font-size: 16px; }
