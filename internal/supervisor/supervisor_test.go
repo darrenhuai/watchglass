@@ -503,7 +503,7 @@ func TestStartSevenSegWatchWithoutTesseract(t *testing.T) {
 }
 
 // The default engine is still tesseract, and its absence is still a Start
-// error for OCR watches — with the wording main has always printed.
+// error for OCR watches, saying how to get it (B3: found beyond PATH too).
 func TestStartOCRWatchWithoutTesseractErrors(t *testing.T) {
 	s := newSup(state.New(5))
 	w := testWatch("lcd")
@@ -512,7 +512,7 @@ func TestStartOCRWatchWithoutTesseractErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error without tesseract")
 	}
-	if !strings.Contains(err.Error(), `watch "lcd"`) || !strings.Contains(err.Error(), "tesseract is not on PATH") {
+	if !strings.Contains(err.Error(), `watch "lcd"`) || !strings.Contains(err.Error(), "tesseract wasn't found") {
 		t.Errorf("error = %q", err)
 	}
 	if len(s.Running()) != 0 {

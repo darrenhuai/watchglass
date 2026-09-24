@@ -111,7 +111,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		}
 		// at is also the TS of this reading's alert (runner.Delivery), which
 		// is how the Live panel ties "sent" / "not delivered" to its fire.
-		s.reg.Add(name, state.Sample{TS: at, Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes()})
+		s.reg.Add(name, state.Sample{TS: at, Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes(), Pending: ev.Pending, Need: ev.Need, CooldownEnds: ev.CooldownEnds})
 		// Reuse the same encoding for the hook; buf.Bytes() is read-only from
 		// here on, matching the registry's PNG read-only convention.
 		if onEvent != nil {

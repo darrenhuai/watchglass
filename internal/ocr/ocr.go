@@ -27,8 +27,13 @@ type Tesseract struct {
 	run runFunc
 }
 
-func NewTesseract() *Tesseract {
-	return &Tesseract{Bin: "tesseract", PSM: 7, run: execRun}
+// NewTesseract reads with the tesseract binary at bin (FindTesseract), or
+// the one on PATH when bin is "".
+func NewTesseract(bin string) *Tesseract {
+	if bin == "" {
+		bin = "tesseract"
+	}
+	return &Tesseract{Bin: bin, PSM: 7, run: execRun}
 }
 
 func (t *Tesseract) Recognize(ctx context.Context, img image.Image) (string, error) {

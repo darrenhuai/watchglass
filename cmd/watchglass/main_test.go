@@ -124,8 +124,8 @@ func TestCheckEngines(t *testing.T) {
 	if err == nil {
 		t.Fatal("ocr_match without tesseract must be refused")
 	}
-	if !strings.Contains(err.Error(), `watch "lcd" needs OCR but tesseract is not on PATH`) {
-		t.Errorf("error = %q, want the watch named and the old wording", err)
+	if !strings.Contains(err.Error(), `watch "lcd" needs OCR but tesseract wasn't found`) {
+		t.Errorf("error = %q, want the watch named and the tesseract wording", err)
 	}
 	if err := checkEngines([]config.Watch{explicit}, noTess); err == nil {
 		t.Error("engine: tesseract spelled out must still be refused without tesseract")

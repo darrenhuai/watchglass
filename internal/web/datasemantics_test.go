@@ -302,7 +302,7 @@ func TestTestResultPanelHeadAndVerdict(t *testing.T) {
 		`data-dismiss-test aria-label="Clear test result"`,
 		`<p class="test-stale">`,
 		`<p class="verdict verdict-met">`,
-		`<strong class="verdict-title">Condition met</strong> <span class="verdict-detail">The text matches the pattern. The watch fires after 2 readings like this in a row, unless it was already met or Cooldown is running.</span>`,
+		`<strong class="verdict-title">Condition met</strong> <span class="verdict-detail">The text matches the pattern. The watch fires after 2 readings in a row meet it, unless it was already met or Cooldown is running.</span>`,
 		`<dt>Read</dt>`,
 	} {
 		if !strings.Contains(body, want) {

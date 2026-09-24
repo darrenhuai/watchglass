@@ -35,6 +35,9 @@ func TestSummarizeErr(t *testing.T) {
 		{"ocr", "no reading for 2 consecutive polls: ocr: tesseract: exit status 1: Error opening data file tessdata/eng.traineddata",
 			"OCR failed: error opening data file tessdata/eng.traineddata"},
 		{"ocr engine missing", "no reading for 2 consecutive polls: ocr: " + ocr.ErrNoTesseract.Error(), "OCR failed: tesseract isn't installed"},
+		{"http 401", "grab: snapshot http://admin:xxxxx@192.168.1.64/cgi-bin/snapshot.cgi: status 401",
+			"192.168.1.64 turned down the login"},
+		{"http 403", "snapshot http://cam.lan/ISAPI/Streaming/channels/101/picture: status 403", "cam.lan turned down the login"},
 		{"fallback", "something odd happened: the widget is sideways", "The widget is sideways"},
 		{"no host in message", "grab: refused", "Connection refused"},
 		{"empty", "", ""},
@@ -179,5 +182,25 @@ func TestFriendlyStartError(t *testing.T) {
 	tess := fmt.Errorf("watch %q %w", "cam", ocr.ErrNoTesseract)
 	if got := friendlyStartError(tess); !strings.HasPrefix(got, "This trigger type reads text with tesseract") {
 		t.Errorf("tesseract: got %q", got)
+	}
+}
+
+// A camera that turns the login down says where the user and password go,
+// or, when the URL already has them, to check them.
+func TestErrHintForARefusedLogin(t *testing.T) {
+	for _, c := range []struct{ msg, want string }{
+		{"grab: snapshot http://admin:xxxxx@192.168.1.64/cgi-bin/snapshot.cgi: status 401", "Check the user and password in the source URL."},
+		{"snapshot https://cam.lan/snap: status 401", "Put the camera's user and password in the source URL: https://user:password@camera/…"},
+		{"snapshot http://cam.lan/snap: status 403", "Put the camera's user and password in the source URL: http://user:password@camera/…"},
+		{"grab: ffmpeg: exit status 1: [rtsp @ 0x55d0c0a1b2c0] method DESCRIBE failed: 401 Unauthorized", "Put the camera's user and password in the source URL: http://user:password@camera/…"},
+	} {
+		if got := errHint(c.msg); !strings.HasPrefix(got, c.want) {
+			t.Errorf("errHint(%q) = %q, want it to start %q", c.msg, got, c.want)
+		}
+	}
+	for _, msg := range []string{"snapshot http://cam.lan/snap: status 404", "snapshot http://cam.lan/snap: status 500"} {
+		if got := errHint(msg); got != "" {
+			t.Errorf("errHint(%q) = %q, want none", msg, got)
+		}
 	}
 }

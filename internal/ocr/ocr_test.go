@@ -13,7 +13,7 @@ import (
 func TestRecognizeTrimsAndPassesArgs(t *testing.T) {
 	var gotBin string
 	var gotArgs []string
-	te := NewTesseract()
+	te := NewTesseract("")
 	te.run = func(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 		gotBin = bin
 		gotArgs = args
@@ -39,7 +39,7 @@ func TestRecognizeTrimsAndPassesArgs(t *testing.T) {
 }
 
 func TestRecognizePropagatesError(t *testing.T) {
-	te := NewTesseract()
+	te := NewTesseract("")
 	te.run = func(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 		return nil, errors.New("boom")
 	}
@@ -53,7 +53,7 @@ func TestRecognizeRealBinary(t *testing.T) {
 	if _, err := exec.LookPath("tesseract"); err != nil {
 		t.Skip("tesseract not installed")
 	}
-	te := NewTesseract()
+	te := NewTesseract("")
 	// A blank image should OCR to empty text without erroring.
 	got, err := te.Recognize(context.Background(), image.NewRGBA(image.Rect(0, 0, 100, 40)))
 	if err != nil {
@@ -90,7 +90,7 @@ const fixtureTSV = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tlef
 
 func TestRecognizeWordsParsesTSV(t *testing.T) {
 	var gotArgs []string
-	te := NewTesseract()
+	te := NewTesseract("")
 	te.run = func(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 		gotArgs = args
 		return []byte(fixtureTSV), nil
@@ -118,7 +118,7 @@ func TestRecognizeWordsParsesTSV(t *testing.T) {
 }
 
 func TestRecognizeWordsPropagatesError(t *testing.T) {
-	te := NewTesseract()
+	te := NewTesseract("")
 	te.run = func(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 		return nil, errors.New("boom")
 	}
@@ -128,5 +128,5 @@ func TestRecognizeWordsPropagatesError(t *testing.T) {
 }
 
 func TestTesseractIsDetailedEngine(t *testing.T) {
-	var _ DetailedEngine = NewTesseract()
+	var _ DetailedEngine = NewTesseract("")
 }

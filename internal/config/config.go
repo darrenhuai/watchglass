@@ -126,7 +126,10 @@ type Trigger struct {
 	Pattern   string  `yaml:"pattern"`   // regex for ocr_match / numeric extraction
 	Op        string  `yaml:"op"`        // numeric: gt | lt
 	Threshold float64 `yaml:"threshold"` // pixel_change: percent 0-100; numeric: compare value
-	Confirm   int     `yaml:"confirm"`   // N consecutive identical readings before a state is believed
+	// Confirm is how many readings in a row must agree before a new state
+	// is believed: readings that meet the condition (ocr_match, numeric),
+	// or the same text (ocr_changed). pixel_change doesn't use it.
+	Confirm int `yaml:"confirm"`
 	// Cooldown delays notification of a persisting new state until the
 	// window ends, rather than dropping it: a state that arrives and holds
 	// through cooldown still fires once, at the first reading after expiry.
@@ -161,6 +164,34 @@ type Watch struct {
 	Engine  string   `yaml:"engine,omitempty"`
 	Trigger Trigger  `yaml:"trigger"`
 	Notify  []string `yaml:"notify"`
+	// TLSInsecure accepts the camera's HTTPS certificate without checking
+	// it, for the many cameras (Reolink, PiKVM) that ship a self-signed
+	// one. It applies to this watch's http(s) source only.
+	TLSInsecure bool `yaml:"tls_insecure,omitempty"`
+	// Headers are extra request headers for an http(s) source, one
+	// "Name: value" per item, the way curl -H takes them: an API key or a
+	// token a camera or proxy wants. A list, not a map, because the
+	// comment-keeping save (merge.go) merges lists and structs only.
+	Headers []string `yaml:"headers,omitempty"`
+}
+
+// ParseHeader splits one headers: item into its name and value. The name
+// must be an HTTP token and the value can't hold a line break.
+func ParseHeader(h string) (name, value string, err error) {
+	name, value, ok := strings.Cut(h, ":")
+	name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+	if !ok || name == "" {
+		return "", "", fmt.Errorf("header %q must look like \"Name: value\"", h)
+	}
+	for _, r := range name {
+		if r <= ' ' || r >= 0x7f || strings.ContainsRune(`"(),/:;<=>?@[\]{}`, r) {
+			return "", "", fmt.Errorf("header name %q has a character HTTP doesn't allow in a name", name)
+		}
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", "", fmt.Errorf("header %q has a line break in its value", name)
+	}
+	return name, value, nil
 }
 
 type Config struct {
@@ -312,8 +343,20 @@ func (c *Config) Validate() error {
 		if w.Source == "" {
 			return fmt.Errorf("watch %q: source is required", w.Name)
 		}
-		if _, err := SourceKind(w.Source); err != nil {
+		kind, err := SourceKind(w.Source)
+		if err != nil {
 			return fmt.Errorf("watch %q: %w", w.Name, err)
+		}
+		// Both only mean something to the pure-Go HTTP source; on another
+		// source they'd be silently ignored, which reads as "set but not
+		// working".
+		if kind != "http" && (w.TLSInsecure || len(w.Headers) > 0) {
+			return fmt.Errorf("watch %q: tls_insecure and headers only apply to http:// and https:// sources", w.Name)
+		}
+		for _, h := range w.Headers {
+			if _, _, err := ParseHeader(h); err != nil {
+				return fmt.Errorf("watch %q: headers: %w", w.Name, err)
+			}
 		}
 		if w.Interval == 0 {
 			w.Interval = Duration(5 * time.Second)

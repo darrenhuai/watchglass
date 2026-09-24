@@ -19,6 +19,13 @@ type Sample struct {
 	Reading string
 	Fired   bool
 	PNG     []byte
+	// Pending of Need: this reading would fire once Confirm readings in a
+	// row agree, and this is the Pending-th (trigger.Event). 0 otherwise.
+	Pending int
+	Need    int
+	// CooldownEnds: Cooldown holds the alert this progress leads to until
+	// then (trigger.Event). Zero when no cooldown is running.
+	CooldownEnds time.Time
 }
 
 // Health is a watch's most recent stream health verdict, mirrored from

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/source"
 )
 
 // Error text for people. The Go error chains watchglass produces are exact
@@ -67,6 +68,10 @@ func summarizeErr(msg string) string {
 		return "OCR failed: " + lowerFirst(clip(innermost(msg[strings.Index(low, "ocr: ")+len("ocr: "):])))
 	}
 
+	// Before the transport cases: the wrapped x509 text can say anything.
+	if strings.Contains(msg, source.ErrCertNotTrusted.Error()) {
+		return by("HOST's certificate isn't trusted", "The camera's certificate isn't trusted")
+	}
 	switch {
 	case strings.Contains(low, "refused"), strings.Contains(low, "no connection could be made"):
 		return by("Connection refused by HOST", "Connection refused")
@@ -82,7 +87,7 @@ func summarizeErr(msg string) string {
 	case strings.Contains(low, "connection reset"), strings.Contains(low, "forcibly closed"):
 		return by("Connection reset by HOST", "Connection reset")
 	}
-	if strings.Contains(low, "401 unauthorized") || strings.Contains(low, "403 forbidden") {
+	if loginRefused(msg) {
 		return by("HOST turned down the login", "The camera turned down the login")
 	}
 	if m := errStatusRe.FindStringSubmatch(msg); m != nil {
@@ -103,13 +108,32 @@ func summarizeErr(msg string) string {
 }
 
 // errHint is a second sentence for an error whose summary alone would send
-// people the wrong way, or "" when there is nothing to add. Today that is
-// one case: a camera at 127.0.0.1 (or ::1, or localhost) refused the
+// people the wrong way, or "" when there is nothing to add. Three cases: an
+// HTTPS camera whose certificate didn't verify (the fix is the watch's
+// Certificate checkbox), a camera that turned the login down (say where
+// the user and password go), and a camera at 127.0.0.1 (or ::1, or localhost) refused the
 // connection. Inside Docker, and in WSL's default NAT mode, 127.0.0.1 is
 // the container or VM watchglass runs in, not the computer the camera (or
 // the demo's fakecam.py) is on, and "Connection refused" says nothing
 // about that. WATCHGLASS_IN_CONTAINER (set by the image) makes it certain.
 func errHint(msg string) string {
+	if strings.Contains(msg, source.ErrCertNotTrusted.Error()) {
+		return "If the camera has a self-signed certificate, tick Certificate: Don't check it (under Polling) and save."
+	}
+	if loginRefused(msg) {
+		// The URL in a grab error keeps the user and masks the password
+		// ("user:xxxxx@"), so userinfo there means credentials were sent.
+		scheme := "http"
+		if raw := errURLRe.FindString(msg); raw != "" {
+			if u, err := url.Parse(strings.TrimRight(raw, `.,;:)"`)); err == nil {
+				scheme = strings.ToLower(u.Scheme)
+				if u.User != nil {
+					return "Check the user and password in the source URL. Some cameras lock the account for a while after a few wrong tries."
+				}
+			}
+		}
+		return "Put the camera's user and password in the source URL: " + scheme + "://user:password@camera/…"
+	}
 	low := strings.ToLower(msg)
 	if !strings.Contains(low, "refused") && !strings.Contains(low, "no connection could be made") {
 		return ""
@@ -121,6 +145,17 @@ func errHint(msg string) string {
 		return "watchglass runs in a container here, and 127.0.0.1 is the container itself. Use the camera host's LAN IP, or host.docker.internal for a camera on the Docker host."
 	}
 	return "If watchglass runs in Docker or WSL, 127.0.0.1 is that container, not your computer. Use the host's LAN IP or host.docker.internal."
+}
+
+// loginRefused reports a camera that answered 401 or 403: an http source's
+// "status 401", or ffmpeg's "401 Unauthorized" from an RTSP DESCRIBE.
+func loginRefused(msg string) bool {
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "401 unauthorized") || strings.Contains(low, "403 forbidden") {
+		return true
+	}
+	m := errStatusRe.FindStringSubmatch(msg)
+	return m != nil && (m[1] == "401" || m[1] == "403")
 }
 
 // loopbackHost reports whether hostport (from errHost) names this machine.
@@ -358,9 +393,9 @@ func friendlyStartError(err error) string {
 	msg := watchPrefix.ReplaceAllString(strings.TrimSpace(err.Error()), "")
 	switch {
 	case errors.Is(err, ocr.ErrNoTesseract):
-		return "This trigger type reads text with tesseract, and tesseract isn't installed. Install it, or switch Engine to sevenseg or rapidocr."
+		return "This trigger type reads text with tesseract, and tesseract isn't installed. Install it (" + ocr.TesseractInstall() + ") and restart watchglass, or switch Engine to sevenseg or rapidocr."
 	case errors.Is(err, ocr.ErrNoRapidOCR):
-		return "This watch reads with rapidocr, and no Python with the rapidocr package was found. Run pip install rapidocr onnxruntime, or switch Engine."
+		return "This watch reads with rapidocr, and no Python with the rapidocr package was found. Run pip install rapidocr onnxruntime and restart watchglass, or switch Engine."
 	case strings.HasPrefix(msg, "notify: "):
 		// notify.NewShoutrrr names the line and its host, never the rest.
 		if m := notifyLineRe.FindStringSubmatch(strings.TrimPrefix(msg, "notify: ")); m != nil {

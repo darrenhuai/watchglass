@@ -6,13 +6,14 @@ import (
 )
 
 // ErrNoTesseract is returned by Engines.For when a watch wants tesseract
-// and none was found on PATH at boot.
-var ErrNoTesseract = errors.New("needs OCR but tesseract is not on PATH; " +
-	"install it (e.g. apt install tesseract-ocr / choco install tesseract), " +
+// and FindTesseract found none at boot.
+var ErrNoTesseract = errors.New("needs OCR but tesseract wasn't found; " +
+	"install it (" + TesseractInstall() + ") and restart watchglass, " +
+	"point -tesseract at the binary, " +
 	"or set engine: sevenseg if the screen is a seven-segment digit display")
 
 // Engines is the set of recognizers a watchglass process has to offer.
-// Tesseract is nil when the binary is not on PATH; SevenSeg is the built-in
+// Tesseract is nil when FindTesseract found no binary; SevenSeg is the built-in
 // decoder and never missing (nil means the package default); RapidOCR is
 // nil when no Python with the rapidocr package was found at boot.
 type Engines struct {

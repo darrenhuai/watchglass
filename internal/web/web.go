@@ -119,17 +119,20 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		// watchURL is the only way a watch name enters a URL: names may hold
 		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
 		// to be decoded (or path-normalized) into a different name.
-		"watchURL":  s.watchURL,
-		"pageTitle": pageTitle,
-		"shortErr":  summarizeErr,
-		"errHint":   errHint,
-		"reading":   viewReading,
-		"pct":       confidencePct,
-		"lowConf":   func(c float64) bool { return c < lowConfidence },
-		"isoTime":   isoTime,
-		"ppSet":     preprocessSet,
-		"ppSummary": preprocessSummary,
-		"trigLabel": triggerLabel,
+		"watchURL":    s.watchURL,
+		"pageTitle":   pageTitle,
+		"shortErr":    summarizeErr,
+		"errHint":     errHint,
+		"reading":     viewReading,
+		"pct":         confidencePct,
+		"lowConf":     func(c float64) bool { return c < lowConfidence },
+		"isoTime":     isoTime,
+		"ppSet":       preprocessSet,
+		"ppSummary":   preprocessSummary,
+		"trigLabel":   triggerLabel,
+		"confirmHelp": confirmHelp,
+		"patternHelp": patternHelp,
+		"redact":      redactSource,
 		"engineNote": func(w config.Watch, tess, rapid bool) engineNote {
 			return engineNoteFor(w, tess, rapid)
 		},
@@ -415,6 +418,9 @@ type liveData struct {
 	// when that reading is a fire: "sent", "not delivered", "sending" or "".
 	Delivery deliveryView
 	FiredTag string
+	// Progress is the newest reading's step towards Confirm
+	// (confirmProgress), nil when it isn't on its way to a fire.
+	Progress *progressView
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +444,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		Status:   s.statusFor(name, s.isRunning(name)),
 		Delivery: dv,
 		FiredTag: dv.firedTag,
+		Progress: confirmProgress(wc.Trigger, latest),
 	})
 }
 
@@ -860,6 +867,15 @@ type detailData struct {
 	// package — the same lock/annotation as TesseractAvailable, applied
 	// while the watch's engine is rapidocr.
 	RapidOCRAvailable bool
+	// TesseractInstall is the command that installs tesseract on this OS,
+	// for the engine note (ocr.TesseractInstall).
+	TesseractInstall string
+	// ShowTLS puts the Certificate checkbox (tls_insecure) on the page:
+	// an https:// source, or a watch that already has it on.
+	ShowTLS bool
+	// Fresh is set while the watch's trigger is still Create's default
+	// (isFresh): the page offers the "What are you watching?" presets.
+	Fresh bool
 	// Base carries BasePath into the page so app.js can prefix the fetch
 	// URLs it builds client-side (the "u" FuncMap func only covers
 	// server-rendered links) — see the #stage data-base attribute in
@@ -892,6 +908,9 @@ func (s *Server) detailFor(wc config.Watch) detailData {
 		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		TesseractAvailable: s.engines.Tesseract != nil,
 		RapidOCRAvailable:  s.engines.RapidOCR != nil,
+		TesseractInstall:   ocr.TesseractInstall(),
+		Fresh:              isFresh(wc),
+		ShowTLS:            strings.HasPrefix(wc.Source, "https://") || wc.TLSInsecure,
 		Base:               s.BasePath,
 		ConfigFile:         s.configFile(),
 	}
@@ -1058,7 +1077,9 @@ func verdictFor(trig config.Trigger, reading string, view readingView, errs []fi
 	}
 	when := "on the first reading like this"
 	if confirm > 1 {
-		when = fmt.Sprintf("after %d readings like this in a row", confirm)
+		// Confirm counts readings that meet the condition (trigger.go
+		// condKey), not identical texts.
+		when = fmt.Sprintf("after %d readings in a row meet it", confirm)
 	}
 	return &testVerdict{State: "met", Title: "Condition met", Detail: cond.Detail + ". The watch fires " + when + ", unless it was already met or Cooldown is running."}
 }
@@ -1083,7 +1104,11 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	}
 	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
 	defer cancelGrab()
-	src, err := s.NewSource(wc)
+	// The Certificate box as the form has it: ticking it and pressing Test
+	// tries the camera that way before anything is saved.
+	testWatch := wc
+	testWatch.TLSInsecure = formTLSInsecure(r, wc.TLSInsecure)
+	src, err := s.NewSource(testWatch)
 	if err != nil {
 		sourceError(w, err)
 		return
@@ -1133,9 +1158,9 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	engine, err := s.engines.For(engName)
 	switch {
 	case errors.Is(err, ocr.ErrNoTesseract):
-		res.Note = "tesseract isn't installed, so this shows the crop only. For a digit display, try Engine: sevenseg."
+		res.Note = "tesseract isn't installed, so this shows the crop only. Install it (" + ocr.TesseractInstall() + ") and restart watchglass to read text, or for a digit display try Engine: sevenseg."
 	case errors.Is(err, ocr.ErrNoRapidOCR):
-		res.Note = "rapidocr isn't installed, so this shows the crop only. Install it with pip install rapidocr onnxruntime."
+		res.Note = "rapidocr isn't installed, so this shows the crop only. Install it with pip install rapidocr onnxruntime and restart watchglass."
 	case err != nil:
 		res.Note = upperFirst(fmt.Sprintf("engine unavailable: %v", err)) + "."
 	default:
@@ -1304,6 +1329,16 @@ var durationPhrase = map[string]string{
 	"max_interval": "Use for example 10m, or leave it empty to turn it off.",
 }
 
+// formTLSInsecure is the Certificate checkbox's answer when the page had
+// it (tls_shown), else the saved value: an unchecked box sends nothing,
+// so its absence only means "off" on a page that showed it.
+func formTLSInsecure(r *http.Request, saved bool) bool {
+	if r.FormValue("tls_shown") == "" {
+		return saved
+	}
+	return r.FormValue("tls_insecure") != ""
+}
+
 // parseWatchForm builds an updated copy of base from the detail form. It
 // reads every field and reports every problem, in form order, rather than
 // stopping at the first: the save handler re-renders the form with all of
@@ -1334,6 +1369,7 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	if w.Engine == "tesseract" && base.Engine != "tesseract" {
 		w.Engine = ""
 	}
+	w.TLSInsecure = formTLSInsecure(r, base.TLSInsecure)
 	// An empty numeric field means 0 (Validate applies the defaults), as
 	// before; an unparseable one keeps base's value alongside its error.
 	trig, trigErrs := triggerFromForm(r, base.Trigger)
@@ -1606,9 +1642,9 @@ func (s *Server) blockedTrigger(base, updated config.Watch) string {
 		if s.engines.RapidOCR != nil {
 			alt = "sevenseg or rapidocr"
 		}
-		return t + " reads text with tesseract, and tesseract isn't installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to " + alt + ", or install tesseract."
+		return t + " reads text with tesseract, and tesseract isn't installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to " + alt + ", or install tesseract (" + ocr.TesseractInstall() + ") and restart watchglass."
 	case "rapidocr":
-		return t + " reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime, or switch Engine."
+		return t + " reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime and restart watchglass, or switch Engine."
 	}
 	return ""
 }

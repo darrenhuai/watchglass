@@ -8,7 +8,7 @@
       <span class="status-text">{{.Status.State}}</span>
     </span>
   </div>
-  <p class="source-line muted mono">{{.Watch.Source}}</p>
+  <p class="source-line muted mono">{{redact .Watch.Source}}{{if .Watch.TLSInsecure}} <span class="source-flag" title="tls_insecure: this watch accepts the camera's HTTPS certificate without checking it">certificate not checked</span>{{end}}</p>
   {{/* The error in a sentence, with the full chain one click away. app.js
        keeps both in step with the Live poll (data-summary/data-message).
        The sentence is clamped to two lines; its title carries the whole. */}}
@@ -138,6 +138,22 @@
       <input type="text" name="h" value="{{.Watch.Region.H}}" hidden tabindex="-1" aria-hidden="true">
       <fieldset>
         <legend>Trigger</legend>
+        {{/* A watch as Create left it gets a head start: each preset fills
+             the trigger fields below for a common screen (app.js
+             applyPreset) and saves nothing. Status text needs an engine
+             that reads text; with neither tesseract nor rapidocr it is
+             disabled and says so. */}}
+        {{if .Fresh}}
+        <div class="presets" role="group" aria-labelledby="presets-title">
+          <p id="presets-title" class="presets-title">What are you watching?</p>
+          <div class="preset-list">
+            <button type="button" class="preset" data-preset="text" aria-pressed="false"{{if not (or .TesseractAvailable .RapidOCRAvailable)}} disabled title="Reading text needs tesseract, and it isn't installed"{{end}}><span class="preset-name">Status text</span><span class="preset-desc">{{if or .TesseractAvailable .RapidOCRAvailable}}Words like DONE or ERROR{{else}}Needs tesseract (not installed){{end}}</span></button>
+            <button type="button" class="preset" data-preset="digits" aria-pressed="false"><span class="preset-name">Digit display</span><span class="preset-desc">Seven‑segment numbers</span></button>
+            <button type="button" class="preset" data-preset="change" aria-pressed="false"><span class="preset-name">Any change</span><span class="preset-desc">Anything in the box changing</span></button>
+          </div>
+          <p id="preset-note" class="field-hint preset-note" aria-live="polite">Fills in the fields below. Nothing is saved until you press Save.</p>
+        </div>
+        {{end}}
         {{/* The OCR types are locked only while the watch would read them
              with an external engine that isn't there — tesseract for a
              tesseract watch, rapidocr for a rapidocr watch; the built-in
@@ -153,6 +169,34 @@
              are marked blocked and the engine note (below) says why. */}}
         {{$blocked := and $locked (ne .Watch.Trigger.Type "pixel_change")}}
         {{$note := engineNote .Watch .TesseractAvailable .RapidOCRAvailable}}
+        <div class="field-row{{if .Form.Err "engine"}} field-invalid{{end}}{{if eq .Watch.Trigger.Type "pixel_change"}} is-unused{{end}}" id="row-engine">
+          <label for="f-engine">Engine</label>
+          <select id="f-engine" name="engine"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "engine"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "engine"}}err-engine {{end}}engine-note" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}" data-rapidocr="{{if .RapidOCRAvailable}}1{{else}}0{{end}}" data-tesseract-install="{{.TesseractInstall}}">
+            <option value="tesseract" {{if $onTess}}selected{{end}}>tesseract — text{{if not .TesseractAvailable}} (not installed){{end}}</option>
+            <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits</option>
+            <option value="rapidocr" {{if $onRapid}}selected{{end}}>rapidocr — text{{if .RapidOCRAvailable}}, harder cases{{else}} (not installed){{end}}</option>
+          </select>
+          {{with .Form.Err "engine"}}<p id="err-engine" class="field-error">{{.}}</p>{{end}}
+          {{/* Engine comes before Type: it says what kind of screen this is
+               (text, seven-segment digits), and on a box without tesseract
+               it is what unlocks the text types below, so it has to be met
+               first. The row always shows, pixel_change included, so Type
+               never moves when a text type is picked; for pixel_change,
+               which doesn't read it, the row is set aside (is-unused:
+               faint label, a quiet select that wakes on hover and focus)
+               rather than disabled, because on a box without tesseract
+               Engine is what unlocks the text types.
+               The one engine note: what the selected engine means for the
+               selected type on this box (engineNoteFor in formview.go;
+               app.js keeps it live). Quiet = sr-only, for a plain
+               pixel_change: Type's help says Engine isn't used, and a
+               visible line here would vanish on a switch to a text type
+               and pull Type up with it. Warn = the selection can't run. A
+               refused save already says that under Type (err-ttype), so
+               the warn note waits until the selection moves and the
+               error is retired (app.js). */}}
+          <p id="engine-note" class="field-hint engine-note{{if $note.Warn}} is-warn{{end}}{{if $note.Quiet}} sr-only{{end}}"{{if or (not $note.Show) (and $note.Warn (.Form.Err "ttype"))}} hidden{{end}}>{{$note.Text}}</p>
+        </div>
         <div class="field-row{{if .Form.Err "ttype"}} field-invalid{{end}}">
           <label for="f-ttype">Type</label>
           <select id="f-ttype" name="ttype"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "ttype"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "ttype"}}err-ttype {{end}}ttype-help">
@@ -173,26 +217,12 @@
           {{/* What the selected type does; app.js (TRIGGER_HELP) fills it. */}}
           <p id="ttype-help" class="field-hint"></p>
         </div>
-        <div class="field-row{{if .Form.Err "engine"}} field-invalid{{end}}" id="row-engine">
-          <label for="f-engine">Engine</label>
-          <select id="f-engine" name="engine"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "engine"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "engine"}}err-engine {{end}}engine-note" data-tesseract="{{if .TesseractAvailable}}1{{else}}0{{end}}" data-rapidocr="{{if .RapidOCRAvailable}}1{{else}}0{{end}}">
-            <option value="tesseract" {{if $onTess}}selected{{end}}>tesseract — text{{if not .TesseractAvailable}} (not installed){{end}}</option>
-            <option value="sevenseg" {{if eq .Watch.Engine "sevenseg"}}selected{{end}}>sevenseg — seven-segment digits</option>
-            <option value="rapidocr" {{if $onRapid}}selected{{end}}>rapidocr — text{{if .RapidOCRAvailable}}, harder cases{{else}} (not installed){{end}}</option>
-          </select>
-          {{with .Form.Err "engine"}}<p id="err-engine" class="field-error">{{.}}</p>{{end}}
-          {{/* The one engine note: what the selected engine means for the
-               selected type on this box (engineNoteFor in formview.go;
-               app.js keeps it live). Warn = the selection can't run. A
-               refused save already says that under Type (err-ttype), so
-               the warn note waits until the selection moves and the
-               error is retired (app.js). */}}
-          <p id="engine-note" class="field-hint engine-note{{if $note.Warn}} is-warn{{end}}"{{if or (not $note.Show) (and $note.Warn (.Form.Err "ttype"))}} hidden{{end}}>{{$note.Text}}</p>
-        </div>
         <div class="field-row{{if .Form.Err "pattern"}} field-invalid{{end}}" id="row-pattern">
           <label for="f-pattern">Pattern</label>
-          <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="(?i)print complete" spellcheck="false"{{with .Form.Err "pattern"}} aria-invalid="true" aria-describedby="err-pattern"{{end}}>
+          <input id="f-pattern" name="pattern" value="{{.Watch.Trigger.Pattern}}" placeholder="e.g. (?i)print complete" spellcheck="false" autocapitalize="off"{{with .Form.Err "pattern"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "pattern"}}err-pattern {{end}}pattern-help">
           {{with .Form.Err "pattern"}}<p id="err-pattern" class="field-error">{{.}}</p>{{end}}
+          {{/* Per type (patternHelp in formview.go; app.js PATTERN_HELP). */}}
+          <p id="pattern-help" class="field-hint">{{patternHelp .Watch.Trigger.Type}}</p>
         </div>
         {{/* Compare keeps name="op" and the gt/lt values: they are the
              tokens a hand-edited config.yaml uses. app.js picks gt when
@@ -214,11 +244,13 @@
           {{/* Per-type meaning, filled by app.js (THRESHOLD_HELP). */}}
           <p id="threshold-help" class="field-hint"></p>
         </div>
-        <div class="field-row{{if .Form.Err "confirm"}} field-invalid{{end}}">
+        {{/* pixel_change doesn't confirm (each reading over Threshold
+             fires), so app.js hides the row for it. */}}
+        <div class="field-row{{if .Form.Err "confirm"}} field-invalid{{end}}" id="row-confirm">
           <label for="f-confirm">Confirm after</label>
           <input class="control-short" id="f-confirm" name="confirm" type="number" min="1" step="1" value="{{.Form.Val "confirm" (printf "%d" .Watch.Trigger.Confirm)}}"{{with .Form.Err "confirm"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "confirm"}}err-confirm {{end}}confirm-help">
           {{with .Form.Err "confirm"}}<p id="err-confirm" class="field-error">{{.}}</p>{{end}}
-          <p id="confirm-help" class="field-hint">Readings in a row that must agree before a change counts. Blank means 3.</p>
+          <p id="confirm-help" class="field-hint">{{confirmHelp .Watch.Trigger.Type}}</p>
         </div>
         <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}">
           <label for="f-cooldown">Cooldown</label>
@@ -249,6 +281,18 @@
           {{with .Form.Err "health_after"}}<p id="err-health-after" class="field-error">{{.}}</p>{{end}}
           <p id="health-help" class="field-hint">Failed grabs in a row before the stream is marked down (one notification).</p>
         </div>
+        {{/* HTTPS sources only (or a watch that already has it): accept a
+             self-signed certificate. It is the watch's tls_insecure, and
+             tls_shown tells the save the box was on the page, so a client
+             that never showed it (curl, a stale page) keeps the setting. */}}
+        {{if .ShowTLS}}
+        <div class="field-row" id="row-tls">
+          <label for="f-tls">Certificate</label>
+          <label class="checkbox"><input type="checkbox" id="f-tls" name="tls_insecure" aria-describedby="tls-help"{{if .Watch.TLSInsecure}} checked{{end}}> Don't check it</label>
+          <input type="hidden" name="tls_shown" value="1">
+          <p id="tls-help" class="field-hint">For a camera with a self-signed certificate. Only this watch skips the check.</p>
+        </div>
+        {{end}}
       </fieldset>
       {{/* Preprocess folds away while every option is at its default (the
            summary beside the title says "off"); a tuned watch, or a

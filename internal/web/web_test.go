@@ -961,7 +961,7 @@ func TestSaveRejectionRerendersFormWithFieldErrors(t *testing.T) {
 		`id="watchform"`, `action="/watch/printer/save"`, "&larr; All watches",
 		`<div id="form-errors" class="form-alert" role="alert" tabindex="-1" autofocus>`,
 		"Not saved. One field needs a fix:", `<a href="#f-pattern">Pattern isn&#39;t a valid regular expression. A &#34;(&#34; is never closed.</a>`,
-		`name="pattern" value="("`, `aria-describedby="err-pattern"`, `<p id="err-pattern" class="field-error">`,
+		`name="pattern" value="("`, `aria-describedby="err-pattern pattern-help"`, `<p id="err-pattern" class="field-error">`,
 		`name="cooldown" value="7s"`, `name="x" value="0.1"`, `<option value="ocr_match" selected`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1169,7 +1169,7 @@ func TestDetailKeepsCurrentOCRTypeEnabledWithoutEngine(t *testing.T) {
 		}
 	}
 	for _, want := range []string{`<select id="f-ttype" name="ttype" class="needs-engine"`, `<select id="f-engine" name="engine" class="needs-engine"`,
-		`<p id="engine-note" class="field-hint engine-note is-warn">Tesseract isn&#39;t on PATH, so this trigger can&#39;t run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or install tesseract.</p>`} {
+		`<p id="engine-note" class="field-hint engine-note is-warn">Tesseract isn&#39;t installed, so this trigger can&#39;t run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or install tesseract (` + ocr.TesseractInstall() + `) and restart watchglass.</p>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a blocked selection should be marked and explained; missing %q in body:\n%s", want, body)
 		}
@@ -1245,7 +1245,7 @@ func TestSaveRefusesTypeThatCannotRunHere(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
-	want := `<p id="err-ttype" class="field-error">ocr_match reads text with tesseract, and tesseract isn&#39;t installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to sevenseg, or install tesseract.</p>`
+	want := `<p id="err-ttype" class="field-error">ocr_match reads text with tesseract, and tesseract isn&#39;t installed on this box, so saving this would stop the watch. Nothing was saved: switch Engine to sevenseg, or install tesseract (` + ocr.TesseractInstall() + `) and restart watchglass.</p>`
 	if !strings.Contains(body, want) || !strings.Contains(body, `<select id="f-ttype" name="ttype" class="needs-engine" aria-invalid="true" aria-describedby="err-ttype ttype-help">`) {
 		t.Errorf("refused save should explain under Type and mark the selects; body:\n%s", body)
 	}
@@ -1259,7 +1259,7 @@ func TestSaveRefusesTypeThatCannotRunHere(t *testing.T) {
 	for _, want := range []string{
 		`<span id="dirty-note" class="dirty-note"><span class="led led-amber"`,
 		`<p class="save-note" hidden title="`,
-		`<p id="engine-note" class="field-hint engine-note is-warn" hidden>Tesseract isn&#39;t on PATH, so this trigger can&#39;t run.`,
+		`<p id="engine-note" class="field-hint engine-note is-warn" hidden>Tesseract isn&#39;t installed, so this trigger can&#39;t run.`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("refused save page missing %q; body:\n%s", want, body)
@@ -1277,13 +1277,13 @@ func TestSaveRefusesTypeThatCannotRunHere(t *testing.T) {
 	}
 	// With rapidocr present the message offers it.
 	s.engines.RapidOCR = fakeRapid{}
-	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, "switch Engine to sevenseg or rapidocr, or install tesseract.") {
+	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, "switch Engine to sevenseg or rapidocr, or install tesseract ("+ocr.TesseractInstall()+") and restart watchglass.") {
 		t.Errorf("message should offer rapidocr when it is installed; body:\n%s", body)
 	}
 	// A rapidocr watch without rapidocr: the rapidocr wording.
 	s.engines.RapidOCR = nil
 	form.Set("engine", "rapidocr")
-	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, `<p id="err-ttype" class="field-error">ocr_match reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime, or switch Engine.</p>`) {
+	if _, body := postForm(t, s.Handler(), "/watch/printer/save", form); !strings.Contains(body, `<p id="err-ttype" class="field-error">ocr_match reads text with rapidocr, and no Python with the rapidocr package was found, so saving this would stop the watch. Nothing was saved: run pip install rapidocr onnxruntime and restart watchglass, or switch Engine.</p>`) {
 		t.Errorf("rapidocr wording missing; body:\n%s", body)
 	}
 	// pixel_change never needs an engine, whatever Engine says.
@@ -1298,6 +1298,7 @@ func TestSaveRefusesTypeThatCannotRunHere(t *testing.T) {
 // The engine note and the trigger labels, at the source: the copy app.js
 // mirrors (engineNoteFor / data-label) and the pill title on the index.
 func TestEngineNoteAndTriggerLabels(t *testing.T) {
+	inst := "install tesseract (" + ocr.TesseractInstall() + ") and restart watchglass"
 	w := func(typ, engine string) config.Watch {
 		return config.Watch{Engine: engine, Trigger: config.Trigger{Type: typ}}
 	}
@@ -1307,23 +1308,24 @@ func TestEngineNoteAndTriggerLabels(t *testing.T) {
 		tess, rapid bool
 		want        engineNote
 	}{
-		{"pixel on tesseract, all present: row hidden", w("pixel_change", ""), true, true, engineNote{}},
+		{"pixel on tesseract, all present: engine unused", w("pixel_change", ""), true, true,
+			engineNote{Text: "pixel_change compares pixels and doesn't use Engine.", Show: true, Quiet: true}},
 		{"text on tesseract, present: nothing to say", w("ocr_match", ""), true, false, engineNote{}},
 		{"text on sevenseg: nothing to say", w("numeric", "sevenseg"), false, false, engineNote{}},
-		{"pixel on sevenseg without tesseract: hint", w("pixel_change", "sevenseg"), false, false,
-			engineNote{Text: "Not used by pixel_change. It only matters if Type becomes a text trigger.", Show: true}},
+		{"pixel on sevenseg without tesseract: engine unused", w("pixel_change", "sevenseg"), false, false,
+			engineNote{Text: "pixel_change compares pixels and doesn't use Engine.", Show: true, Quiet: true}},
 		{"text on tesseract, missing", w("ocr_changed", "tesseract"), false, false,
-			engineNote{Text: "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or install tesseract.", Warn: true, Show: true}},
+			engineNote{Text: "Tesseract isn't installed, so this trigger can't run. Switch Engine to sevenseg (the seven-segment decoder) for digit displays, or " + inst + ".", Warn: true, Show: true}},
 		{"text on tesseract, missing, rapidocr here", w("ocr_changed", ""), false, true,
-			engineNote{Text: "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to rapidocr for printed text or sevenseg (the seven-segment decoder) for digit displays, or install tesseract.", Warn: true, Show: true}},
+			engineNote{Text: "Tesseract isn't installed, so this trigger can't run. Switch Engine to rapidocr for printed text or sevenseg (the seven-segment decoder) for digit displays, or " + inst + ".", Warn: true, Show: true}},
 		{"pixel on tesseract, missing", w("pixel_change", ""), false, false,
-			engineNote{Text: "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to sevenseg (the seven-segment decoder) first, or install tesseract.", Show: true}},
+			engineNote{Text: "pixel_change doesn't use Engine, but tesseract isn't installed, so the text types are locked while Engine is tesseract: switch to sevenseg (the seven-segment decoder), or " + inst + ".", Show: true}},
 		{"pixel on tesseract, missing, rapidocr here", w("pixel_change", ""), false, true,
-			engineNote{Text: "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to rapidocr or sevenseg (the seven-segment decoder) first, or install tesseract.", Show: true}},
+			engineNote{Text: "pixel_change doesn't use Engine, but tesseract isn't installed, so the text types are locked while Engine is tesseract: switch to rapidocr or sevenseg (the seven-segment decoder), or " + inst + ".", Show: true}},
 		{"text on rapidocr, missing", w("numeric", "rapidocr"), true, false,
-			engineNote{Text: "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.", Warn: true, Show: true}},
+			engineNote{Text: "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime and restart watchglass, or switch Engine.", Warn: true, Show: true}},
 		{"pixel on rapidocr, missing", w("pixel_change", "rapidocr"), true, false,
-			engineNote{Text: "Not used by pixel_change. rapidocr isn't available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine.", Show: true}},
+			engineNote{Text: "pixel_change doesn't use Engine, but rapidocr isn't available on this box, so the text types are locked on it: pip install rapidocr onnxruntime and restart watchglass, or switch Engine.", Show: true}},
 		{"text on rapidocr, present, no tesseract: nothing to say", w("ocr_match", "rapidocr"), false, true, engineNote{}},
 	}
 	for _, c := range cases {
@@ -1781,10 +1783,10 @@ func TestDetailRapidOCRWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 		}
 	}
 	// One note, in its warn state, naming the missing engine and the fix.
-	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note is-warn">rapidocr isn&#39;t available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.</p>`) {
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note is-warn">rapidocr isn&#39;t available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime and restart watchglass, or switch Engine.</p>`) {
 		t.Errorf("note should say rapidocr is missing and how to install it; body:\n%s", body)
 	}
-	if strings.Contains(body, "Tesseract isn&#39;t on PATH") || strings.Count(body, `id="engine-note"`) != 1 {
+	if strings.Contains(strings.ToLower(body), "tesseract isn&#39;t installed") || strings.Count(body, `id="engine-note"`) != 1 {
 		t.Errorf("tesseract is present; only the rapidocr note renders; body:\n%s", body)
 	}
 	// The saved type round-trips like the tesseract case.
@@ -1839,7 +1841,7 @@ func TestDetailRapidOCRWatchUnlockedWithRapidOCRAndNoTesseract(t *testing.T) {
 	}
 	// The watch reads with rapidocr, which is here, so no engine note: the
 	// tesseract option's "(not installed)" suffix says all there is to say.
-	if strings.Contains(body, "isn&#39;t available") || strings.Contains(body, "isn&#39;t on PATH") || strings.Contains(body, "needs-engine") {
+	if strings.Contains(body, "isn&#39;t available") || strings.Contains(body, "isn&#39;t installed") || strings.Contains(body, "needs-engine") {
 		t.Errorf("a runnable rapidocr watch must carry no engine note or blocked styling; body:\n%s", body)
 	}
 	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note" hidden></p>`) {
@@ -1861,8 +1863,10 @@ func TestDetailRapidOCRWatchUnlockedWithRapidOCRAndNoTesseract(t *testing.T) {
 	if strings.Contains(body, "seven-segment decoder") {
 		t.Errorf("a pixel_change rapidocr watch's OCR types would use rapidocr, not the seven-segment decoder; body:\n%s", body)
 	}
-	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note">Not used by pixel_change. It only matters if Type becomes a text trigger.</p>`) {
-		t.Errorf("note should say pixel_change does not use the engine; body:\n%s", body)
+	// For screen readers only: Type's help says it on screen, and a
+	// visible line here would pull Type up on a switch to a text type.
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note sr-only">pixel_change compares pixels and doesn&#39;t use Engine.</p>`) {
+		t.Errorf("note should say pixel_change does not use the engine, sr-only; body:\n%s", body)
 	}
 	for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
 		if line := optionLine(t, body, typ); strings.Contains(line, "disabled") || strings.Contains(line, "needs ") {
@@ -1895,10 +1899,10 @@ func TestDetailRapidOCRPixelChangeWatchLocksTypesWithoutRapidOCR(t *testing.T) {
 		t.Errorf("engine select must carry both flags so app.js keeps the Engine row reachable; body:\n%s", body)
 	}
 	// Not a warning (pixel_change runs), but the note says what the row is for.
-	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note">Not used by pixel_change. rapidocr isn&#39;t available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine.</p>`) {
+	if !strings.Contains(body, `<p id="engine-note" class="field-hint engine-note">pixel_change doesn&#39;t use Engine, but rapidocr isn&#39;t available on this box, so the text types are locked on it: pip install rapidocr onnxruntime and restart watchglass, or switch Engine.</p>`) {
 		t.Errorf("note should point at the Engine select without warning; body:\n%s", body)
 	}
-	if strings.Contains(body, "isn&#39;t on PATH") || strings.Contains(body, "needs-engine") {
+	if strings.Contains(strings.ToLower(body), "tesseract isn&#39;t installed") || strings.Contains(body, "needs-engine") {
 		t.Errorf("tesseract is present and pixel_change runs: no tesseract note, nothing blocked; body:\n%s", body)
 	}
 }
@@ -1914,7 +1918,7 @@ func TestDetailRapidOCRWatchWithoutEitherEngine(t *testing.T) {
 		s.cfg.Watches[0].Trigger = trig
 		s.mu.Unlock()
 		_, body := get(t, s.Handler(), "/watch/printer")
-		for _, wrong := range []string{"until it's installed", "switch Engine to sevenseg instead", "seven-segment decoder", "isn&#39;t on PATH"} {
+		for _, wrong := range []string{"until it's installed", "switch Engine to sevenseg instead", "seven-segment decoder", "esseract isn&#39;t installed"} {
 			if strings.Contains(body, wrong) {
 				t.Errorf("%s: tesseract note claims %q for a rapidocr-locked watch; body:\n%s", trig.Type, wrong, body)
 			}
@@ -1986,7 +1990,7 @@ func TestTestRegionRapidOCRShowsLines(t *testing.T) {
 	if n := strings.Count(body, "word-chip"); n != 3 {
 		t.Errorf("want 3 line chips, got %d; body:\n%s", n, body)
 	}
-	if strings.Contains(body, "available") || strings.Contains(body, "not on PATH") {
+	if strings.Contains(body, "available") || strings.Contains(body, "isn&#39;t installed") {
 		t.Errorf("no availability note when the engine ran; body:\n%s", body)
 	}
 }

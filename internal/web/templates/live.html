@@ -29,6 +29,10 @@
   <time class="readout-ts mono" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
   {{if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>
   {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>{{end}}
+  {{/* Confirm progress (confirmProgress in livefeed.go): the reading meets
+       the trigger, and this many in a row so far of the Confirm needed;
+       while Cooldown runs, until when it holds the alert. */}}
+  {{with $.Progress}}<p class="readout-progress">{{with .Steps}}<span class="progress-steps" aria-hidden="true">{{range .}}<span class="step{{if .}} is-on{{end}}"></span>{{end}}</span>{{end}}<span class="progress-text">{{.Text}}{{if not .Until.IsZero}} <time class="mono" datetime="{{isoTime .Until}}">{{.Until.Format "15:04:05"}}</time>{{.After}}{{end}}</span></p>{{end}}
 </div>
 {{else}}
 <p class="muted">No readings yet</p>
@@ -51,7 +55,7 @@
 {{range .Tiles}}
   {{$r := reading $.Engine .Reading}}<figure data-key="{{.TS.UnixNano}}-{{.Count}}">
     <img src="{{b64png .PNG}}" alt="">
-    <figcaption{{if .Fired}} class="fired"{{else if $r.Placeholder}} class="caption-none"{{end}} title="{{if .Fired}}Fired: {{end}}{{or $r.Placeholder .Reading}}{{if gt .Count 1}} ({{.Count}} readings in a row){{end}}">{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}<span class="cap-body"><span class="cap-text">{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</span>{{if gt .Count 1}}<span class="tile-count" aria-hidden="true">&times;{{.Count}}</span><span class="sr-only">, {{.Count}} readings in a row</span>{{end}}</span></figcaption>
+    <figcaption{{if .Fired}} class="fired"{{else if $r.Placeholder}} class="caption-none"{{end}} title="{{if .Fired}}Fired: {{end}}{{or $r.Placeholder .Reading}}{{if gt .Count 1}} ({{.Count}} readings in a row){{end}}{{if .Pending}} ({{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}} needed to fire{{else if ge .Pending .Need}}held by Cooldown{{else}}{{.Pending}} of {{.Need}} readings in a row, held by Cooldown{{end}}){{end}}">{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}<span class="cap-body"><span class="cap-text">{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</span>{{if gt .Count 1}}<span class="tile-count" aria-hidden="true">&times;{{.Count}}</span><span class="sr-only">, {{.Count}} readings in a row</span>{{end}}</span>{{if .Pending}}<span class="tile-progress">{{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}}<span class="sr-only"> needed to fire</span>{{else if ge .Pending .Need}}held<span class="sr-only"> by Cooldown</span>{{else}}{{.Pending}} of {{.Need}}<span class="sr-only"> readings in a row,</span><span aria-hidden="true"> ·</span> held<span class="sr-only"> by Cooldown</span>{{end}}</span>{{end}}</figcaption>
   </figure>
 {{end}}
 </div>

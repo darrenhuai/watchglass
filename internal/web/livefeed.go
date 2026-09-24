@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/state"
 )
 
@@ -48,7 +50,8 @@ func readFailureNote(engine string, budget time.Duration, timedOut bool) string 
 }
 
 // stripTile is one frame of the Live filmstrip: a run of consecutive
-// samples that read the same (same text, same fired state) shown once,
+// samples that read the same (same text, same fired state, same step
+// towards Confirm) shown once,
 // with the newest crop and a count. Ten identical "?" or "0.0% changed"
 // tiles in a row said nothing the first one didn't.
 type stripTile struct {
@@ -61,7 +64,7 @@ type stripTile struct {
 func collapseSamples(recent []state.Sample) []stripTile {
 	var tiles []stripTile
 	for _, s := range recent {
-		if n := len(tiles); n > 0 && tiles[n-1].Reading == s.Reading && tiles[n-1].Fired == s.Fired {
+		if n := len(tiles); n > 0 && tiles[n-1].Reading == s.Reading && tiles[n-1].Fired == s.Fired && tiles[n-1].Pending == s.Pending {
 			tiles[n-1].Count++
 			continue
 		}
@@ -105,4 +108,63 @@ func etagMatches(header, etag string) bool {
 		}
 	}
 	return false
+}
+
+// progressView is the line under the Live readout while the newest
+// reading meets the trigger but Confirm isn't reached yet, so "PRINT
+// COMPLETE" read once on a watch that needs three in a row says why it
+// hasn't fired: "Matches the pattern: 1 of 3 readings in a row needed to
+// fire." Steps draws the same count as dots (true = counted), only while
+// there are few enough to read at a glance. While Cooldown runs, the line
+// says the alert is held and until when (Until, a <time> between Text and
+// After), so a count that reaches 3 of 3 without a fire isn't a mystery
+// either.
+type progressView struct {
+	Text  string
+	Steps []bool
+	Until time.Time
+	After string
+}
+
+// maxProgressDots is the most dots the readout draws; a longer Confirm is
+// told in words only.
+const maxProgressDots = 10
+
+// confirmProgress is nil when the reading isn't on its way to a fire.
+func confirmProgress(trig config.Trigger, s state.Sample) *progressView {
+	cooling := !s.CooldownEnds.IsZero()
+	if s.Pending <= 0 || s.Fired || (s.Need <= 1 && !cooling) {
+		return nil
+	}
+	cond := "Condition met"
+	switch trig.Type {
+	case "ocr_match":
+		cond = "Matches the pattern"
+	case "ocr_changed":
+		cond = "New text"
+	case "numeric":
+		word := "Above"
+		if trig.Op == "lt" {
+			word = "Below"
+		}
+		cond = word + " " + strconv.FormatFloat(trig.Threshold, 'f', -1, 64)
+	}
+	var pv *progressView
+	switch {
+	case cooling && s.Pending >= s.Need:
+		// Confirmed, and held: the first confirmed reading after the
+		// cooldown fires (trigger.go's delay-not-drop cooldown).
+		pv = &progressView{Text: cond + ". Cooldown holds the alert until", Until: s.CooldownEnds, After: "; it goes out then if this still holds."}
+	case cooling:
+		pv = &progressView{Text: fmt.Sprintf("%s: %d of %d readings in a row. Cooldown holds any alert until", cond, s.Pending, s.Need), Until: s.CooldownEnds, After: "."}
+	default:
+		pv = &progressView{Text: fmt.Sprintf("%s: %d of %d readings in a row needed to fire.", cond, s.Pending, s.Need)}
+	}
+	if s.Need > 1 && s.Need <= maxProgressDots {
+		pv.Steps = make([]bool, s.Need)
+		for i := 0; i < s.Pending && i < s.Need; i++ {
+			pv.Steps[i] = true
+		}
+	}
+	return pv
 }

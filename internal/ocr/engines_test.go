@@ -28,15 +28,17 @@ func TestEnginesForDefaultsToTesseract(t *testing.T) {
 	}
 }
 
-func TestEnginesForWithoutTesseractKeepsTheOldWording(t *testing.T) {
+func TestEnginesForWithoutTesseractSaysHowToGetIt(t *testing.T) {
 	var e Engines
 	for _, name := range []string{"", "tesseract"} {
 		got, err := e.For(name)
 		if err == nil {
 			t.Fatalf("For(%q) with no tesseract returned %#v, want an error", name, got)
 		}
-		if !strings.Contains(err.Error(), "needs OCR but tesseract is not on PATH") {
-			t.Errorf("For(%q) error %q lost the wording main used to print", name, err)
+		for _, want := range []string{"needs OCR but tesseract wasn't found", TesseractInstall(), "restart watchglass", "-tesseract"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("For(%q) error %q should say %q", name, err, want)
+			}
 		}
 		if !strings.Contains(err.Error(), "sevenseg") {
 			t.Errorf("For(%q) error %q should point at the built-in decoder as the way out", name, err)

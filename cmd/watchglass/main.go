@@ -31,6 +31,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; add an auth: block to config.yaml before exposing it)")
 	basePath := flag.String("base-path", "", "URL path prefix for links/redirects when running behind a reverse proxy that strips it (e.g. /watchglass); empty (default) leaves the UI unprefixed")
 	python := flag.String("python", "", "Python interpreter for engine: rapidocr (default: first of python3, python on PATH that imports rapidocr)")
+	tesseract := flag.String("tesseract", "", "tesseract binary for reading text (default: tesseract on PATH, else where the installers put it, on Windows %ProgramFiles%\\Tesseract-OCR)")
 	demoMode := flag.Bool("demo", false, "try watchglass on two built-in fake cameras, with its own config in the temp dir that is reset on every start; -config and -db are not touched (also WATCHGLASS_DEMO=1)")
 	healthcheck := flag.Bool("healthcheck", false, "check that the watchglass on -listen answers: exit 0 if it does, 1 if not (for container health checks)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -66,6 +67,7 @@ func main() {
 		listen:      *listen,
 		basePath:    bp,
 		python:      *python,
+		tesseract:   *tesseract,
 		demo:        *demoMode || envTrue("WATCHGLASS_DEMO"),
 		openBrowser: explorer,
 		tempDir:     os.TempDir(),
@@ -123,7 +125,7 @@ func run(o options) error {
 	if o.demo {
 		// demo-printer reads the text when tesseract is here, so the
 		// engines are found before its config is written.
-		engines = detectEngines(o.python)
+		engines = detectEngines(o.python, o.tesseract)
 		d, err := prepareDemo(o.tempDir, engines.Tesseract != nil)
 		if err != nil {
 			return err
@@ -165,7 +167,7 @@ func run(o options) error {
 	}()
 
 	if !o.demo {
-		engines = detectEngines(o.python)
+		engines = detectEngines(o.python, o.tesseract)
 	}
 	if err := checkEngines(cfg.Watches, engines); err != nil {
 		return err
@@ -346,7 +348,7 @@ func run(o options) error {
 }
 
 // checkEngines is the boot-time refusal for a config that can't run: every
-// OCR watch must resolve its engine — tesseract on PATH, a Python with
+// OCR watch must resolve its engine — tesseract (ocr.FindTesseract), a Python with
 // rapidocr, or the built-in seven-segment decoder — before anything
 // starts, so a missing binary is
 // one clear error at launch rather than N watches failing in the log.

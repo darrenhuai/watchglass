@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -32,6 +31,9 @@ var version = "dev"
 // options is everything run needs from the command line and environment.
 type options struct {
 	configPath, dbPath, listen, basePath, python string
+	// tesseract is the -tesseract flag: the binary to read text with, when
+	// it isn't on PATH or in the usual install places (ocr.FindTesseract).
+	tesseract string
 	// demo runs the built-in fake cameras from a throwaway config under
 	// the temp dir (see prepareDemo); configPath and dbPath are ignored.
 	demo bool
@@ -171,25 +173,51 @@ func prepareDemo(root string, readText bool) (demoFiles, error) {
 	return d, nil
 }
 
-// detectEngines finds the OCR engines this box has. rapidocr is a Python
+// detectEngines finds the OCR engines this box has and says what it found
+// in one log line (engineReport).
+func detectEngines(python, tesseract string) ocr.Engines {
+	engines, line := findEngines(python, tesseract, ocr.FindTesseract, probeRapidOCR)
+	log.Print(line)
+	return engines
+}
+
+// probeRapidOCR is ocr.DetectRapidOCR with a deadline. rapidocr is a Python
 // package, so being on PATH proves nothing (on Windows python3 is usually
 // the Store stub): the probe imports it, bounded so a wedged interpreter
 // can't hold up boot.
-func detectEngines(python string) ocr.Engines {
+func probeRapidOCR(python string) (*ocr.RapidOCR, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return ocr.DetectRapidOCR(ctx, python)
+}
+
+// findEngines is detectEngines with the lookups passed in, for tests.
+//
+// rapidocr is always probed, not only when a watch uses it: the web UI
+// offers it for new watches only when it is there. Its absence is the
+// normal case, so it is one word in the line; the probe's reasons are only
+// spelled out when -python named an interpreter, which says the user
+// expects it to work.
+func findEngines(python, tesseract string, findTess func(string) (string, error), probeRapid func(string) (*ocr.RapidOCR, error)) (ocr.Engines, string) {
 	engines := ocr.Engines{SevenSeg: ocr.NewSevenSeg()}
-	if _, err := exec.LookPath("tesseract"); err == nil {
-		engines.Tesseract = ocr.NewTesseract()
-	}
-	detectCtx, cancelDetect := context.WithTimeout(context.Background(), 15*time.Second)
-	rapid, err := ocr.DetectRapidOCR(detectCtx, python)
-	cancelDetect()
-	if err != nil {
-		log.Printf("rapidocr: unavailable (%v)", err)
+	var tessNote, rapidNote string
+	if bin, err := findTess(tesseract); err == nil {
+		engines.Tesseract = ocr.NewTesseract(bin)
+		tessNote = bin
+	} else if tesseract != "" {
+		tessNote = fmt.Sprintf("missing (%v)", err)
 	} else {
-		engines.RapidOCR = rapid
-		log.Printf("rapidocr: using %s", rapid.Python)
+		tessNote = "missing (" + ocr.TesseractInstall() + ", then restart watchglass; or pass -tesseract <path>)"
 	}
-	return engines
+	if rapid, err := probeRapid(python); err == nil {
+		engines.RapidOCR = rapid
+		rapidNote = rapid.Python
+	} else if python != "" {
+		rapidNote = fmt.Sprintf("unavailable (%v)", err)
+	} else {
+		rapidNote = "not installed"
+	}
+	return engines, "engines: tesseract=" + tessNote + ", sevenseg=built-in, rapidocr=" + rapidNote
 }
 
 // dialAddr is a host:port that reaches a server listening on listen: a

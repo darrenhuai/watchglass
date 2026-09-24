@@ -2,6 +2,7 @@ package source
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/darrenhuai/watchglass/internal/config"
@@ -18,7 +19,18 @@ func For(w config.Watch) (Source, error) {
 	}
 	switch kind {
 	case "http":
-		return NewHTTPSnapshot(w.Source), nil
+		opt := HTTPOptions{TLSInsecure: w.TLSInsecure}
+		if len(w.Headers) > 0 {
+			opt.Headers = http.Header{}
+			for _, h := range w.Headers {
+				name, value, err := config.ParseHeader(h)
+				if err != nil {
+					return nil, fmt.Errorf("watch %q: headers: %w", w.Name, err)
+				}
+				opt.Headers.Add(name, value)
+			}
+		}
+		return NewHTTPSource(w.Source, opt), nil
 	case "ffmpeg":
 		return NewFFmpeg(w.Source)
 	case "demo":

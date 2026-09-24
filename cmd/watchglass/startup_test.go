@@ -14,6 +14,7 @@ import (
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/demo"
+	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/web"
 )
 
@@ -351,6 +352,49 @@ func TestEnvTrue(t *testing.T) {
 		t.Setenv("WATCHGLASS_TEST_FLAG", v)
 		if got := envTrue("WATCHGLASS_TEST_FLAG"); got != want {
 			t.Errorf("envTrue(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// A07: one "engines:" line says what was found, and a missing engine
+// nobody asked for is a word, not a Python traceback.
+func TestFindEnginesReportsInOneLine(t *testing.T) {
+	found := func(p string) func(string) (string, error) {
+		return func(string) (string, error) { return p, nil }
+	}
+	missing := func(string) (string, error) { return "", errors.New("tesseract not found") }
+	rapidOK := func(string) (*ocr.RapidOCR, error) { return ocr.NewRapidOCR(`C:\Py\python.exe`), nil }
+	rapidNo := func(string) (*ocr.RapidOCR, error) {
+		return nil, errors.New("no Python with the rapidocr package (python3: probe failed: ModuleNotFoundError: No module named 'rapidocr')")
+	}
+
+	e, line := findEngines("", "", found(`C:\Program Files\Tesseract-OCR\tesseract.exe`), rapidNo)
+	if want := `engines: tesseract=C:\Program Files\Tesseract-OCR\tesseract.exe, sevenseg=built-in, rapidocr=not installed`; line != want {
+		t.Errorf("line = %q\nwant  %q", line, want)
+	}
+	if tess, ok := e.Tesseract.(*ocr.Tesseract); !ok || tess.Bin != `C:\Program Files\Tesseract-OCR\tesseract.exe` {
+		t.Errorf("Tesseract = %#v, want the found binary", e.Tesseract)
+	}
+	if e.RapidOCR != nil || e.SevenSeg == nil {
+		t.Errorf("engines = %#v", e)
+	}
+	if strings.Contains(line, "ModuleNotFoundError") {
+		t.Error("an engine nobody asked for must not put its probe error in the log")
+	}
+
+	e, line = findEngines("", "", missing, rapidOK)
+	if want := "engines: tesseract=missing (" + ocr.TesseractInstall() + `, then restart watchglass; or pass -tesseract <path>), sevenseg=built-in, rapidocr=C:\Py\python.exe`; line != want {
+		t.Errorf("line = %q\nwant  %q", line, want)
+	}
+	if e.Tesseract != nil || e.RapidOCR == nil {
+		t.Errorf("engines = %#v", e)
+	}
+
+	// Named on the command line, a failure says why.
+	_, line = findEngines(`D:\py.exe`, `D:\tess.exe`, func(string) (string, error) { return "", errors.New(`-tesseract D:\tess.exe: not found`) }, rapidNo)
+	for _, want := range []string{`tesseract=missing (-tesseract D:\tess.exe: not found)`, "rapidocr=unavailable (no Python with the rapidocr package"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line %q should contain %q", line, want)
 		}
 	}
 }

@@ -1226,7 +1226,8 @@
   function tileSays(f) {
     var cap = f && f.querySelector("figcaption");
     var t = cap && cap.querySelector(".cap-text");
-    return cap ? (cap.classList.contains("fired") ? "fired:" : "") + (t ? t.textContent : "") : null;
+    var step = cap && cap.querySelector(".tile-progress"); // "2 of 3" is news
+    return cap ? (cap.classList.contains("fired") ? "fired:" : "") + (t ? t.textContent : "") + (step ? "|" + step.textContent : "") : null;
   }
   // Reconcile the strip with the fragment's: frames are keyed (data-key,
   // the newest sample's time + the run's count), kept nodes are reused
@@ -1452,8 +1453,10 @@
   var engineSel = form.elements["engine"];
   var rowPattern = document.getElementById("row-pattern");
   var rowOp = document.getElementById("row-op");
-  var rowEngine = document.getElementById("row-engine");
   var rowThreshold = document.getElementById("row-threshold");
+  var rowConfirm = document.getElementById("row-confirm");
+  var confirmHelp = document.getElementById("confirm-help");
+  var patternHelp = document.getElementById("pattern-help");
   var fsPreprocess = document.getElementById("fs-preprocess");
   var ttypeHelp = document.getElementById("ttype-help");
   var thresholdHelp = document.getElementById("threshold-help");
@@ -1464,10 +1467,24 @@
   // the crossing only and takes the number from Pattern's first group.
   var opDefaulted = false; // Compare was set to "gt" by updateTriggerFields, not the user
   var TRIGGER_HELP = {
-    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed.",
+    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares pixels, so Engine isn't used.",
     ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
     ocr_changed: "Fires each time the text read from the region settles on a new value.",
     numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
+  };
+  // What Confirm counts per type (trigger.go counts readings that meet the
+  // condition, or the same text for ocr_changed); the same sentences as
+  // confirmHelps in formview.go. pixel_change hides the row.
+  var CONFIRM_HELP = {
+    ocr_match: "Readings in a row that must match Pattern before it fires. Blank means 3.",
+    ocr_changed: "Readings in a row that must show the same new text before it counts. Blank means 3.",
+    numeric: "Readings in a row that must be on the same side of the threshold. Blank means 3."
+  };
+  // patternHelps in formview.go: a `quoted` stretch is a machine token,
+  // shown in monospace (setPatternHelp).
+  var PATTERN_HELP = {
+    ocr_match: "Plain words work; `(?i)` ignores case; `a|b` matches either.",
+    numeric: "Leave it empty to use the first number read."
   };
   // config.go rejects a pixel_change threshold of 0, hence "above 0".
   var THRESHOLD_HELP = {
@@ -1478,15 +1495,14 @@
   // (data-needs-tesseract / data-needs-rapidocr) for a watch on that
   // engine; the built-in seven-segment decoder runs them fine, so
   // switching Engine unlocks them here without a round trip. The Engine
-  // row also stays visible for a pixel_change watch on a box without
-  // tesseract, and whenever the selected engine is missing (a rapidocr
-  // watch on a box without rapidocr) — with every OCR type locked it's the
-  // only way to reach them at all. The selected type is never locked (see
+  // row sits above Type and always shows: with every OCR type locked it's
+  // the only way to reach them at all. The selected type is never locked (see
   // the template): a text type on an engine that can't run it is instead
   // shown as blocked (.needs-engine on both selects, the engine note in
   // its warn state), and the server refuses to save that change.
   var tesseractPresent = !engineSel || engineSel.dataset.tesseract !== "0";
   var rapidPresent = !engineSel || engineSel.dataset.rapidocr !== "0";
+  var installTess = "install tesseract (" + ((engineSel && engineSel.dataset.tesseractInstall) || "apt install tesseract-ocr") + ") and restart watchglass";
   // engineMissing names the external engine the selected Engine needs but
   // the box lacks, or "" when the selection can run.
   function engineMissing() {
@@ -1501,23 +1517,23 @@
   function engineNoteFor(t, missing) {
     var pixel = t === "pixel_change";
     if (missing === "") {
-      return pixel ? "Not used by pixel_change. It only matters if Type becomes a text trigger." : "";
+      return pixel ? "pixel_change compares pixels and doesn't use Engine." : "";
     }
     if (missing === "rapidocr") {
       return pixel
-        ? "Not used by pixel_change. rapidocr isn't available on this box, so the text triggers are locked on this engine: pip install rapidocr onnxruntime, or switch Engine."
-        : "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime, or switch Engine.";
+        ? "pixel_change doesn't use Engine, but rapidocr isn't available on this box, so the text types are locked on it: pip install rapidocr onnxruntime and restart watchglass, or switch Engine."
+        : "rapidocr isn't available on this box (Python with the rapidocr package). Install it with pip install rapidocr onnxruntime and restart watchglass, or switch Engine.";
     }
     if (pixel) {
-      return "Not used by pixel_change. Tesseract isn't on PATH, so the text triggers are locked while Engine is tesseract: switch to " +
-        (rapidPresent ? "rapidocr or " : "") + SEVENSEG_ALT + " first, or install tesseract.";
+      return "pixel_change doesn't use Engine, but tesseract isn't installed, so the text types are locked while Engine is tesseract: switch to " +
+        (rapidPresent ? "rapidocr or " : "") + SEVENSEG_ALT + ", or " + installTess + ".";
     }
-    return "Tesseract isn't on PATH, so this trigger can't run. Switch Engine to " +
-      (rapidPresent ? "rapidocr for printed text or " : "") + SEVENSEG_ALT + " for digit displays, or install tesseract.";
+    return "Tesseract isn't installed, so this trigger can't run. Switch Engine to " +
+      (rapidPresent ? "rapidocr for printed text or " : "") + SEVENSEG_ALT + " for digit displays, or " + installTess + ".";
   }
   // Everything the Engine and Type selection decide together: which Type
   // options are locked and how they read, whether the selection is
-  // blocked, whether the Engine row shows, and what its note says.
+  // blocked, and what the Engine note says.
   function syncEngineUI() {
     if (!ttypeSel) return;
     var missing = engineMissing();
@@ -1534,15 +1550,23 @@
     });
     var blocked = missing !== "" && !pixel;
     ttypeSel.classList.toggle("needs-engine", blocked);
+    // pixel_change doesn't read Engine: its row is set aside, not hidden
+    // (Type would jump down a row when a text type is picked) and not
+    // disabled (Engine is what unlocks the text types without tesseract).
+    var rowEngine = document.getElementById("row-engine");
+    if (rowEngine) rowEngine.classList.toggle("is-unused", pixel);
     if (engineSel) engineSel.classList.toggle("needs-engine", blocked);
-    if (rowEngine) rowEngine.hidden = pixel && tesseractPresent && missing === "";
     if (engineNote) {
       var text = engineNoteFor(t, missing);
       engineNote.textContent = text;
       // A refused save says the same thing under Type (err-ttype) until
       // the selection moves; the warn note doesn't repeat it meanwhile.
-      engineNote.hidden = text === "" || !!(rowEngine && rowEngine.hidden) || (blocked && !!document.getElementById("err-ttype"));
+      engineNote.hidden = text === "" || (blocked && !!document.getElementById("err-ttype"));
       engineNote.classList.toggle("is-warn", blocked);
+      // Plain pixel_change: for screen readers only (engineNote.Quiet in
+      // formview.go). Type's help says it, and a visible line here would
+      // pull Type up when a text type is picked.
+      engineNote.classList.toggle("sr-only", pixel && missing === "");
     }
   }
   // The server's objection to a submitted Type/Engine pair (err-ttype)
@@ -1564,6 +1588,14 @@
     if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
     if (rowOp) rowOp.hidden = t !== "numeric";
     if (rowThreshold) rowThreshold.hidden = !(t === "pixel_change" || t === "numeric");
+    if (rowConfirm) rowConfirm.hidden = t === "pixel_change";
+    if (confirmHelp) confirmHelp.textContent = CONFIRM_HELP[t] || "";
+    if (patternHelp) {
+      patternHelp.textContent = "";
+      (PATTERN_HELP[t] || "").split("`").forEach(function (part, i) {
+        patternHelp.appendChild(i % 2 ? el("span", "mono", part) : document.createTextNode(part));
+      });
+    }
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
     if (thresholdHelp) thresholdHelp.textContent = THRESHOLD_HELP[t] || "";
@@ -1588,6 +1620,73 @@
   }
   if (form.elements["op"]) {
     form.elements["op"].addEventListener("change", function () { opDefaulted = false; });
+  }
+
+  // "What are you watching?" (detail.html; a watch whose trigger is still
+  // Create's default). A preset fills the trigger fields for a common
+  // screen and saves nothing. Each field is set through its own events, in
+  // the order a person would (Engine, then Type, then the rest), so the
+  // locks, the rows and notes, the stale-test mark and the unsaved-changes
+  // note all follow exactly as if it had been typed. Every preset sets all
+  // six trigger fields: what it names, and the page's starting value
+  // (Create's default, from the markup) for the rest. So a preset gives
+  // the same form whichever was clicked before it: no confirm left over
+  // from Digit display on a pixel watch, no threshold from Any change on
+  // a digit display.
+  var presetBox = form.querySelector(".presets");
+  if (presetBox) {
+    var presetNote = document.getElementById("preset-note");
+    var applyingPreset = false;
+    var PRESET_FIELDS = ["engine", "ttype", "pattern", "confirm", "tthreshold", "op"];
+    var presetBase = {};
+    PRESET_FIELDS.forEach(function (name) {
+      var f = form.elements[name];
+      if (!f) return;
+      if (f.tagName === "SELECT") {
+        var def = Array.prototype.filter.call(f.options, function (o) { return o.defaultSelected; })[0] || f.options[0];
+        presetBase[name] = def ? def.value : "";
+      } else {
+        presetBase[name] = f.defaultValue;
+      }
+    });
+    var PRESETS = {
+      text: { engine: tesseractPresent ? "tesseract" : "rapidocr", ttype: "ocr_match", pattern: "(?i)complete|done|error", confirm: "2",
+        note: "Filled in for status text. Change Pattern to the words your screen shows, then press Test this region." },
+      digits: { engine: "sevenseg", ttype: "numeric", confirm: "2", op: "gt",
+        note: "Filled in for a digit display. Set Threshold to the number that should fire it, then press Test this region." },
+      change: { engine: "tesseract", ttype: "pixel_change", tthreshold: "20",
+        note: "Filled in: fires when a fifth of the box changes. Press Save to keep it." }
+    };
+    var setField = function (name, value) {
+      var f = form.elements[name];
+      if (!f || value === undefined || f.value === value) return;
+      f.value = value;
+      if (f.tagName !== "SELECT") f.dispatchEvent(new Event("input", { bubbles: true }));
+      f.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    presetBox.addEventListener("click", function (e) {
+      var btn = e.target.closest("button.preset");
+      if (!btn || btn.disabled || retired) return;
+      var p = PRESETS[btn.dataset.preset];
+      if (!p) return;
+      applyingPreset = true;
+      PRESET_FIELDS.forEach(function (name) {
+        setField(name, p[name] !== undefined ? p[name] : presetBase[name]);
+      });
+      applyingPreset = false;
+      Array.prototype.forEach.call(presetBox.querySelectorAll("button.preset"), function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      if (presetNote) presetNote.textContent = p.note;
+    });
+    // A field changed by hand after a preset: the preset no longer
+    // describes the form, so none stays pressed.
+    form.addEventListener("change", function (e) {
+      if (applyingPreset || !e.target || !TEST_FIELDS[e.target.name]) return;
+      Array.prototype.forEach.call(presetBox.querySelectorAll("button.preset[aria-pressed=true]"), function (b) {
+        b.setAttribute("aria-pressed", "false");
+      });
+    });
   }
 
   // Save & restart: show that it's working while the POST and the restart
