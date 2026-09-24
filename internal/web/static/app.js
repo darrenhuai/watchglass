@@ -1458,6 +1458,7 @@
   var confirmHelp = document.getElementById("confirm-help");
   var patternHelp = document.getElementById("pattern-help");
   var fsPreprocess = document.getElementById("fs-preprocess");
+  var fsHA = document.getElementById("fs-ha");
   var ttypeHelp = document.getElementById("ttype-help");
   var thresholdHelp = document.getElementById("threshold-help");
   var engineNote = document.getElementById("engine-note");
@@ -1597,6 +1598,7 @@
       });
     }
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
+    if (fsHA) fsHA.hidden = t !== "numeric";
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
     if (thresholdHelp) thresholdHelp.textContent = THRESHOLD_HELP[t] || "";
     // Compare: the validator only takes gt or lt for numeric, so a type
@@ -1767,8 +1769,52 @@
   // this runs again. The region inputs are restorable text inputs (see
   // the template), so the manual fields are re-read from them, not the
   // other way round.
+  // Home Assistant (detail.html #fs-ha): the Unit suggestions and the
+  // note follow the Device class (data-units mirrors
+  // config.DeviceClassUnits). Picking a class while Unit is empty, or holds
+  // a unit of another class, fills in the class's first unit, through an
+  // input event so the unsaved-changes note follows; a unit typed by hand
+  // that the class doesn't take is left for Save to explain.
+  var dclassSel = document.getElementById("f-dclass");
+  var unitIn = document.getElementById("f-unit");
+  var unitList = document.getElementById("unit-list");
+  var dclassHelp = document.getElementById("dclass-help");
+  var unitHelp = document.getElementById("unit-help");
+  var UNITS = {};
+  try { UNITS = JSON.parse(dclassSel ? dclassSel.getAttribute("data-units") : "{}") || {}; } catch (e) { UNITS = {}; }
+  function spellUnits(list) {
+    return list.length < 2 ? list.join("") : list.slice(0, -1).join(", ") + " or " + list[list.length - 1];
+  }
+  function syncUnitUI(fill) {
+    if (!dclassSel || !unitIn) return;
+    var cls = dclassSel.value;
+    var units = UNITS[cls] || UNITS[""] || [];
+    if (unitList) {
+      unitList.textContent = "";
+      units.forEach(function (u) { var o = document.createElement("option"); o.value = u; unitList.appendChild(o); });
+    }
+    if (dclassHelp) {
+      dclassHelp.textContent = cls ? "Home Assistant takes " + spellUnits(units) + " for " + cls + "." :
+        "What the number measures. Home Assistant uses it for the icon and unit conversion.";
+    }
+    // A device class makes the unit required (Save refuses one without),
+    // so the hint stops calling it optional (detail.html mirrors this).
+    if (unitHelp) {
+      unitHelp.textContent = cls ? "Shown after the number. Needed for " + cls + "." :
+        "Shown after the number, like °C or rpm. Optional.";
+    }
+    if (!fill || !cls || units.indexOf(unitIn.value) >= 0) return;
+    var classed = Object.keys(UNITS).some(function (k) { return k && UNITS[k].indexOf(unitIn.value) >= 0; });
+    if (unitIn.value === "" || classed) {
+      unitIn.value = units[0];
+      unitIn.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+  if (dclassSel) dclassSel.addEventListener("change", function () { syncUnitUI(true); });
+
   function resyncFromForm() {
     updateTriggerFields();
+    syncUnitUI(false);
     syncEngineUI();
     syncRange();
     syncManualFields();

@@ -128,7 +128,11 @@ type Trigger struct {
 	Threshold float64 `yaml:"threshold"` // pixel_change: percent 0-100; numeric: compare value
 	// Confirm is how many readings in a row must agree before a new state
 	// is believed: readings that meet the condition (ocr_match, numeric),
-	// or the same text (ocr_changed). pixel_change doesn't use it.
+	// or the same text (ocr_changed). pixel_change doesn't fire on it. It
+	// also settles what Home Assistant is sent over MQTT: the reading once
+	// the same text has held this many readings in a row (every type), and
+	// a numeric watch's value as the median of the last 2*Confirm-1 numbers
+	// (see trigger.Event.Settled and Value).
 	Confirm int `yaml:"confirm"`
 	// Cooldown delays notification of a persisting new state until the
 	// window ends, rather than dropping it: a state that arrives and holds
@@ -173,6 +177,83 @@ type Watch struct {
 	// token a camera or proxy wants. A list, not a map, because the
 	// comment-keeping save (merge.go) merges lists and structs only.
 	Headers []string `yaml:"headers,omitempty"`
+	// Unit and DeviceClass describe a numeric watch's number to Home
+	// Assistant (the MQTT value sensor): "°C" and "temperature", say, so
+	// HA graphs it and keeps long-term statistics. Both are optional and
+	// only mean something on a numeric watch. A DeviceClass needs one of
+	// the units HA accepts for it (DeviceClassUnits); with no DeviceClass
+	// the unit is free text ("rpm", "L").
+	Unit        string `yaml:"unit,omitempty"`
+	DeviceClass string `yaml:"device_class,omitempty"`
+}
+
+// DeviceClasses are the Home Assistant sensor device classes a numeric
+// watch can take, in the order the web UI offers them. Each is a
+// "measurement" in HA's terms: a reading at a point in time, not a
+// running total.
+var DeviceClasses = []string{"temperature", "humidity", "pressure", "power", "voltage", "current", "weight", "duration"}
+
+// DeviceClassUnits are the units Home Assistant accepts for each device
+// class (https://www.home-assistant.io/integrations/sensor/), spelled
+// exactly as HA spells them; the first is what the web UI suggests. A
+// device class with any other unit is refused, because HA would log an
+// error and keep no statistics for it. HA's micro prefix is the Greek mu
+// (U+03BC, "μA"), not the micro sign most keyboards type (U+00B5,
+// "µA"): HA maps the micro sign to mu for µV, µg and µs but refuses
+// µA with device class current, so NormalizeUnit turns one into the
+// other before anything checks or sends a unit.
+var DeviceClassUnits = map[string][]string{
+	"temperature": {"°C", "°F", "K"},
+	"humidity":    {"%"},
+	"pressure":    {"hPa", "kPa", "Pa", "mPa", "bar", "cbar", "mbar", "psi", "mmHg", "inHg", "inH₂O"},
+	"power":       {"W", "kW", "mW", "MW", "GW", "TW"},
+	"voltage":     {"V", "mV", "μV", "kV", "MV"},
+	"current":     {"A", "mA", "μA"},
+	"weight":      {"kg", "g", "mg", "μg", "lb", "oz", "st"},
+	"duration":    {"s", "min", "h", "d", "ms", "μs"},
+}
+
+// maxUnitLen caps a free-text unit; HA shows it after every value.
+const maxUnitLen = 16
+
+// NormalizeUnit spells a unit the way Home Assistant does: the micro sign
+// (U+00B5) becomes the Greek mu (U+03BC) HA's own units use. Load and the
+// web UI's save both run it, so "µA" typed on a keyboard and HA's own
+// "μA" are the same unit and the file ends up with HA's.
+func NormalizeUnit(unit string) string {
+	return strings.ReplaceAll(unit, "µ", "μ")
+}
+
+// CheckUnit validates a watch's unit and device_class together. The web
+// UI calls it too, to mark the field.
+func CheckUnit(unit, class string) error {
+	if class != "" {
+		units, ok := DeviceClassUnits[class]
+		if !ok {
+			return fmt.Errorf("device_class %q isn't one watchglass sends; use one of %s, or leave it out", class, strings.Join(DeviceClasses, ", "))
+		}
+		if unit == "" {
+			return fmt.Errorf("device_class %s needs a unit: %s", class, strings.Join(units, ", "))
+		}
+		for _, u := range units {
+			if u == unit {
+				return nil
+			}
+		}
+		return fmt.Errorf("unit %q doesn't go with device_class %s; Home Assistant takes %s", unit, class, strings.Join(units, ", "))
+	}
+	if strings.TrimSpace(unit) != unit {
+		return fmt.Errorf("unit %q has spaces around it", unit)
+	}
+	if len([]rune(unit)) > maxUnitLen {
+		return fmt.Errorf("unit %q is longer than %d characters", unit, maxUnitLen)
+	}
+	for _, r := range unit {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("unit %q has a control character in it", unit)
+		}
+	}
+	return nil
 }
 
 // ParseHeader splits one headers: item into its name and value. The name
@@ -427,6 +508,15 @@ func (c *Config) Validate() error {
 		}
 		if w.Trigger.Confirm == 0 {
 			w.Trigger.Confirm = 3
+		}
+		// Like tls_insecure on a non-http source: set on another type they
+		// would be silently ignored, which reads as "set but not working".
+		if (w.Unit != "" || w.DeviceClass != "") && w.Trigger.Type != "numeric" {
+			return fmt.Errorf("watch %q: unit and device_class only apply to numeric watches", w.Name)
+		}
+		w.Unit = NormalizeUnit(w.Unit)
+		if err := CheckUnit(w.Unit, w.DeviceClass); err != nil {
+			return fmt.Errorf("watch %q: %w", w.Name, err)
 		}
 		if w.Preprocess.Threshold < 0 || w.Preprocess.Threshold > 255 {
 			return fmt.Errorf("watch %q: preprocess threshold must be 0-255", w.Name)

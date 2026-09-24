@@ -4,8 +4,9 @@ import "github.com/darrenhuai/watchglass/internal/config"
 
 // syncWorker is the single goroutine that ever calls Sync after startup, and
 // the only goroutine that ever calls Publish on the underlying MQTT client:
-// every publish — a full discovery resync from SyncAsync, or one event's
-// publish batch from enqueue — funnels through this one loop, so nothing a
+// every publish — a discovery sync from SyncAsync, the full resync after a
+// (re)connect, or one event's publish batch from enqueue — funnels through
+// this one loop, so nothing a
 // watch's own poll goroutine does ever blocks on network I/O, and Sync's
 // writes to p.slugs/p.skipped can never interleave with each other. It runs
 // until quit is closed, then drains whatever is left (see drainRemaining)
@@ -17,6 +18,8 @@ func (p *Publisher) syncWorker() {
 		select {
 		case w := <-p.syncCh:
 			p.Sync(w)
+		case <-p.connCh:
+			p.resync()
 		case job := <-p.jobs:
 			job()
 		case <-p.quit:

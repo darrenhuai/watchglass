@@ -79,7 +79,7 @@ func TestCloseDrainsPendingJobs(t *testing.T) {
 
 	const n = 5
 	for i := 0; i < n; i++ {
-		p.OnEvent("printer", trigger.Event{Reading: fmt.Sprintf("r%d", i)}, nil)
+		p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: fmt.Sprintf("r%d", i)}, nil)
 	}
 	p.Close()
 

@@ -24,7 +24,7 @@ func TestOnEventPublishesReading(t *testing.T) {
 	p, fc := syncedPublisher(t)
 	defer p.Close()
 
-	p.OnEvent("printer", trigger.Event{Reading: "Printing 87%"}, nil)
+	p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: "Printing 87%"}, nil)
 	pollFor(t, 2*time.Second, func() bool {
 		for _, pb := range fc.snapshot() {
 			if pb.topic == "watchglass/printer/reading" {
@@ -53,7 +53,7 @@ func TestOnEventFiredPublishesMotionAndSnapshot(t *testing.T) {
 	defer p.Close()
 
 	png := []byte{0x89, 'P', 'N', 'G'}
-	p.OnEvent("printer", trigger.Event{Reading: "PRINT COMPLETE", Fired: true}, png)
+	p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: "PRINT COMPLETE", Fired: true}, png)
 	pollFor(t, 2*time.Second, func() bool {
 		for _, pb := range fc.snapshot() {
 			if pb.topic == "watchglass/printer/snapshot" {
@@ -77,7 +77,7 @@ func TestOnEventFiredNilPNGSkipsSnapshot(t *testing.T) {
 	p, fc := syncedPublisher(t)
 	defer p.Close()
 
-	p.OnEvent("printer", trigger.Event{Reading: "x", Fired: true}, nil)
+	p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: "x", Fired: true}, nil)
 	pollFor(t, 2*time.Second, func() bool {
 		for _, pb := range fc.snapshot() {
 			if pb.topic == "watchglass/printer/motion" {
@@ -133,7 +133,7 @@ func TestEventsIgnoreUnknownAndSkippedWatches(t *testing.T) {
 
 	// Neither call resolves a slug, so neither ever reaches the job queue —
 	// nothing to wait for, the assertion below is immediately deterministic.
-	p.OnEvent("ghost", trigger.Event{Reading: "x"}, nil)
+	p.OnEvent("ghost", trigger.Event{HasSettled: true, Settled: "x"}, nil)
 	p.OnHealth("ghost", health.Event{State: "down"})
 	if pubs := fc.snapshot(); len(pubs) != 0 {
 		t.Errorf("unknown watch must publish nothing, got %v", pubs)
@@ -153,7 +153,7 @@ func TestOnEventNeverBlocks(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		start := time.Now()
-		p.OnEvent("printer", trigger.Event{Reading: fmt.Sprintf("r%d", i)}, nil)
+		p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: fmt.Sprintf("r%d", i)}, nil)
 		if elapsed := time.Since(start); elapsed >= 10*time.Millisecond {
 			t.Errorf("OnEvent call %d took %v, want <10ms", i, elapsed)
 		}
@@ -170,10 +170,15 @@ func TestOnEventBatchOrderPreserved(t *testing.T) {
 	p := NewPublisher(fc, mqttCfg(), func(string, ...any) {})
 	defer p.Close()
 	p.Sync([]config.Watch{testWatch("printer")})
+	// The stream's health is already known, so the event carries only
+	// its own publishes (a first reading would also seed "online").
+	fc.reset()
+	p.OnHealth("printer", health.Event{State: "healthy"})
+	pollFor(t, 2*time.Second, func() bool { return len(fc.snapshot()) >= 1 })
 	fc.reset()
 
 	png := []byte{0x89, 'P', 'N', 'G'}
-	p.OnEvent("printer", trigger.Event{Reading: "PRINT COMPLETE", Fired: true}, png)
+	p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: "PRINT COMPLETE", Fired: true}, png)
 
 	pollFor(t, 2*time.Second, func() bool { return len(fc.snapshot()) >= 3 })
 
@@ -210,7 +215,7 @@ func TestPublishQueueOverflowDrops(t *testing.T) {
 	const burst = 50 // capacity is 32; this must overflow it
 	start := time.Now()
 	for i := 0; i < burst; i++ {
-		p.OnEvent("printer", trigger.Event{Reading: fmt.Sprintf("r%d", i)}, nil)
+		p.OnEvent("printer", trigger.Event{HasSettled: true, Settled: fmt.Sprintf("r%d", i)}, nil)
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		t.Errorf("%d OnEvent calls took %v, want well under the 50ms publish delay (never block)", burst, elapsed)

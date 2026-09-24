@@ -18,6 +18,15 @@ type pub struct {
 type fakeClient struct {
 	pubs   []pub
 	closed bool
+	down   bool // the broker is away: Connected is false
+}
+
+func (f *fakeClient) Connected() bool { return !f.down }
+func (f *fakeClient) Status() (string, error) {
+	if f.down {
+		return StateDown, &ConnError{Reason: "connection refused"}
+	}
+	return StateConnected, nil
 }
 
 func (f *fakeClient) Publish(topic string, qos byte, retain bool, payload []byte) error {

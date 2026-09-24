@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
@@ -28,6 +30,38 @@ type Event struct {
 	// with Pending == Need and CooldownEnds set is confirmed and held;
 	// the first confirmed reading after CooldownEnds fires.
 	CooldownEnds time.Time
+	// Settled is the reading once it has held: the same text read Confirm
+	// times in a row, repeated on every reading while it holds. For numeric
+	// it is instead the text of the reading Value came from, so the two
+	// always agree; a numeric reading with no number in it ("Err", "OFF")
+	// settles like text, except the seven-segment decoder's undecoded '?'
+	// readings, which say nothing. This is what Home Assistant's reading
+	// entity shows, so one misread frame never reaches it. HasSettled is
+	// false until a reading has settled.
+	//
+	// pixel_change has no misreads to filter, only a percentage that moves
+	// a little on every frame, so its "N% changed" settles at once and is
+	// then held (see pixelSettleEvery): it moves at once when the reading
+	// crosses Threshold either way, and otherwise at most once a minute.
+	Settled    string
+	HasSettled bool
+	// Value is a numeric watch's number with misreads filtered out: the
+	// median of the last 2*Confirm-1 numbers read. A new level needs
+	// Confirm readings (a majority) to take over, up to Confirm-1 bad
+	// frames in a row never show, and a value that changes on every
+	// reading (a power meter) is still followed, a reading or so behind;
+	// the published number is always one that was actually read. Readings
+	// with no number, or (SevenSeg) a partly read one, don't count.
+	// HasValue is false until the window has filled, and on every other
+	// type.
+	Value    float64
+	HasValue bool
+}
+
+// numRead is one number a numeric watch read, with the text it came from.
+type numRead struct {
+	v    float64
+	text string
 }
 
 // condition keys stand in for the reading as the Confirm candidate of the
@@ -55,8 +89,25 @@ type Evaluator struct {
 	candCount int
 	numCond   bool
 	lastFired time.Time
+	// lastText/textRun count identical readings in a row (Settled);
+	// nums is the numeric window behind Value, oldest first.
+	lastText string
+	textRun  int
+	nums     []numRead
+	// pixText is pixel_change's held Settled reading (hasPix once there
+	// is one), pixAbove the side of Threshold it was on and pixAt when it
+	// was taken.
+	pixText  string
+	hasPix   bool
+	pixAbove bool
+	pixAt    time.Time
 	// Now is the clock; tests replace it.
 	Now func() time.Time
+	// SevenSeg says the readings come from the seven-segment decoder, whose
+	// '?' is a digit it couldn't read rather than text: a number touching
+	// one is only partly read and stays out of Value. (The condition still
+	// judges what was read, as the web UI's Test does.)
+	SevenSeg bool
 }
 
 func New(cfg config.Trigger) (*Evaluator, error) {
@@ -120,6 +171,61 @@ func (e *Evaluator) fire(reading, reason string) Event {
 // reading with no number in it says nothing either way, so it resets the
 // count rather than counting as "below".
 func (e *Evaluator) ObserveText(s string) Event {
+	ev := e.observeText(s)
+	if e.cfg.Type == "numeric" {
+		e.settleNumber(&ev, s)
+	} else {
+		e.settleText(&ev, s)
+	}
+	return ev
+}
+
+// settleText marks ev Settled once s has been read Confirm times in a row.
+func (e *Evaluator) settleText(ev *Event, s string) {
+	if e.textRun > 0 && s == e.lastText {
+		e.textRun++
+	} else {
+		e.lastText, e.textRun = s, 1
+	}
+	if e.textRun >= e.cfg.Confirm {
+		ev.Settled, ev.HasSettled = s, true
+	}
+}
+
+// settleNumber adds s's number to the window and, once the window is
+// full, sets ev's Value and Settled from its median reading. A reading
+// with no number is text the panel shows instead ("Err", "OFF"): it
+// settles like any text and leaves the window alone. The seven-segment
+// decoder's '?' readings are digits it couldn't read, not text, so they
+// settle nothing.
+func (e *Evaluator) settleNumber(ev *Event, s string) {
+	v, partial, ok := e.extractPartial(s)
+	if !ok || (partial && e.SevenSeg) {
+		if !ok && s != "" && !(e.SevenSeg && strings.Contains(s, "?")) {
+			e.settleText(ev, s)
+		} else {
+			e.textRun = 0
+		}
+		return
+	}
+	e.textRun = 0
+	size := 2*e.cfg.Confirm - 1
+	e.nums = append(e.nums, numRead{v, s})
+	if len(e.nums) > size {
+		e.nums = append(e.nums[:0], e.nums[len(e.nums)-size:]...)
+	}
+	if len(e.nums) < size {
+		return
+	}
+	sorted := append([]numRead(nil), e.nums...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].v < sorted[j].v })
+	mid := sorted[size/2]
+	ev.Value, ev.HasValue = mid.v, true
+	ev.Settled, ev.HasSettled = mid.text, true
+}
+
+// observeText is ObserveText's confirm, edge and cooldown logic.
+func (e *Evaluator) observeText(s string) Event {
 	key, met := s, false
 	switch e.cfg.Type {
 	case "ocr_match":
@@ -201,10 +307,31 @@ func (e *Evaluator) edge(key string, met bool) bool {
 // ObservePixel feeds one pixel-diff percentage. Threshold + cooldown only.
 func (e *Evaluator) ObservePixel(pct float64) Event {
 	reading := fmt.Sprintf("%.1f%% changed", pct)
-	if pct < e.cfg.Threshold || e.coolingDown() {
-		return Event{Reading: reading}
+	ev := Event{Reading: reading}
+	if pct >= e.cfg.Threshold && !e.coolingDown() {
+		ev = e.fire(reading, "pixel change")
 	}
-	return e.fire(reading, "pixel change")
+	e.settlePixel(&ev, pct, reading)
+	return ev
+}
+
+// pixelSettleEvery is how often pixel_change's settled reading may follow
+// the percentage while it stays on one side of Threshold. A camera's
+// noise moves it by a fraction of a percent on every frame; published
+// each time, that is a new Home Assistant state every few seconds that
+// says nothing.
+const pixelSettleEvery = time.Minute
+
+// settlePixel sets ev's Settled for pixel_change: the first reading at
+// once, then a new one when it crosses Threshold (a fire, or the change
+// ending) or when pixelSettleEvery has passed.
+func (e *Evaluator) settlePixel(ev *Event, pct float64, reading string) {
+	above := pct >= e.cfg.Threshold
+	now := e.Now()
+	if !e.hasPix || above != e.pixAbove || (reading != e.pixText && now.Sub(e.pixAt) >= pixelSettleEvery) {
+		e.pixText, e.hasPix, e.pixAbove, e.pixAt = reading, true, above, now
+	}
+	ev.Settled, ev.HasSettled = e.pixText, true
 }
 
 // Condition is what a single reading says about a trigger's condition, for
@@ -256,15 +383,27 @@ func Check(cfg config.Trigger, reading string) (Condition, error) {
 	return Condition{Detail: "Pixel change compares each frame with the one before, so one test has nothing to compare"}, nil
 }
 
+// extract finds the number in s: the pattern's first capture group when
+// it matched something, else the whole match.
 func (e *Evaluator) extract(s string) (float64, bool) {
-	m := e.re.FindStringSubmatch(s)
-	if m == nil {
-		return 0, false
+	v, _, ok := e.extractPartial(s)
+	return v, ok
+}
+
+// extractPartial is extract that also reports whether the number touches a
+// '?': the seven-segment decoder's mark for a digit it saw but couldn't
+// read, so "?4?" may well be 142 and "2?.5" isn't 2.
+func (e *Evaluator) extractPartial(s string) (v float64, partial, ok bool) {
+	loc := e.re.FindStringSubmatchIndex(s)
+	if loc == nil {
+		return 0, false, false
 	}
-	val := m[0]
-	if len(m) > 1 && m[1] != "" {
-		val = m[1]
+	start, end := loc[0], loc[1]
+	if len(loc) >= 4 && loc[2] >= 0 && loc[3] > loc[2] {
+		start, end = loc[2], loc[3]
 	}
+	val := s[start:end]
+	partial = strings.Contains(val, "?") || (start > 0 && s[start-1] == '?') || (end < len(s) && s[end] == '?')
 	f, err := strconv.ParseFloat(val, 64)
-	return f, err == nil
+	return f, partial, err == nil
 }

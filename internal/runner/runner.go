@@ -94,6 +94,7 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 	if err != nil {
 		return nil, fmt.Errorf("watch %q: %w", w.Name, err)
 	}
+	eval.SevenSeg = w.Engine == "sevenseg"
 	if w.Trigger.Type != "pixel_change" && engine == nil {
 		return nil, fmt.Errorf("watch %q: trigger %q requires an OCR engine", w.Name, w.Trigger.Type)
 	}

@@ -69,6 +69,12 @@ type Server struct {
 	// banner saying so (layout.html, the "demoDir" func). Set once, before
 	// Handler is called, like BasePath.
 	DemoDir string
+	// MQTTStatus, when set (config.yaml has an mqtt: block), reports the
+	// broker connection (hass.Publisher.Status): "connected", "connecting"
+	// or "not connected" with an error whose text is the reason. The
+	// topbar shows it on every page (haStatus, hastatus.go). Set once,
+	// before Handler is called.
+	MQTTStatus func() (string, error)
 
 	cfgPath string
 	mu      sync.Mutex // guards cfg
@@ -116,23 +122,29 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"u":   func(p string) string { return s.BasePath + p },
 		// demoDir reads DemoDir fresh for the same reason "u" does.
 		"demoDir": func() string { return s.DemoDir },
+		// haStatus reads MQTTStatus fresh, like demoDir.
+		"haStatus": s.haStatus,
 		// watchURL is the only way a watch name enters a URL: names may hold
 		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
 		// to be decoded (or path-normalized) into a different name.
-		"watchURL":    s.watchURL,
-		"pageTitle":   pageTitle,
-		"shortErr":    summarizeErr,
-		"errHint":     errHint,
-		"reading":     viewReading,
-		"pct":         confidencePct,
-		"lowConf":     func(c float64) bool { return c < lowConfidence },
-		"isoTime":     isoTime,
-		"ppSet":       preprocessSet,
-		"ppSummary":   preprocessSummary,
-		"trigLabel":   triggerLabel,
-		"confirmHelp": confirmHelp,
-		"patternHelp": patternHelp,
-		"redact":      redactSource,
+		"watchURL":        s.watchURL,
+		"pageTitle":       pageTitle,
+		"shortErr":        summarizeErr,
+		"errHint":         errHint,
+		"reading":         viewReading,
+		"pct":             confidencePct,
+		"lowConf":         func(c float64) bool { return c < lowConfidence },
+		"isoTime":         isoTime,
+		"ppSet":           preprocessSet,
+		"ppSummary":       preprocessSummary,
+		"trigLabel":       triggerLabel,
+		"confirmHelp":     confirmHelp,
+		"patternHelp":     patternHelp,
+		"redact":          redactSource,
+		"deviceClasses":   func() []string { return config.DeviceClasses },
+		"unitSuggestions": unitSuggestions,
+		"unitsJSON":       unitsJSON,
+		"unitList":        unitList,
 		"engineNote": func(w config.Watch, tess, rapid bool) engineNote {
 			return engineNoteFor(w, tess, rapid)
 		},
@@ -164,6 +176,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /watch/{name}", s.detail)
 	mux.HandleFunc("GET /watch/{name}/snapshot", s.snapshot)
 	mux.HandleFunc("GET /watch/{name}/live", s.live)
+	mux.HandleFunc("GET /ha-status", s.haStatusFragment)
 	mux.HandleFunc("POST /watch/{name}/test", s.testRegion)
 	mux.HandleFunc("POST /watch/{name}/test-notify", s.testNotify)
 	mux.HandleFunc("POST /watch/{name}/save", s.save)
@@ -229,8 +242,7 @@ func timingSafeEqual(a, b string) bool {
 }
 
 // Watches returns a copy of the current watch list, safe to read without
-// holding s.mu — used by the MQTT on-connect resync (cmd/watchglass/main.go)
-// to read the live list at reconnect time instead of a stale boot snapshot.
+// holding s.mu.
 func (s *Server) Watches() []config.Watch {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -765,6 +777,8 @@ var fieldAnchors = map[string]string{
 	"pp_threshold": "f-binarize",
 	"pp_upscale":   "f-upscale",
 	"notify":       "f-notify",
+	"unit":         "f-unit",
+	"device_class": "f-dclass",
 }
 
 // Anchor is "" for an error that belongs to no single field.
@@ -883,6 +897,9 @@ type detailData struct {
 	Base string
 	// ConfigFile is the config file's base name, for copy that names it.
 	ConfigFile string
+	// MQTT is whether config.yaml has an mqtt: block: the Home Assistant
+	// fieldset (Unit, Device class) says whether HA gets them now.
+	MQTT bool
 	// Flash is the confirmation after a save or create redirect.
 	Flash *flash
 	// Form is set when a save was rejected: the page is re-rendered with
@@ -913,6 +930,7 @@ func (s *Server) detailFor(wc config.Watch) detailData {
 		ShowTLS:            strings.HasPrefix(wc.Source, "https://") || wc.TLSInsecure,
 		Base:               s.BasePath,
 		ConfigFile:         s.configFile(),
+		MQTT:               s.MQTTStatus != nil,
 	}
 }
 
@@ -1415,6 +1433,27 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 		fail("notify", fmt.Sprintf("Notify line %d: %s", p.Line, p.Reason))
 	}
 	w.Trigger = trig
+	// Unit and Device class describe a numeric watch's number to Home
+	// Assistant; the form shows them only for numeric, and another type
+	// drops them (config.Validate refuses them there). A client that omits
+	// the fields keeps the saved values, like engine.
+	if w.Trigger.Type == "numeric" {
+		if _, ok := r.Form["unit"]; ok {
+			w.Unit = config.NormalizeUnit(strings.TrimSpace(r.FormValue("unit")))
+		}
+		if _, ok := r.Form["device_class"]; ok {
+			w.DeviceClass = r.FormValue("device_class")
+		}
+		if err := config.CheckUnit(w.Unit, w.DeviceClass); err != nil {
+			field := "unit"
+			if _, known := config.DeviceClassUnits[w.DeviceClass]; w.DeviceClass != "" && !known {
+				field = "device_class"
+			}
+			fail(field, unitMessage(w.Unit, w.DeviceClass, err))
+		}
+	} else {
+		w.Unit, w.DeviceClass = "", ""
+	}
 	// The detail form hides Pattern/Compare/Threshold for the types that
 	// never read them (app.js's updateTriggerFields mirrors trigger.New's
 	// switch), but a hidden control still submits, so whatever was left in

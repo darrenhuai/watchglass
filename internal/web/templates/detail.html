@@ -259,6 +259,33 @@
           <p id="cooldown-help" class="field-hint">Quiet period after a notification, e.g. 10m. A change that still holds when it ends notifies then.</p>
         </div>
       </fieldset>
+      {{/* Home Assistant: what a numeric watch's number is (config.Watch
+           Unit and DeviceClass), sent with its value sensor over MQTT so HA
+           can graph it. Only numeric watches have a number, so app.js hides
+           the fieldset for the other types and the save drops both fields
+           there. The Unit suggestions follow the device class (data-units,
+           config.DeviceClassUnits); a class takes only the units HA accepts
+           for it. */}}
+      <fieldset id="fs-ha"{{if ne .Watch.Trigger.Type "numeric"}} hidden{{end}}>
+        <legend>Home Assistant <span class="legend-note">{{if .MQTT}}sent with the number over MQTT{{else}}used once {{.ConfigFile}} has an mqtt: block{{end}}</span></legend>
+        <div class="field-row{{if .Form.Err "unit"}} field-invalid{{end}}">
+          <label for="f-unit">Unit</label>
+          <input class="control-short mono" id="f-unit" name="unit" value="{{.Watch.Unit}}" list="unit-list" maxlength="16" placeholder="e.g. °C" spellcheck="false" autocapitalize="off"{{with .Form.Err "unit"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "unit"}}err-unit {{end}}unit-help">
+          <datalist id="unit-list">{{range unitSuggestions .Watch.DeviceClass}}<option value="{{.}}"></option>{{end}}</datalist>
+          {{with .Form.Err "unit"}}<p id="err-unit" class="field-error">{{.}}</p>{{end}}
+          <p id="unit-help" class="field-hint">{{if .Watch.DeviceClass}}Shown after the number. Needed for {{.Watch.DeviceClass}}.{{else}}Shown after the number, like °C or rpm. Optional.{{end}}</p>
+        </div>
+        <div class="field-row{{if .Form.Err "device_class"}} field-invalid{{end}}">
+          <label for="f-dclass">Device class</label>
+          <select id="f-dclass" name="device_class" class="control-short" data-units="{{unitsJSON}}"{{with .Form.Err "device_class"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "device_class"}}err-device-class {{end}}dclass-help">
+            <option value="" {{if eq .Watch.DeviceClass ""}}selected{{end}}>none</option>
+            {{range deviceClasses}}<option value="{{.}}" {{if eq $.Watch.DeviceClass .}}selected{{end}}>{{.}}</option>
+            {{end}}
+          </select>
+          {{with .Form.Err "device_class"}}<p id="err-device-class" class="field-error">{{.}}</p>{{end}}
+          <p id="dclass-help" class="field-hint">{{with unitSuggestions .Watch.DeviceClass}}{{if $.Watch.DeviceClass}}Home Assistant takes {{unitList .}} for {{$.Watch.DeviceClass}}.{{else}}What the number measures. Home Assistant uses it for the icon and unit conversion.{{end}}{{end}}</p>
+        </div>
+      </fieldset>
       {{/* Watch-level timing (config.Watch, not the trigger): how often the
            camera is read and when a failing source counts as down. */}}
       <fieldset id="fs-polling">

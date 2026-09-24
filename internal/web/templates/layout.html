@@ -7,6 +7,7 @@
 <title>{{pageTitle .}}</title>
 <link rel="icon" type="image/svg+xml" href="{{u "/static/favicon.svg"}}">
 <link rel="stylesheet" href="{{u "/static/style.css"}}">
+{{if haStatus.Show}}<script src="{{u "/static/topbar.js"}}" defer></script>{{end}}
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -15,6 +16,7 @@
     <span class="brand-mark" aria-hidden="true"></span>
     <span class="brand-name">watchglass</span>
   </a>
+  {{template "haStatus" haStatus}}
 </header>
 {{/* -demo (or WATCHGLASS_DEMO=1): say where edits go and that they don't
      last, on every page, so nobody mistakes the demo for their own setup. */}}
@@ -23,6 +25,12 @@
 </div>{{end}}
 <main id="main" tabindex="-1">
 {{end}}
+
+{{/* The Home Assistant (MQTT) line in the topbar, only when config.yaml
+     has an mqtt: block. topbar.js re-fetches it (GET /ha-status) so a
+     broker going away or coming back shows without a reload. Words carry
+     the state; the LED only repeats it. */}}
+{{define "haStatus"}}{{if .Show}}<p id="ha-status" class="ha-status is-{{.State}}" role="status" data-src="{{u "/ha-status"}}" title="{{.Title}}"><span class="led {{if eq .State "connected"}}led-green{{else if eq .State "connecting"}}led-off{{else}}led-error{{end}}" aria-hidden="true"></span><span class="ha-status-text"><span class="ha-status-name">Home Assistant:</span> {{.Text}}</span></p>{{end}}{{end}}
 
 {{define "foot"}}
 </main>

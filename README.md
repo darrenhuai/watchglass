@@ -143,15 +143,39 @@ automatically — no YAML on the HA side:
       password: secret
 
 Each watch becomes a device with four entities via MQTT discovery: a
-**reading** sensor (the latest OCR text or pixel-change percentage), a
-**health** sensor (stream up/down), a **motion** sensor that pulses when the
-trigger fires, and a **camera** showing the crop from the last fire. State
-survives HA restarts (retained topics), and watchglass announces its own
-availability with a last-will message, so entities go unavailable if it
-stops.
+**Reading** sensor, a **Health** sensor (stream up/down, online from the
+first frame read), a **Motion** sensor that pulses when the trigger fires,
+and a **Snapshot** camera showing the crop from the last fire. The Reading
+is the OCR text once it has held for Confirm readings in a row, so one
+misread frame never reaches HA. For `pixel_change` it is the change
+percentage: it updates at once when it crosses the threshold either way,
+and otherwise at most once a minute, so camera noise doesn't make a new
+state every frame.
+A `numeric` watch also gets a **Value** sensor HA can graph: a bare number
+with `state_class: measurement`, and the unit and device class you give it:
+
+    - name: boiler
+      # ...
+      unit: "°C"
+      device_class: temperature   # also humidity, pressure, power, voltage,
+                                  # current, weight, duration
+
+The value is the middle of the last 2 × Confirm − 1 numbers read, so with
+`confirm: 2` or more a misread digit never shows up in the history graph
+(`confirm: 1` sends every number read). A numeric watch's Reading is the
+text that number came from, or what the panel shows instead of a number
+("Err", "OFF") once that has held. Both fields are also on the watch's page
+(under Home Assistant, for numeric watches). Micro units are spelled the way
+HA spells them, with μ (`μA`); a `µ` typed on a keyboard is turned into it. State survives
+HA restarts (retained topics), watchglass announces its own availability with
+a last-will message, so entities go unavailable if it stops, and only
+changes are published.
 
 Broker down? watchglass keeps watching and reconnects in the background —
-MQTT is never allowed to take the watcher down with it.
+MQTT is never allowed to take the watcher down with it. The top of every
+page says "Home Assistant: connected" or why it isn't ("not connected:
+connection refused"), and the log says so too, at most once a minute.
+Changes to the `mqtt:` block itself need a restart.
 
 The broker password lives in plaintext in `config.yaml` — keep the file
 private (watchglass writes it `0o600` on Unix); a secrets-manager story is

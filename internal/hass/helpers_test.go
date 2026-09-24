@@ -16,6 +16,26 @@ type lockedFakeClient struct {
 	pubs     []pub
 	delay    time.Duration
 	isClosed bool
+	down     bool // the broker is away: Connected is false
+}
+
+func (f *lockedFakeClient) Connected() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.down
+}
+
+func (f *lockedFakeClient) Status() (string, error) {
+	if !f.Connected() {
+		return StateDown, &ConnError{Reason: "connection refused"}
+	}
+	return StateConnected, nil
+}
+
+func (f *lockedFakeClient) setDown(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = down
 }
 
 func (f *lockedFakeClient) Publish(topic string, qos byte, retain bool, payload []byte) error {

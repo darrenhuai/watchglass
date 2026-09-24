@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -384,5 +385,176 @@ func TestConfirmProgressDuringCooldownSaysItIsHeld(t *testing.T) {
 	e2, _ := mk(t, config.Trigger{Type: "ocr_match", Pattern: "x", Confirm: 2, Cooldown: config.Duration(time.Minute)})
 	if ev := e2.ObserveText("x"); ev.Pending != 1 || !ev.CooldownEnds.IsZero() {
 		t.Errorf("no cooldown running: %+v", ev)
+	}
+}
+
+// A17: the reading Home Assistant sees settles like Confirm: a text has to
+// be read Confirm times in a row before it counts, so one misread frame
+// never flips the entity, and it is repeated while it holds.
+func TestSettledReadingNeedsConfirmInARow(t *testing.T) {
+	e, err := New(config.Trigger{Type: "ocr_changed", Confirm: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type want struct {
+		settled string
+		has     bool
+	}
+	for i, c := range []struct {
+		in   string
+		want want
+	}{
+		{"PRINTING 12%", want{"", false}},
+		{"PRINTING 12%", want{"PRINTING 12%", true}},
+		{"PRlNTING 12%", want{"", false}}, // one misread: nothing new settles
+		{"PRINTING 12%", want{"", false}},
+		{"PRINTING 12%", want{"PRINTING 12%", true}},
+		{"PRINTING 12%", want{"PRINTING 12%", true}},
+		{"PRINT COMPLETE", want{"", false}},
+		{"PRINT COMPLETE", want{"PRINT COMPLETE", true}},
+	} {
+		ev := e.ObserveText(c.in)
+		if ev.Settled != c.want.settled || ev.HasSettled != c.want.has {
+			t.Errorf("reading %d %q: settled %q/%v, want %q/%v", i, c.in, ev.Settled, ev.HasSettled, c.want.settled, c.want.has)
+		}
+		if ev.HasValue {
+			t.Errorf("reading %d: only numeric watches have a value", i)
+		}
+	}
+}
+
+// pixel_change has no misreads to filter, so its reading settles at once
+// (Home Assistant's Reading entity isn't left "unknown" by a percentage
+// that never repeats exactly), then holds: it follows at once when the
+// reading crosses Threshold either way, and otherwise at most once a
+// minute, so camera noise doesn't make a new state every frame.
+func TestPixelReadingSettlesAtOnceThenHolds(t *testing.T) {
+	p, err := New(config.Trigger{Type: "pixel_change", Threshold: 5, Confirm: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	p.Now = func() time.Time { return now }
+	for i, c := range []struct {
+		after time.Duration
+		pct   float64
+		want  string
+	}{
+		{0, 0.6, "0.6% changed"},                 // the first reading, at once
+		{3 * time.Second, 0.0, "0.6% changed"},   // noise: held
+		{3 * time.Second, 0.7, "0.6% changed"},   // held
+		{3 * time.Second, 12.4, "12.4% changed"}, // crossed Threshold: at once
+		{3 * time.Second, 14.0, "12.4% changed"}, // still above: held
+		{3 * time.Second, 0.3, "0.3% changed"},   // back below: at once
+		{30 * time.Second, 0.5, "0.3% changed"},
+		{30 * time.Second, 0.1, "0.1% changed"}, // a minute on: follows
+		{3 * time.Second, 0.4, "0.1% changed"},
+	} {
+		now = now.Add(c.after)
+		ev := p.ObservePixel(c.pct)
+		if !ev.HasSettled || ev.Settled != c.want {
+			t.Errorf("reading %d (%v%%): settled %q/%v, want %q", i, c.pct, ev.Settled, ev.HasSettled, c.want)
+		}
+	}
+}
+
+// A numeric watch's reading with no number in it is text the panel shows
+// instead of one ("Err", "OFF"): it reaches Home Assistant's Reading
+// entity once it has held for Confirm readings, and leaves the value
+// window alone. The seven-segment decoder's '?' readings are undecoded
+// digits, not text, and settle nothing.
+func TestNumericTextWithoutNumberSettles(t *testing.T) {
+	e, err := New(config.Trigger{Type: "numeric", Op: "gt", Threshold: 100, Confirm: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []struct {
+		in      string
+		settled string // "" = not settled
+		value   string // "" = no value
+	}{
+		{"Err", "", ""},
+		{"Err", "Err", ""}, // held for Confirm: reaches HA
+		{"21", "", ""},
+		{"Err", "", ""}, // a number in between restarts the run
+		{"21", "", ""},
+		{"21", "21", "21"}, // the window (3) fills
+		{"OFF", "", ""},
+		{"OFF", "OFF", ""},
+		{"22", "21", "21"}, // the window still holds 21, 21, 22
+	} {
+		ev := e.ObserveText(c.in)
+		gotS, gotV := "", ""
+		if ev.HasSettled {
+			gotS = ev.Settled
+		}
+		if ev.HasValue {
+			gotV = strconv.FormatFloat(ev.Value, 'f', -1, 64)
+		}
+		if gotS != c.settled || gotV != c.value {
+			t.Errorf("reading %d %q: settled %q value %q, want %q %q", i, c.in, gotS, gotV, c.settled, c.value)
+		}
+	}
+
+	s, _ := New(config.Trigger{Type: "numeric", Op: "gt", Threshold: 100, Confirm: 2})
+	s.SevenSeg = true
+	for _, in := range []string{"?", "?", "?.?", "?.?", "?4?", "?4?", "", ""} {
+		if ev := s.ObserveText(in); ev.HasSettled || ev.HasValue {
+			t.Errorf("sevenseg %q settled %q", in, ev.Settled)
+		}
+	}
+}
+
+// A17: a numeric watch's value is the median of the last 2*Confirm-1
+// numbers: a spike never shows, a new level takes Confirm readings, a
+// value that changes on every reading is still followed, and readings
+// with no number are skipped rather than counted.
+func TestNumericValueIsTheWindowMedian(t *testing.T) {
+	e, err := New(config.Trigger{Type: "numeric", Op: "gt", Threshold: 100, Confirm: 2, Pattern: "([0-9.]+)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.SevenSeg = true
+	for i, c := range []struct {
+		in   string
+		want string // "" = no value
+	}{
+		{"23.5", ""},
+		{"23.5", ""}, // the window (3) isn't full yet
+		{"23.7", "23.5"},
+		{"88.7", "23.7"}, // one misread never shows
+		{"23.7", "23.7"},
+		{"No digits", "-"}, // no number: nothing new, nothing counted
+		{"?4?", "-"},       // partly read: not 4
+		{"24.1", "24.1"},   // 88.7 has left the window
+		{"24.6", "24.1"},   // changing every reading: followed, one behind
+		{"25.0", "24.6"},
+		{"25.3", "25.0"},
+		{"25.3", "25.3"},
+	} {
+		ev := e.ObserveText(c.in)
+		switch c.want {
+		case "":
+			if ev.HasValue || ev.HasSettled {
+				t.Errorf("reading %d %q: value %v/%v before the window filled", i, c.in, ev.Value, ev.HasValue)
+			}
+		case "-":
+			if ev.HasValue || ev.HasSettled {
+				t.Errorf("reading %d %q: a reading without a whole number must not produce a value, got %v", i, c.in, ev.Value)
+			}
+		default:
+			// Settled is the text the value came from ("25.0"), Value its number.
+			if !ev.HasValue || strconv.FormatFloat(ev.Value, 'f', 1, 64) != c.want || ev.Settled != c.want || !ev.HasSettled {
+				t.Errorf("reading %d %q: value %v/%v settled %q, want %s", i, c.in, ev.Value, ev.HasValue, ev.Settled, c.want)
+			}
+		}
+	}
+
+	// Confirm 1 is no filtering at all, and a text engine's '?' is text.
+	e1, _ := New(config.Trigger{Type: "numeric", Op: "gt", Threshold: 100, Confirm: 1})
+	for _, in := range []string{"12", "13", "Ready? 14"} {
+		if ev := e1.ObserveText(in); !ev.HasValue || ev.Settled != in {
+			t.Errorf("confirm 1: %q gave %v/%v %q", in, ev.Value, ev.HasValue, ev.Settled)
+		}
 	}
 }
