@@ -1233,18 +1233,31 @@
   // the newest sample's time + the run's count), kept nodes are reused
   // (their images don't re-decode; focus in the strip survives), new ones
   // come in, evicted ones go. At the start, the strip stays at the start,
-  // so the newest frame is always the first one seen: it is put back there
-  // explicitly, because Chromium re-snaps (scroll-snap) to the frame it
-  // last snapped to when a frame is inserted before it, and that pushed
-  // the strip one frame further into the past with every reading. When the
-  // user has scrolled away from the start, the first frame they could see
-  // is held where it was.
+  // so the newest frame is always the first one seen. Putting scrollLeft
+  // back to 0 after the insert isn't enough on its own: Chromium re-snaps
+  // (scroll-snap) to the frame it last snapped to when the new frame's
+  // image loads and widens it, after this has returned, and that pushed the
+  // strip one frame further into the past with every reading. So a strip
+  // at the start is also marked .at-start, which turns snapping off
+  // (style.css) until the user reaches for the strip (unpinStrip). When
+  // the user has scrolled away from the start, the first frame they could
+  // see is held where it was.
+  function pinStrip(s, on) {
+    if (s) s.classList.toggle("at-start", on);
+  }
+  function unpinStrip() {
+    pinStrip(liveStrip.querySelector(".strip"), false);
+  }
+  ["wheel", "pointerdown", "touchstart", "keydown"].forEach(function (type) {
+    liveStrip.addEventListener(type, unpinStrip, { capture: true, passive: true });
+  });
   function syncStrip(next) {
     var cur = liveStrip.querySelector(".strip");
     if (!next || !cur) {
       if (next) {
         liveStrip.textContent = "";
         liveStrip.appendChild(next);
+        pinStrip(next, true);
       } else if (cur) {
         liveStrip.textContent = "";
       }
@@ -1257,6 +1270,7 @@
     if (dup) { // never expected; start over rather than guess
       liveStrip.textContent = "";
       liveStrip.appendChild(next);
+      pinStrip(next, true);
       syncFade();
       return;
     }
@@ -1265,6 +1279,8 @@
     // Read before anything moves: after an insert the browser may already
     // have scrolled on its own (the re-snap above).
     var atStart = cur.scrollLeft <= 2;
+    // Before the insert, so the new frame never meets an armed snap.
+    pinStrip(cur, atStart);
     var wasFirst = tileSays(old[0]);
     var anchor = null, anchorX = 0;
     if (!atStart) {

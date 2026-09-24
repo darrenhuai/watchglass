@@ -1896,6 +1896,10 @@ fieldset > .field-error { margin-top: var(--space-2); }
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
+/* A strip showing its newest frame doesn't snap (app.js syncStrip): a
+   frame arriving in front would otherwise be scrolled past as soon as its
+   image loads. It snaps again once the user scrolls it. */
+.strip.at-start { scroll-snap-type: none; }
 .strip::-webkit-scrollbar { height: 6px; }
 .strip::-webkit-scrollbar-track { background: transparent; }
 .strip::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }

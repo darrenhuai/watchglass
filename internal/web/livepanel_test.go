@@ -226,6 +226,12 @@ func TestLiveAnnouncesChangesNotTicks(t *testing.T) {
 		`var atStart = cur.scrollLeft <= 2;`,
 		`if (!atStart) {`,
 		`if (cur.scrollLeft !== 0) cur.scrollLeft = 0;`,
+		// ...and snapping is off while it is there, because the re-snap also
+		// happens later, when the new frame's image loads. Reaching for the
+		// strip turns it back on.
+		`pinStrip(cur, atStart);`,
+		`["wheel", "pointerdown", "touchstart", "keydown"].forEach(function (type) {`,
+		`liveStrip.addEventListener(type, unpinStrip, { capture: true, passive: true });`,
 		// A run that grew by one equal reading is not a new frame arriving.
 		`tileSays(added[0]) !== wasFirst`,
 		// The session case keeps polling (a good answer clears it), so it
@@ -269,6 +275,7 @@ func TestLiveAnnouncesChangesNotTicks(t *testing.T) {
 		".readout-value {\n  order: 3;\n  flex: 1 1 100%;",
 		"@keyframes readout-fire",
 		"scroll-snap-type: x proximity;",
+		".strip.at-start { scroll-snap-type: none; }",
 	} {
 		if !strings.Contains(string(css), want) {
 			t.Errorf("style.css missing %q", want)
