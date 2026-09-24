@@ -1007,7 +1007,7 @@
     var t = pill.querySelector(".status-text");
     if (t) t.textContent = text;
   }
-  function updateStatus(state, summary, message) {
+  function updateStatus(state, summary, message, hint) {
     if (!pill || !PILL_LED[state]) return;
     setPill("status-" + state, PILL_LED[state], state);
     setTitleState(state === "error" || state === "stopped" ? state : "");
@@ -1021,6 +1021,9 @@
         sum.title = summary || ""; // the sentence is clamped to two lines; the title has it whole
       }
       if (raw && raw.textContent !== (message || "")) raw.textContent = message || "";
+      var hintEl = statusDetail.querySelector(".status-hint");
+      if (hintEl && hintEl.textContent !== (hint || "")) hintEl.textContent = hint || "";
+      if (hintEl) hintEl.hidden = !hint;
       statusDetail.hidden = state !== "error";
       syncSnapCause();
     }
@@ -1257,7 +1260,7 @@
       lastStatus = statusHTML;
     }
     syncStrip(tpl.content.querySelector(".strip"));
-    updateStatus(ds.state, ds.summary, ds.message);
+    updateStatus(ds.state, ds.summary, ds.message, ds.hint);
   }
   var lastStatus = null;
   var liveURL = base + "/watch/" + encodeURIComponent(name) + "/live";

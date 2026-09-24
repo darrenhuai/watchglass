@@ -38,10 +38,14 @@ type Registry struct {
 	n      int
 	buf    map[string][]Sample // newest first
 	health map[string]Health
+	// fired is when each watch last fired. buf only keeps the last n
+	// samples, and with confirm/cooldown the fired sample is usually gone
+	// a few readings later; the dashboard still needs to say it happened.
+	fired map[string]time.Time
 }
 
 func New(n int) *Registry {
-	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}}
+	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}, fired: map[string]time.Time{}}
 }
 
 func (r *Registry) Add(watch string, s Sample) {
@@ -52,6 +56,19 @@ func (r *Registry) Add(watch string, s Sample) {
 		list = list[:r.n]
 	}
 	r.buf[watch] = list
+	if s.Fired && s.TS.After(r.fired[watch]) {
+		r.fired[watch] = s.TS
+	}
+}
+
+// LastFired returns when watch last fired (the TS of its newest fired
+// sample since watchglass started), or false if it hasn't fired. Unlike
+// Recent, it doesn't forget a fire once n newer readings have come in.
+func (r *Registry) LastFired(watch string) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.fired[watch]
+	return t, ok
 }
 
 // Recent returns a copy of the newest-first samples for watch.
@@ -82,6 +99,7 @@ func (r *Registry) Drop(watch string) {
 	defer r.mu.Unlock()
 	delete(r.buf, watch)
 	delete(r.health, watch)
+	delete(r.fired, watch)
 }
 
 // SetHealth records watch's current stream health verdict, overwriting

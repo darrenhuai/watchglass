@@ -53,6 +53,48 @@ func TestSummarizeErr(t *testing.T) {
 	}
 }
 
+// A refused connection to a camera at 127.0.0.1 (or ::1, or localhost) gets
+// the Docker/WSL loopback advice: inside a container that address is the
+// container. Anything else refused, and any other loopback failure, gets
+// no hint.
+func TestErrHintExplainsLoopbackInContainers(t *testing.T) {
+	t.Setenv("WATCHGLASS_IN_CONTAINER", "")
+	const generic = "If watchglass runs in Docker or WSL, 127.0.0.1 is that container, not your computer. Use the host's LAN IP or host.docker.internal."
+	cases := []struct{ name, msg, want string }{
+		{"linux 127.0.0.1", `no reading for 3 consecutive polls: grab: snapshot http://127.0.0.1:8102/snapshot.jpg: Get "http://127.0.0.1:8102/snapshot.jpg": dial tcp 127.0.0.1:8102: connect: connection refused`, generic},
+		{"windows 127.0.0.1", `snapshot http://127.0.0.1:9/snapshot.jpg: Get "http://127.0.0.1:9/snapshot.jpg": dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it.`, generic},
+		{"localhost", `snapshot http://localhost:8100/snapshot.jpg: Get "http://localhost:8100/snapshot.jpg": dial tcp [::1]:8100: connect: connection refused`, generic},
+		{"ipv6 loopback", `snapshot http://[::1]:8100/s.jpg: Get "http://[::1]:8100/s.jpg": dial tcp [::1]:8100: connect: connection refused`, generic},
+		{"rtsp loopback", `grab: ffmpeg: exit status 1: Connection to tcp://127.0.0.1:554 failed: rtsp://127.0.0.1:554/stream: Connection refused`, generic},
+		{"LAN camera refused", `snapshot http://192.168.1.20/s.jpg: Get "http://192.168.1.20/s.jpg": dial tcp 192.168.1.20:80: connect: connection refused`, ""},
+		{"named camera refused", `snapshot http://cam.local/s.jpg: dial tcp 10.0.0.5:80: connect: connection refused`, ""},
+		{"loopback timeout", `snapshot http://127.0.0.1:8102/s.jpg: Get "http://127.0.0.1:8102/s.jpg": context deadline exceeded`, ""},
+		{"loopback 404", "snapshot http://127.0.0.1:8102/snap: status 404", ""},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		if got := errHint(c.msg); got != c.want {
+			t.Errorf("%s:\n got  %q\n want %q", c.name, got, c.want)
+		}
+	}
+
+	refused := cases[0].msg
+	if got, want := withHint(summarizeErr(refused), refused), "Connection refused by 127.0.0.1:8102. "+generic; got != want {
+		t.Errorf("withHint:\n got  %q\n want %q", got, want)
+	}
+	lan := cases[5].msg
+	if got := withHint(summarizeErr(lan), lan); got != "Connection refused by 192.168.1.20" {
+		t.Errorf("withHint without a hint should leave the summary alone, got %q", got)
+	}
+
+	// The image sets WATCHGLASS_IN_CONTAINER=1, and then it isn't an "if".
+	t.Setenv("WATCHGLASS_IN_CONTAINER", "1")
+	if got := errHint(refused); !strings.HasPrefix(got, "watchglass runs in a container here, and 127.0.0.1 is the container itself.") ||
+		!strings.Contains(got, "host.docker.internal") {
+		t.Errorf("in a container: got %q", got)
+	}
+}
+
 func TestFriendlyConfigError(t *testing.T) {
 	cases := []struct{ err, field, want string }{
 		{`duplicate watch name "printer"`, "name", `A watch named "printer" already exists.`},

@@ -14,6 +14,9 @@
        The sentence is clamped to two lines; its title carries the whole. */}}
   <div id="status-detail" class="status-detail"{{if ne .Status.State "error"}} hidden{{end}}>
     <p class="status-summary" title="{{shortErr .Status.Message}}">{{shortErr .Status.Message}}</p>
+    {{/* Advice the summary can't carry in two lines (errHint): for now, a
+         refused 127.0.0.1 camera from inside Docker or WSL. */}}
+    <p class="status-hint"{{if not (errHint .Status.Message)}} hidden{{end}}>{{errHint .Status.Message}}</p>
     <details class="tech-detail">
       <summary>Technical detail</summary>
       <p class="tech-raw mono">{{.Status.Message}}</p>

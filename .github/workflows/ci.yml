@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           workdir="$(mktemp -d)"
-          echo "watches: []" > "$workdir/config.yaml"
+          # No config.yaml on purpose: a first start must create it.
           docker run -d --name watchglass-ci \
             --user "$(id -u):$(id -g)" \
             -p 127.0.0.1:18080:8080 \
@@ -64,3 +64,41 @@ jobs:
             exit 1
           fi
           echo "watchglass container responded 200 OK"
+          if [ ! -f "$workdir/config.yaml" ]; then
+            echo "::error::first start did not create config.yaml in the mounted /config"
+            exit 1
+          fi
+          echo "first start created config.yaml"
+      - name: Demo mode in a container (no volume, no camera)
+        run: |
+          set -euo pipefail
+          docker run -d --name watchglass-demo -e WATCHGLASS_DEMO=1 \
+            -p 127.0.0.1:18081:8080 watchglass:ci
+          fired=""
+          for i in $(seq 1 75); do
+            if curl -fs http://127.0.0.1:18081/watch/demo-printer/live | grep -q 'tag-fired'; then
+              fired=1
+              break
+            fi
+            sleep 1
+          done
+          health=""
+          for i in $(seq 1 60); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' watchglass-demo)"
+            [ "$health" = healthy ] && break
+            sleep 1
+          done
+          echo "--- container logs ---"
+          docker logs watchglass-demo || true
+          docker rm -f watchglass-demo
+          if [ -z "$fired" ]; then
+            echo "::error::the built-in demo-printer watch did not fire within 75s"
+            exit 1
+          fi
+          if [ "$health" != healthy ]; then
+            echo "::error::container health is $health, want healthy"
+            exit 1
+          fi
+          echo "demo watch fired and the container is healthy"
+      - name: Compose file parses
+        run: docker compose -f docker-compose.yml config -q

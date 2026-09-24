@@ -9,16 +9,26 @@
   var POLL_HEADER = "X-Watchglass-Poll"; // web.go pollHeader
   var createBtn = addForm && addForm.querySelector("button[type=submit]");
   var createLabel = createBtn ? createBtn.textContent : "";
+  var demoForm = document.querySelector(".demo-offer");
+  var demoBtn = demoForm && demoForm.querySelector("button[type=submit]");
+  var demoLabel = demoBtn ? demoBtn.textContent : "";
 
-  // ---- Add form: busy while the POST runs ----
-  if (createBtn) {
-    addForm.addEventListener("submit", function () {
-      createBtn.textContent = "Creating…";
-      createBtn.setAttribute("aria-busy", "true");
+  // ---- Add form, and the empty state's demo offer: busy while the POST runs ----
+  function busyOnSubmit(form, btn, text) {
+    form.addEventListener("submit", function () {
+      btn.textContent = text;
+      btn.setAttribute("aria-busy", "true");
       // A tick later, so disabling it doesn't cancel the submission.
-      setTimeout(function () { createBtn.disabled = true; }, 0);
+      setTimeout(function () { btn.disabled = true; }, 0);
     });
   }
+  function unbusy(btn, label) {
+    btn.textContent = label;
+    btn.removeAttribute("aria-busy");
+    btn.disabled = false;
+  }
+  if (createBtn) busyOnSubmit(addForm, createBtn, "Creating…");
+  if (demoBtn) busyOnSubmit(demoForm, demoBtn, "Adding…");
 
   // Back to a page the browser kept in its bfcache: the buttons still
   // carry the busy state they were submitted with. Restore them, then
@@ -26,11 +36,8 @@
   // row deleted on the way out doesn't linger with a disabled Delete.
   window.addEventListener("pageshow", function (e) {
     if (!e.persisted) return;
-    if (createBtn) {
-      createBtn.textContent = createLabel;
-      createBtn.removeAttribute("aria-busy");
-      createBtn.disabled = false;
-    }
+    if (createBtn) unbusy(createBtn, createLabel);
+    if (demoBtn) unbusy(demoBtn, demoLabel);
     if (table) {
       Array.prototype.forEach.call(table.querySelectorAll(".delete-form button"), function (b) {
         b.disabled = false;

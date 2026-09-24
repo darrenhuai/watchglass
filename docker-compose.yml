@@ -1,14 +1,26 @@
 services:
   watchglass:
-    build: .
+    image: ghcr.io/darrenhuai/watchglass:latest
+    # build: .  # uncomment (and comment out image:) to build from a clone
     container_name: watchglass
     restart: unless-stopped
-    # Override PUID/PGID to match the owner of ./config on your host
-    # (e.g. Synology/Unraid/TrueNAS often aren't uid 1000); create the
-    # dir first with `mkdir -p ./config`. The image's baked-in uid 1000
-    # user only applies when nothing is bind-mounted over /config.
+    # Run as the owner of ./config so watchglass can write its config and
+    # history there. Create the dir first, then start it as yourself:
+    #   mkdir -p config && PUID=$(id -u) PGID=$(id -g) docker compose up -d
+    # (Synology/Unraid/TrueNAS users often aren't uid 1000.) A missing
+    # config/config.yaml is created on first start, with no watches.
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "127.0.0.1:8080:8080"   # loopback by default; widen deliberately
     volumes:
       - ./config:/config
+    # Lets a watch reach a camera (or fakecam.py) on the Docker host as
+    # http://host.docker.internal:<port>/...; inside the container,
+    # 127.0.0.1 is the container itself. Docker Desktop has this built in;
+    # on Linux this line adds it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Try it with no camera first: uncomment, then open http://127.0.0.1:8080
+    # (the demo keeps its files in /tmp and leaves ./config alone).
+    # environment:
+    #   - WATCHGLASS_DEMO=1

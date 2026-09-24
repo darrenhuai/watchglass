@@ -824,6 +824,39 @@ func TestDetailAndLiveShowErrorStatus(t *testing.T) {
 	if strings.Contains(body, "stale since") {
 		t.Errorf("a watch with no readings has nothing stale; body:\n%s", body)
 	}
+	if !strings.Contains(body, `data-hint=""`) {
+		t.Errorf("a refusal with no host to judge has no hint; body:\n%s", body)
+	}
+	_, body = get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(body, `<p class="status-hint" hidden></p>`) {
+		t.Errorf("the hint line should be there, empty and hidden; body:\n%s", body)
+	}
+
+	// A camera at 127.0.0.1 that refuses: the header says what that means
+	// inside Docker or WSL, under the sentence, and the Live poll carries
+	// the same advice for app.js to keep in step.
+	t.Setenv("WATCHGLASS_IN_CONTAINER", "")
+	s.reg.SetHealth("printer", state.Health{Down: true, Since: time.Now(),
+		Message: `no reading for 3 consecutive polls: grab: snapshot http://127.0.0.1:8102/snapshot.jpg: Get "http://127.0.0.1:8102/snapshot.jpg": dial tcp 127.0.0.1:8102: connect: connection refused`})
+	hint := "If watchglass runs in Docker or WSL, 127.0.0.1 is that container, not your computer. Use the host&#39;s LAN IP or host.docker.internal."
+	_, body = get(t, s.Handler(), "/watch/printer")
+	if !strings.Contains(body, `<p class="status-summary" title="Connection refused by 127.0.0.1:8102">Connection refused by 127.0.0.1:8102</p>`) ||
+		!strings.Contains(body, `<p class="status-hint">`+hint+`</p>`) {
+		t.Errorf("detail header should show the loopback hint under the summary; body:\n%s", body)
+	}
+	_, body = get(t, s.Handler(), "/watch/printer/live")
+	if !strings.Contains(body, `data-hint="`+hint+`"`) {
+		t.Errorf("live fragment should carry the hint; body:\n%s", body)
+	}
+	js, err := assets.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"updateStatus(ds.state, ds.summary, ds.message, ds.hint);", `querySelector(".status-hint")`, "hintEl.hidden = !hint;"} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("app.js should keep the hint in step with the poll: missing %q", want)
+		}
+	}
 }
 
 // must_fix 3: server-side rejections on create/save must render the app's
@@ -1991,10 +2024,46 @@ func TestFiredIsAVisibleTag(t *testing.T) {
 		t.Error("fired should no longer be screen-reader-only text")
 	}
 
+	if strings.Contains(row, "fired-ago") {
+		t.Errorf("the fired reading carries the tag, not a \"fired … ago\" note; row:\n%s", row)
+	}
+
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "PRINTING 12%", PNG: pngBytes(t)})
 	_, body = get(t, s.Handler(), "/")
-	if row := body[strings.Index(body, `data-label="Last reading"`):]; strings.Contains(row, "tag-fired") || !strings.Contains(row, "led-green") {
+	row = body[strings.Index(body, `data-label="Last reading"`):]
+	if strings.Contains(row, "tag-fired") || !strings.Contains(row, "led-green") {
 		t.Errorf("a reading that did not fire must carry no fired tag; row:\n%s", row)
+	}
+	// The fire itself isn't forgotten: the fired sample was latest for one
+	// interval, less than the list's poll period, so the row says when it
+	// was, after the current reading.
+	if !strings.Contains(row, `<span class="mono">PRINTING 12%</span> <span class="fired-ago">fired just now</span></span>`) {
+		t.Errorf("a watch that fired before its latest reading should say so on the dashboard; row:\n%s", row)
+	}
+	// Other rows never fired and say nothing.
+	if n := strings.Count(body, "fired-ago"); n != 1 {
+		t.Errorf("only the watch that fired gets the note, got %d; body:\n%s", n, body)
+	}
+}
+
+func TestAgoText(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "just now"},
+		{4 * time.Second, "just now"},
+		{12 * time.Second, "12 s ago"},
+		{59 * time.Second, "59 s ago"},
+		{time.Minute, "1 min ago"},
+		{59*time.Minute + 59*time.Second, "59 min ago"},
+		{time.Hour, "1 h ago"},
+		{47 * time.Hour, "47 h ago"},
+		{48 * time.Hour, "2 days ago"},
+	} {
+		if got := agoText(c.d); got != c.want {
+			t.Errorf("agoText(%v) = %q, want %q", c.d, got, c.want)
+		}
 	}
 }
 

@@ -2,8 +2,10 @@ package source
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/demo"
 )
 
 // For builds the frame source a watch's URL calls for. Unknown schemes are
@@ -19,6 +21,8 @@ func For(w config.Watch) (Source, error) {
 		return NewHTTPSnapshot(w.Source), nil
 	case "ffmpeg":
 		return NewFFmpeg(w.Source)
+	case "demo":
+		return demo.NewSource(strings.TrimPrefix(w.Source, demo.Prefix))
 	}
 	return nil, fmt.Errorf("watch %q: unhandled source kind %q", w.Name, kind)
 }

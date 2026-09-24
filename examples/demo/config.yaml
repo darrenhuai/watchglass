@@ -1,27 +1,30 @@
 # watchglass demo rig config — watches the fake printer camera (fakecam.py).
 # Run: go run ./cmd/watchglass -config examples/demo/config.yaml -db demo.db -listen 127.0.0.1:8123
-# See examples/demo/README.md for the full two-terminal walkthrough.
+# See examples/demo/README.md for the full two-terminal walkthrough. To try
+# watchglass without any of this, run `watchglass -demo` instead.
 watches:
   - name: demo-printer
     source: http://127.0.0.1:8100/snapshot.jpg
     interval: 2s
     # Covers the big "PRINTING NN%" / "PRINT COMPLETE" status line in the
-    # generated frames (examples/demo/frames/, 640x360 canvas, status text
-    # centered in the pixel band x:20-620 y:150-230 — see frames/README note
-    # below). Normalized to 0.0-1.0 of the 640x360 frame.
+    # frames (internal/demo/frames/printer/, 640x360 canvas, status text in
+    # the pixel band x:20-620 y:150-230). Normalized to 0.0-1.0 of the frame.
     region: {x: 0.0312, y: 0.4167, w: 0.9375, h: 0.2222}
+    # Fires on the text itself. Needs tesseract on PATH, or add
+    # `engine: rapidocr` with a Python that has `pip install rapidocr
+    # onnxruntime` — without one of them watchglass refuses to start this
+    # watch. No OCR engine at all? Swap in the pixel_change block below.
     trigger:
-      type: pixel_change
-      threshold: 20   # fire when >20% of the status-line region changes
+      type: ocr_match
+      pattern: "(?i)print complete"
+      confirm: 2
       cooldown: 30s
     notify: []
 
-    # Swap the block above for this one to fire on the actual text instead
-    # of raw pixel motion (the "OCR really read it" money shot in the launch
-    # GIF). Requires tesseract on PATH, or `engine: rapidocr` with a Python
-    # that has `pip install rapidocr onnxruntime` — see README.md.
+    # Fire on raw pixel motion instead (no OCR engine needed): only the
+    # flip to the inverted PRINT COMPLETE screen changes more than 20% of
+    # the region.
     # trigger:
-    #   type: ocr_match
-    #   pattern: "(?i)print complete"
-    #   confirm: 2
+    #   type: pixel_change
+    #   threshold: 20
     #   cooldown: 30s

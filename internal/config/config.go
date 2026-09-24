@@ -14,6 +14,8 @@ import (
 	"unicode"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/darrenhuai/watchglass/internal/demo"
 )
 
 // Preprocess holds per-watch image adjustments applied before OCR so text on
@@ -238,6 +240,9 @@ func SourceKind(source string) (string, error) {
 			}
 			return "", fmt.Errorf("source %q has nothing after %s", source, p.prefix)
 		}
+		if p.kind == "demo" && !demo.Valid(strings.TrimSpace(strings.TrimPrefix(source, p.prefix))) {
+			return "", fmt.Errorf("demo source %q: expected %s", source, demo.Names())
+		}
 		return p.kind, nil
 	}
 	return "", fmt.Errorf("unsupported source %q: expected one of "+
@@ -246,11 +251,16 @@ func SourceKind(source string) (string, error) {
 
 // sourcePrefixes are the source spellings SourceKind accepts, with the
 // tier that reads each: "http" for plain snapshot URLs (pure Go, no
-// dependencies) or "ffmpeg" for anything needing a decoder subprocess.
+// dependencies), "ffmpeg" for anything needing a decoder subprocess, or
+// "demo" for the fake cameras built into the binary (internal/demo).
+// demo: is left out of the unsupported-source message on purpose: that
+// message is about cameras, and the demo sources are named where they
+// are offered.
 var sourcePrefixes = []struct{ prefix, kind string }{
 	{"rtsp://", "ffmpeg"}, {"rtsps://", "ffmpeg"},
 	{"http://", "http"}, {"https://", "http"},
 	{"ffmpeg:", "ffmpeg"}, {"v4l2:", "ffmpeg"}, {"dshow:", "ffmpeg"},
+	{demo.Prefix, "demo"},
 }
 
 // Validate applies defaults (interval 5s, confirm 3) and validates every

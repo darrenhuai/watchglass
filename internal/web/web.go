@@ -62,6 +62,11 @@ type Server struct {
 	// "u" FuncMap entry's closure over Server, so it must not change once
 	// serving starts.
 	BasePath string
+	// DemoDir is set when watchglass runs with -demo: the folder its
+	// throwaway config and history live in. Every page then carries a
+	// banner saying so (layout.html, the "demoDir" func). Set once, before
+	// Handler is called, like BasePath.
+	DemoDir string
 
 	cfgPath string
 	mu      sync.Mutex // guards cfg
@@ -107,12 +112,15 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		},
 		"dur": func(d config.Duration) string { return d.String() },
 		"u":   func(p string) string { return s.BasePath + p },
+		// demoDir reads DemoDir fresh for the same reason "u" does.
+		"demoDir": func() string { return s.DemoDir },
 		// watchURL is the only way a watch name enters a URL: names may hold
 		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
 		// to be decoded (or path-normalized) into a different name.
 		"watchURL":  s.watchURL,
 		"pageTitle": pageTitle,
 		"shortErr":  summarizeErr,
+		"errHint":   errHint,
 		"reading":   viewReading,
 		"pct":       confidencePct,
 		"lowConf":   func(c float64) bool { return c < lowConfidence },
@@ -166,7 +174,20 @@ func (s *Server) Handler() http.Handler {
 	// carries no Sec-Fetch-Site/Origin headers either way — keeps working
 	// unchanged on both layers.
 	cop := http.NewCrossOriginProtection()
-	return s.withAuth(cop.Handler(mux))
+	return identify(s.withAuth(cop.Handler(mux)))
+}
+
+// IdentityHeader is set on every response, a 401 from withAuth included,
+// so `watchglass -healthcheck` (and a double-clicked second copy looking
+// for the first) can tell this server from whatever else answers on the
+// port: Jenkins, Tomcat and dev servers all like 8080 too.
+const IdentityHeader = "X-Watchglass"
+
+func identify(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(IdentityHeader, "1")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withAuth enforces HTTP Basic over the whole UI when an auth block is
@@ -225,6 +246,28 @@ type indexRow struct {
 	Latest state.Sample
 	Has    bool
 	Status watchStatus
+	// FiredAgo is "12 s ago" when the watch fired before its latest
+	// reading (that one carries the fired tag itself). The fired sample
+	// only stays latest for one interval, shorter than index.js's poll, so
+	// without this a fire could come and go without the list showing it.
+	FiredAgo string
+}
+
+// agoText says how long ago something was, in the same words as app.js's
+// stale badge: "just now", "40 s ago", "3 min ago", "5 h ago", "2 days ago".
+// The list is re-rendered on every poll, so it stays current.
+func agoText(d time.Duration) string {
+	switch {
+	case d < 5*time.Second:
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%d s ago", int(d/time.Second))
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d/time.Minute))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d h ago", int(d/time.Hour))
+	}
+	return fmt.Sprintf("%d days ago", int(d/(24*time.Hour)))
 }
 
 // watchStatus is a watch's true health for display, derived from three
@@ -294,14 +337,19 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 	watches := append([]config.Watch(nil), s.cfg.Watches...)
 	s.mu.Unlock()
 	rows := make([]indexRow, 0, len(watches))
+	now := time.Now()
 	for _, wc := range watches {
 		latest, has := s.reg.Latest(wc.Name)
-		rows = append(rows, indexRow{
+		row := indexRow{
 			Watch:  wc,
 			Latest: latest,
 			Has:    has,
 			Status: s.statusFor(wc.Name, s.isRunning(wc.Name)),
-		})
+		}
+		if t, ok := s.reg.LastFired(wc.Name); ok && !(has && latest.Fired) {
+			row.FiredAgo = agoText(now.Sub(t))
+		}
+		rows = append(rows, row)
 	}
 	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile()}
 	if r.Method == http.MethodGet && r.Header.Get(pollHeader) == "" {
@@ -370,7 +418,8 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 
 // sourceError and grabError answer /snapshot and /test when no frame could
 // be had. The body is text/plain in two parts: a one-line summary for
-// people, then the full error chain. app.js shows the first line and keeps
+// people (plus errHint's advice, when there is some), then the full error
+// chain. app.js shows the first line and keeps
 // the rest behind a "Technical detail" disclosure, always via textContent:
 // the chain echoes the source URL, which is user input.
 func sourceError(w http.ResponseWriter, err error) {
@@ -378,7 +427,7 @@ func sourceError(w http.ResponseWriter, err error) {
 }
 
 func grabError(w http.ResponseWriter, err error) {
-	http.Error(w, summarizeErr(err.Error())+"\n"+err.Error(), http.StatusBadGateway)
+	http.Error(w, withHint(summarizeErr(err.Error()), err.Error())+"\n"+err.Error(), http.StatusBadGateway)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

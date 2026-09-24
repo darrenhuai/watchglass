@@ -3,7 +3,9 @@ package web
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -97,6 +99,49 @@ func summarizeErr(msg string) string {
 		return "ffmpeg couldn't read the stream: " + lowerFirst(clip(firstLine(innermost(msg))))
 	}
 	return upperFirst(clip(firstLine(innermost(msg))))
+}
+
+// errHint is a second sentence for an error whose summary alone would send
+// people the wrong way, or "" when there is nothing to add. Today that is
+// one case: a camera at 127.0.0.1 (or ::1, or localhost) refused the
+// connection. Inside Docker, and in WSL's default NAT mode, 127.0.0.1 is
+// the container or VM watchglass runs in, not the computer the camera (or
+// the demo's fakecam.py) is on, and "Connection refused" says nothing
+// about that. WATCHGLASS_IN_CONTAINER (set by the image) makes it certain.
+func errHint(msg string) string {
+	low := strings.ToLower(msg)
+	if !strings.Contains(low, "refused") && !strings.Contains(low, "no connection could be made") {
+		return ""
+	}
+	if !loopbackHost(errHost(msg)) {
+		return ""
+	}
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("WATCHGLASS_IN_CONTAINER"))); v == "1" || v == "true" || v == "yes" || v == "on" {
+		return "watchglass runs in a container here, and 127.0.0.1 is the container itself. Use the camera host's LAN IP, or host.docker.internal for a camera on the Docker host."
+	}
+	return "If watchglass runs in Docker or WSL, 127.0.0.1 is that container, not your computer. Use the host's LAN IP or host.docker.internal."
+}
+
+// loopbackHost reports whether hostport (from errHost) names this machine.
+func loopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// withHint is summary followed by errHint's sentence, when there is one.
+func withHint(summary, msg string) string {
+	if h := errHint(msg); h != "" {
+		return strings.TrimSuffix(summary, ".") + ". " + h
+	}
+	return summary
 }
 
 // errHost returns host[:port] of the first URL in msg, without userinfo.
@@ -193,6 +238,7 @@ var configFieldErrors = []struct {
 	{"notify: empty URL", "notify", "Remove the empty notify line."},
 	{"source is required", "source", "Enter the camera's source URL."},
 	{"source has no arguments", "source", "An ffmpeg: source needs its input arguments after the colon, for example ffmpeg:-i rtsp://cam/stream."},
+	{"expected demo:printer or demo:sevenseg", "source", "A demo source is demo:printer or demo:sevenseg."},
 	{"has nothing after", "source", "The source needs an address after the scheme, for example http://camera/snapshot.jpg or rtsp://camera/stream."},
 	{"name is required", "name", "Enter a name for the watch."},
 	{"leading or trailing whitespace", "name", "The name can't start or end with a space."},

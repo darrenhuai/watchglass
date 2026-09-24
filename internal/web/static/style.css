@@ -237,6 +237,23 @@ main:focus { outline: none; }
   background: var(--text-dim);
 }
 
+/* -demo: a full-bleed line under the topbar, content-aligned like it.
+   Neutral on purpose: it is information, not a state or a warning. */
+.demo-banner {
+  padding: var(--space-2) var(--space-5);
+  padding-inline: max(var(--space-5), calc((100% - var(--content-max)) / 2 + var(--space-5)));
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.demo-banner-text {
+  max-width: 100ch;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.demo-banner-text strong { color: var(--text); font-weight: var(--fw-strong); }
+
 /* ---- LED status dots -----------------------------------------------------
    Restrained signal indicators, always paired with text. Shape is a second
    channel next to hue: running = solid green, fired = solid amber inside a
@@ -319,6 +336,16 @@ main:focus { outline: none; }
   font-size: var(--fs-base);
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+/* errHint's advice under the sentence: what to try, not what broke, so
+   it is quieter than the summary and never clamped. */
+.status-hint {
+  margin: var(--space-1) 0 0;
+  max-width: 65ch;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
 }
 
 .tech-detail { margin-top: var(--space-1); font-size: var(--fs-sm); color: var(--text-faint); }
@@ -967,6 +994,9 @@ select.needs-engine option { color: var(--text); }
 }
 .reading-body > .mono { min-width: 0; }
 .reading-body > .tag { flex: none; }
+/* "fired 12 s ago": a fire that newer readings have since replaced. Amber
+   for fired, as the tag, but quieter text and no pill, since it is past. */
+.reading-body > .fired-ago { flex: none; color: var(--amber); font-size: var(--fs-sm); white-space: nowrap; }
 /* Narrow table widths (721-899px) left "Last reading" ~70px: readings
    broke mid-token and the 3-line clamp cut the value off. The floor fits
    "PRINTING 34%" on one line; the tighter cell padding below 900px pays for
@@ -1064,6 +1094,18 @@ select.needs-engine option { color: var(--text); }
   padding-top: var(--space-5);
   border-top: 1px solid var(--border);
 }
+/* The way in without a camera: secondary to the form above it, so an
+   outline button on a quiet line under a hairline. */
+.demo-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-hair);
+}
+.demo-offer-text { margin: 0; color: var(--text-dim); text-wrap: pretty; }
 
 /* ---- Confirmation dialog (index.js; delete) ------------------------------*/
 .dialog {
@@ -1882,6 +1924,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
 @media (max-width: 720px) {
   main { padding: var(--space-4); }
   .topbar { padding: var(--space-3) var(--space-4); }
+  .demo-banner { padding: var(--space-2) var(--space-4); }
   /* Not a bare .panel: that would beat .panel-table{padding:0} on order and
      indent the edge-to-edge card table. */
   .panel:not(.panel-table) { --panel-pad: var(--space-4); padding: var(--panel-pad); }

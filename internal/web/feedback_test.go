@@ -144,14 +144,18 @@ func TestGrabErrorsArePlainTextSummaryThenDetail(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
 		t.Fatalf("test grab failure: status %d, Content-Type %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
-	if !strings.HasPrefix(body, "Connection refused by 127.0.0.1:1\nsnapshot http://127.0.0.1:1/x?a=<img") {
+	// The summary line carries errHint's loopback advice after the
+	// sentence: 127.0.0.1 refused, and inside Docker or WSL that address
+	// is the container itself.
+	if !strings.HasPrefix(body, "Connection refused by 127.0.0.1:1. If watchglass runs in Docker or WSL, ") ||
+		!strings.Contains(body, "host.docker.internal.\nsnapshot http://127.0.0.1:1/x?a=<img") {
 		t.Errorf("body should be summary, newline, raw chain; got %q", body)
 	}
 	if strings.Contains(body, "snapshot failed:") {
 		t.Errorf("the redundant 'snapshot failed:' wrapper should be gone; got %q", body)
 	}
 	resp, body = get(t, s.Handler(), "/watch/printer/snapshot")
-	if resp.StatusCode != http.StatusBadGateway || !strings.HasPrefix(body, "Connection refused by 127.0.0.1:1\n") {
+	if resp.StatusCode != http.StatusBadGateway || !strings.HasPrefix(body, "Connection refused by 127.0.0.1:1. If watchglass") {
 		t.Errorf("snapshot failure: status %d body %q", resp.StatusCode, body)
 	}
 

@@ -1,5 +1,5 @@
 # watchglass demo rig config — watches the fake seven-segment display
-# (fakecam.py --frames examples/demo/frames-sevenseg) with the built-in
+# (fakecam.py --frames sevenseg) with the built-in
 # decoder, no tesseract needed.
 # Run: go run ./cmd/watchglass -config examples/demo/config-sevenseg.yaml -db demo.db -listen 127.0.0.1:8123
 # See examples/demo/README.md.

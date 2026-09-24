@@ -1,0 +1,41 @@
+# systemd unit for running watchglass as a service on Linux.
+#
+# Install (as root):
+#   install -m 0755 watchglass /usr/local/bin/watchglass
+#   useradd --system --home-dir /var/lib/watchglass --shell /usr/sbin/nologin watchglass
+#   usermod -aG video watchglass   # only for v4l2: (USB/capture) sources
+#   install -m 0644 watchglass.service /etc/systemd/system/watchglass.service
+#   systemctl daemon-reload && systemctl enable --now watchglass
+#
+# Then open http://127.0.0.1:8080 on this machine. The config is created
+# empty on first start at /var/lib/watchglass/config.yaml. Follow the log
+# with: journalctl -u watchglass -f
+#
+# To reach the UI from other machines, add an auth: block to config.yaml,
+# then change -listen to 0.0.0.0:8080 below (or put it behind a reverse
+# proxy).
+
+[Unit]
+Description=watchglass: notifications when a region of a camera view changes
+Documentation=https://github.com/darrenhuai/watchglass
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=watchglass
+Group=watchglass
+# Creates /var/lib/watchglass, owned by the user above, before starting.
+StateDirectory=watchglass
+WorkingDirectory=/var/lib/watchglass
+ExecStart=/usr/local/bin/watchglass -config /var/lib/watchglass/config.yaml -db /var/lib/watchglass/watchglass.db -listen 127.0.0.1:8080
+Restart=on-failure
+RestartSec=5
+# watchglass only needs its state directory; the rest of the system is
+# read-only to it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

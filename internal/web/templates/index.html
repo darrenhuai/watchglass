@@ -43,8 +43,9 @@
           <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span></span>
         {{else if .Has}}{{$r := reading .Watch.Engine .Latest.Reading}}
           {{/* Fired stays first: an alert is never hidden behind "unreadable". */}}
+          {{/* An earlier fire, once newer readings came in: "fired 12 s ago". */}}
           <span class="led {{if .Latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}</span>
+          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}</span>
         {{else}}
           <span class="led led-off" aria-hidden="true"></span>
           <span class="reading-pending">No readings yet</span>
@@ -91,6 +92,14 @@
     <li>Choose what should trigger an alert, then save.</li>
   </ol>
   {{template "addform" .}}
+  {{/* No camera to hand: the same Create, on the fake printer screen built
+       into the binary (source demo:printer, internal/demo). */}}
+  <form class="demo-offer" method="post" action="{{u "/watch/new"}}">
+    <input type="hidden" name="name" value="demo-printer">
+    <input type="hidden" name="source" value="demo:printer">
+    <p class="demo-offer-text">No camera? Try it on the 3D printer screen built into watchglass.</p>
+    <button type="submit" class="btn btn-outline">Add a demo watch</button>
+  </form>
 </section>
 {{end}}
 <script src="{{u "/static/index.js"}}" defer></script>
@@ -127,7 +136,7 @@
   </div>
   <div class="field field-grow{{if $srcErr}} field-invalid{{end}}">
     <label for="new-source">Source URL</label>
-    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg or rtsp://…" required value="{{.Form.Val "source" ""}}" spellcheck="false" autocapitalize="off" inputmode="url" pattern="\s*(?:(?:https?|rtsps?):\/\/|(?:v4l2|dshow|ffmpeg):)\s*\S.*" title="Start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:." aria-describedby="{{if $srcErr}}err-source {{end}}hint-source"{{if $srcErr}} aria-invalid="true"{{if not $nameErr}} autofocus{{end}}{{end}}>
+    <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg or rtsp://…" required value="{{.Form.Val "source" ""}}" spellcheck="false" autocapitalize="off" inputmode="url" pattern="\s*(?:(?:(?:https?|rtsps?):\/\/|(?:v4l2|dshow|ffmpeg):)\s*\S.*|demo:\s*(?:printer|sevenseg)\s*)" title="Start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:." aria-describedby="{{if $srcErr}}err-source {{end}}hint-source"{{if $srcErr}} aria-invalid="true"{{if not $nameErr}} autofocus{{end}}{{end}}>
     {{with $srcErr}}<p id="err-source" class="field-error">{{.}}</p>{{end}}
     <p id="hint-source" class="field-hint">An HTTP(S) snapshot, an <span class="mono">rtsp://</span> stream, a <span class="mono">v4l2:</span> or <span class="mono">dshow:</span> device, or <span class="mono">ffmpeg:</span> input arguments.</p>
   </div>

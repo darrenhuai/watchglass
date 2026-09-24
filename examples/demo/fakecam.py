@@ -2,7 +2,8 @@
 """fakecam.py — a fake HTTP snapshot camera for the watchglass demo rig.
 
 Serves GET /snapshot.jpg, returning one of the six PNG frames in
-./frames/frame_0.png .. frame_5.png. watchglass's HTTP source decodes the
+internal/demo/frames/printer/frame_0.png .. frame_5.png (the same frames
+the watchglass binary embeds for `watchglass -demo`). watchglass's HTTP source decodes the
 body by sniffing its magic bytes (image/Decode), not by URL extension or
 Content-Type, so serving PNG bytes at a ".jpg" path — the shape a lot of
 real IP cameras use — is intentional and works fine; we still send
@@ -23,8 +24,10 @@ Frame selection:
   * --bind ADDR: interface to listen on (default 127.0.0.1). Use 0.0.0.0
     to feed a watchglass running in a container, which reaches the host
     at host.docker.internal:<port> rather than 127.0.0.1.
-  * --frames DIR: serve frame_0.png .. frame_5.png from DIR instead of
-    ./frames — ./frames-sevenseg is the seven-segment display rig.
+  * --frames DIR|printer|sevenseg: serve frame_0.png .. frame_5.png from
+    DIR, or name one of the built-in sets: "sevenseg" is the seven-segment
+    display rig. The old examples/demo/frames and frames-sevenseg paths
+    still work; they map to the built-in sets.
 
 Only GET /snapshot.jpg is served; anything else is a 404. stdlib only.
 """
@@ -34,8 +37,26 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-FRAMES_DIR = Path(__file__).parent / "frames"
+# The frames live with the Go code that embeds them (internal/demo), so the
+# demo camera built into the binary and this script show the same pictures.
+BUILTIN_FRAMES = Path(__file__).resolve().parent.parent.parent / "internal" / "demo" / "frames"
+FRAMES_DIR = BUILTIN_FRAMES / "printer"
 FRAME_COUNT = 6
+# Where the frames used to be, relative to this script, for commands and
+# scripts written before they moved.
+LEGACY_DIRS = {"frames": "printer", "frames-sevenseg": "sevenseg"}
+
+
+def resolve_frames(arg):
+    """A --frames value: a directory, a built-in set's name, or an old path."""
+    path = Path(arg)
+    if path.is_dir():
+        return path
+    if str(arg) in ("printer", "sevenseg"):
+        return BUILTIN_FRAMES / str(arg)
+    if path.name in LEGACY_DIRS:
+        return BUILTIN_FRAMES / LEGACY_DIRS[path.name]
+    return path
 
 
 def load_frames(frames_dir=FRAMES_DIR):
@@ -90,10 +111,12 @@ def main():
                          help="serve this frame forever (for scripted recordings)")
     parser.add_argument("--bind", default="127.0.0.1",
                          help="interface to listen on (default 127.0.0.1; 0.0.0.0 for containers)")
-    parser.add_argument("--frames", default=FRAMES_DIR, type=Path,
-                         help="directory holding frame_0.png .. frame_5.png (default ./frames)")
+    parser.add_argument("--frames", default=FRAMES_DIR,
+                         help="directory holding frame_0.png .. frame_5.png, or printer / sevenseg "
+                              "for a built-in set (default printer)")
     args = parser.parse_args()
 
+    args.frames = resolve_frames(args.frames)
     frames = load_frames(args.frames)
     start = time.time()
     handler = make_handler(frames, start, args.period, args.once_complete, args.hold)

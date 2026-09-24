@@ -47,6 +47,37 @@ func TestDrop(t *testing.T) {
 // Registry.GetHealth — a fresh registry must read as healthy (no entry at
 // all), SetHealth must record a Down verdict, and Drop must forget it along
 // with the watch's samples.
+// A fire has to outlive the ring: with interval 2s and n 10 the fired
+// sample is gone 20 s later, and the dashboard still says when it fired.
+func TestLastFiredOutlivesTheRing(t *testing.T) {
+	r := New(3)
+	if _, ok := r.LastFired("w"); ok {
+		t.Error("LastFired before any fire should be !ok")
+	}
+	r.Add("w", Sample{TS: time.Unix(1, 0), Reading: "a"})
+	if _, ok := r.LastFired("w"); ok {
+		t.Error("a reading that didn't fire must not count as a fire")
+	}
+	r.Add("w", Sample{TS: time.Unix(2, 0), Reading: "b", Fired: true})
+	for i := 3; i <= 10; i++ {
+		r.Add("w", Sample{TS: time.Unix(int64(i), 0), Reading: "c"})
+	}
+	if got, ok := r.LastFired("w"); !ok || !got.Equal(time.Unix(2, 0)) {
+		t.Errorf("LastFired = %v, %v; want the fire at t=2 after it left the ring", got, ok)
+	}
+	r.Add("w", Sample{TS: time.Unix(11, 0), Reading: "d", Fired: true})
+	if got, _ := r.LastFired("w"); !got.Equal(time.Unix(11, 0)) {
+		t.Errorf("LastFired = %v, want the newer fire at t=11", got)
+	}
+	if _, ok := r.LastFired("other"); ok {
+		t.Error("another watch's fire must not leak")
+	}
+	r.Drop("w")
+	if _, ok := r.LastFired("w"); ok {
+		t.Error("Drop should forget the last fire too")
+	}
+}
+
 func TestHealthDefaultsToNoEntry(t *testing.T) {
 	r := New(3)
 	if h, ok := r.GetHealth("w"); ok {

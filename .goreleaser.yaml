@@ -1,23 +1,32 @@
 version: 2
 project_name: watchglass
 builds:
-  - main: ./cmd/watchglass
+  # Two builds that differ only in their systems, so the Linux archives
+  # can carry the systemd unit and the others can leave it out without an
+  # empty file glob (which goreleaser warns about for every archive).
+  - &build
+    id: linux
+    main: ./cmd/watchglass
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      # main.version is what `watchglass -version` and the start-up line say.
+      - -s -w -X main.version={{ .Version }}
     goos:
       - linux
-      - windows
-      - darwin
     goarch:
       - amd64
       - arm64
       - arm
     goarm:
       - "7"
+  - <<: *build
+    id: other
+    goos:
+      - windows
+      - darwin
     ignore:
       - goos: windows
         goarch: arm64
@@ -26,14 +35,77 @@ builds:
       - goos: darwin
         goarch: arm
 archives:
-  - formats: [tar.gz]
+  # No version in the name, so .../releases/latest/download/<name> is a
+  # stable link (watchglass_linux_amd64.tar.gz), and everything unpacks
+  # into one folder of the same name rather than into the current one.
+  - &archive
+    id: linux
+    ids: [linux]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    wrap_in_directory: true
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      # The systemd unit, at the top of the folder next to the binary.
+      - src: examples/watchglass.service
+        strip_parent: true
+        info:
+          mode: 0644
+  - <<: *archive
+    id: other
+    ids: [other]
     format_overrides:
       - goos: windows
         formats: [zip]
+    files:
+      - LICENSE
+      - README.md
 checksum:
   name_template: checksums.txt
 changelog:
-  use: git
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^chore"
+      - "^test"
+      - "^docs"
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: UI
+      regexp: '^ui'
+      order: 2
+    - title: Other changes
+      order: 999
 release:
   draft: false
   prerelease: auto
+  header: |
+    ## Highlights
+
+    <!-- Replace this line with two or three highlights before tagging. -->
+    The changes are listed below by kind.
+
+    ## Try it
+
+    No camera needed, the demo runs two built-in fake cameras:
+
+    ```
+    docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass:{{ .Version }}
+    ```
+
+    Or download the archive for your system below, unpack it and run `watchglass -demo`.
+    On Windows you can also double-click `watchglass.exe`: it creates an empty
+    `config.yaml` next to itself and opens the web UI. On Linux, in one line:
+
+    ```
+    curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass -demo
+    ```
+
+    Then open http://127.0.0.1:8080.

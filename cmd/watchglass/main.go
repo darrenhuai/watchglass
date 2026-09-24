@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -24,22 +26,59 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "path to config file")
+	configPath := flag.String("config", "config.yaml", "path to config file (created, with no watches, if it doesn't exist)")
 	dbPath := flag.String("db", "watchglass.db", "path to sqlite history database")
-	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; no auth yet)")
+	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; add an auth: block to config.yaml before exposing it)")
 	basePath := flag.String("base-path", "", "URL path prefix for links/redirects when running behind a reverse proxy that strips it (e.g. /watchglass); empty (default) leaves the UI unprefixed")
 	python := flag.String("python", "", "Python interpreter for engine: rapidocr (default: first of python3, python on PATH that imports rapidocr)")
+	demoMode := flag.Bool("demo", false, "try watchglass on two built-in fake cameras, with its own config in the temp dir that is reset on every start; -config and -db are not touched (also WATCHGLASS_DEMO=1)")
+	healthcheck := flag.Bool("healthcheck", false, "check that the watchglass on -listen answers: exit 0 if it does, 1 if not (for container health checks)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
-	bp, err := normalizeBasePath(*basePath)
-	if err != nil {
+	if *showVersion {
+		fmt.Println("watchglass", appVersion())
+		return
+	}
+	if *healthcheck {
+		os.Exit(runHealthcheck(*listen))
+	}
+
+	// Double-clicked in Explorer: the console window is watchglass's own
+	// and closes the moment it exits, so an error waits for Enter or
+	// nobody would ever read it.
+	explorer := launchedFromExplorer()
+	fail := func(err error) {
 		fmt.Fprintln(os.Stderr, "watchglass:", err)
+		if explorer {
+			waitForEnter()
+		}
 		os.Exit(1)
 	}
 
-	if err := run(*configPath, *dbPath, *listen, bp, *python); err != nil {
-		fmt.Fprintln(os.Stderr, "watchglass:", err)
-		os.Exit(1)
+	bp, err := normalizeBasePath(*basePath)
+	if err != nil {
+		fail(err)
+	}
+	o := options{
+		configPath:  *configPath,
+		dbPath:      *dbPath,
+		listen:      *listen,
+		basePath:    bp,
+		python:      *python,
+		demo:        *demoMode || envTrue("WATCHGLASS_DEMO"),
+		openBrowser: explorer,
+		tempDir:     os.TempDir(),
+	}
+	if o.demo {
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "config" || f.Name == "db" {
+				log.Printf("demo: ignoring -%s %s; the demo keeps its own config and history", f.Name, f.Value)
+			}
+		})
+	}
+	if err := run(o); err != nil {
+		fail(err)
 	}
 }
 
@@ -59,15 +98,61 @@ func normalizeBasePath(bp string) (string, error) {
 	return strings.TrimSuffix(bp, "/"), nil
 }
 
-func run(configPath, dbPath, listen, basePath, python string) error {
-	cfg, err := config.Load(configPath)
+func run(o options) error {
+	// Bound first, before any watch starts and before -demo resets its
+	// files: a port that is taken fails the start-up cleanly instead of
+	// after a second copy of every watch has begun polling (and
+	// notifying), or after a second -demo has wiped the first one's
+	// history.
+	ln, err := net.Listen("tcp", o.listen)
 	if err != nil {
-		return err
+		// Double-clicked while the first copy is still running: send the
+		// browser to that one rather than failing. Only if it really is
+		// watchglass answering; 8080 is a popular port.
+		if o.openBrowser && probeWatchglass(o.listen) == nil {
+			url := readyURL(o.listen, nil)
+			fmt.Printf("watchglass is already running at %s; opening it.\n", url)
+			return openBrowser(url)
+		}
+		return listenError(o.listen, err)
+	}
+	defer ln.Close()
+
+	var engines ocr.Engines
+	demoDir := ""
+	if o.demo {
+		// demo-printer reads the text when tesseract is here, so the
+		// engines are found before its config is written.
+		engines = detectEngines(o.python)
+		d, err := prepareDemo(o.tempDir, engines.Tesseract != nil)
+		if err != nil {
+			return err
+		}
+		defer d.unlock()
+		demoDir, o.configPath, o.dbPath = d.dir, d.cfgPath, d.dbPath
+		log.Printf("demo: two fake cameras; config and history in %s, reset on every start", d.dir)
+		if engines.Tesseract == nil {
+			log.Printf("demo: tesseract isn't installed, so demo-printer watches for the pixels changing instead of reading PRINT COMPLETE")
+		}
+	} else {
+		created, err := ensureConfig(o.configPath)
+		if err != nil {
+			return err
+		}
+		if created {
+			abs, _ := filepath.Abs(o.configPath)
+			log.Printf("created %s (empty; add watches in the web UI)", abs)
+		}
 	}
 
-	store, err := history.Open(dbPath)
+	cfg, err := config.Load(o.configPath)
 	if err != nil {
-		return fmt.Errorf("open history db: %w", err)
+		return permissionHint(err)
+	}
+
+	store, err := history.Open(o.dbPath)
+	if err != nil {
+		return fmt.Errorf("open history db: %w", permissionHint(err))
 	}
 	defer store.Close()
 
@@ -79,21 +164,8 @@ func run(configPath, dbPath, listen, basePath, python string) error {
 		}
 	}()
 
-	engines := ocr.Engines{SevenSeg: ocr.NewSevenSeg()}
-	if _, err := exec.LookPath("tesseract"); err == nil {
-		engines.Tesseract = ocr.NewTesseract()
-	}
-	// rapidocr is a Python package, so being on PATH proves nothing (on
-	// Windows python3 is usually the Store stub): the probe imports it.
-	// Bounded so a wedged interpreter can't hold up boot.
-	detectCtx, cancelDetect := context.WithTimeout(context.Background(), 15*time.Second)
-	rapid, err := ocr.DetectRapidOCR(detectCtx, python)
-	cancelDetect()
-	if err != nil {
-		log.Printf("rapidocr: unavailable (%v)", err)
-	} else {
-		engines.RapidOCR = rapid
-		log.Printf("rapidocr: using %s", rapid.Python)
+	if !o.demo {
+		engines = detectEngines(o.python)
 	}
 	if err := checkEngines(cfg.Watches, engines); err != nil {
 		return err
@@ -211,12 +283,13 @@ func run(configPath, dbPath, listen, basePath, python string) error {
 
 	startWatches(ctx, sup, cfg.Watches, log.Printf)
 
-	ws, err = web.New(configPath, cfg, sup, reg, engines, log.Printf)
+	ws, err = web.New(o.configPath, cfg, sup, reg, engines, log.Printf)
 	if err != nil {
 		return err
 	}
 	ws.RunCtx = ctx
-	ws.BasePath = basePath
+	ws.BasePath = o.basePath
+	ws.DemoDir = demoDir
 	if pub != nil {
 		// UI-triggered syncs and on-connect resyncs both now read the live
 		// watch list (UI saves via the config lock directly; on-connect via
@@ -229,21 +302,44 @@ func run(configPath, dbPath, listen, basePath, python string) error {
 		ws.OnConfigChanged = pub.SyncAsync
 	}
 
-	if cfg.Auth == nil && !strings.HasPrefix(listen, "127.0.0.1") && !strings.HasPrefix(listen, "localhost") &&
-		!strings.HasPrefix(listen, "[::1]") {
-		log.Printf("WARNING: web UI is listening on %s with NO authentication — anyone who can reach it "+
-			"controls your watches and sees your streams; add an auth: block or bind to localhost", listen)
+	if cfg.Auth == nil && !isLoopback(o.listen) {
+		// SUPERVISOR_TOKEN: the Home Assistant add-on runs this same image
+		// but publishes 8080 on every interface of the host, so there the
+		// WARNING is true and stays.
+		if envTrue("WATCHGLASS_IN_CONTAINER") && os.Getenv("SUPERVISOR_TOKEN") == "" {
+			// The image listens on 0.0.0.0 on purpose: inside a container
+			// that is the only way to be reachable at all, and the port
+			// mapping (127.0.0.1:8080:8080 in the compose file) decides who
+			// can. Every start said WARNING about it, and it isn't one.
+			log.Printf("listening on %s inside the container; the port mapping decides who can reach it (add an auth: block to config.yaml before publishing it beyond localhost)", o.listen)
+		} else {
+			log.Printf("WARNING: web UI is listening on %s with NO authentication — anyone who can reach it "+
+				"controls your watches and sees your streams; add an auth: block or bind to localhost", o.listen)
+		}
 	}
 
-	srv := &http.Server{Addr: listen, Handler: ws.Handler()}
+	srv := &http.Server{Handler: ws.Handler()}
 	go func() {
 		<-ctx.Done()
 		shCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		srv.Shutdown(shCtx)
 	}()
-	log.Printf("web UI on http://%s", listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	url := readyURL(o.listen, ln.Addr())
+	if o.basePath == "" {
+		log.Printf("watchglass %s ready: open %s", appVersion(), url)
+	} else {
+		// Behind a proxy that strips the prefix, every link on the page
+		// starts with basePath, which only resolves through the proxy.
+		log.Printf("watchglass %s ready on %s (links start with %s, so open it through your reverse proxy)", appVersion(), url, o.basePath)
+	}
+	if o.openBrowser {
+		if err := openBrowser(url); err != nil {
+			log.Printf("couldn't open a browser (%v); open %s yourself", err, url)
+		}
+		fmt.Println("watchglass is running. Close this window to stop it.")
+	}
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

@@ -3,13 +3,13 @@
      (data-key), so a scrolled or focused filmstrip keeps its place and its
      images. Nothing here is a live region: app.js announces real changes
      (a state change, a new fire) through #live-announce in detail.html,
-     never a timestamp that moved. data-state/data-summary/data-message keep
+     never a timestamp that moved. data-state/data-summary/data-hint/data-message keep
      the page header's status pill and error line in step without a reload;
      data-fired/data-ts tell a new fire from the one already shown.
      The badges only say how old what's below is; the error itself is shown
      once, under the page title. "Error" is not always a camera (an OCR
      pass can fail too), so the no-readings badge doesn't guess a cause. */}}
-<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-message="{{.Status.Message}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
+<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
 {{if eq .Status.State "error"}}
 {{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale — last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
 {{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}

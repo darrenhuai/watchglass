@@ -37,3 +37,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamped into the binary: `watchglass -version` and the start-up
+          # line report it (Dockerfile ARG VERSION).
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}

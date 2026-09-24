@@ -223,7 +223,8 @@ func TestAddFormPatternsAgreeWithServer(t *testing.T) {
 	// SourceKind's own list, because whether an rtsp source starts here
 	// depends on ffmpeg being installed.
 	for _, ok := range []string{"http://cam/snap.jpg", "https://cam/snap.jpg", "rtsp://cam/stream", "rtsps://cam/stream",
-		"v4l2:/dev/video0", "dshow:video=Cam", "ffmpeg:-i x", "ffmpeg: -i x", "  http://cam/snap.jpg  "} {
+		"v4l2:/dev/video0", "dshow:video=Cam", "ffmpeg:-i x", "ffmpeg: -i x", "  http://cam/snap.jpg  ",
+		"demo:printer", "demo:sevenseg", "demo: printer", " demo:sevenseg "} {
 		if !srcPat.MatchString(ok) {
 			t.Errorf("source pattern rejects %q, which the server accepts", ok)
 		}
@@ -231,7 +232,8 @@ func TestAddFormPatternsAgreeWithServer(t *testing.T) {
 	// The names here are plain counters: a source with "/" in a name would
 	// be rejected for the name, not the source.
 	n := 0
-	for _, bad := range []string{"notaurl", "cam/snap.jpg", "ftp://cam/x", "http://", "http://   ", "rtsp://", "v4l2:", "ffmpeg:", "ffmpeg:  ", "http:/cam", "", "  "} {
+	for _, bad := range []string{"notaurl", "cam/snap.jpg", "ftp://cam/x", "http://", "http://   ", "rtsp://", "v4l2:", "ffmpeg:", "ffmpeg:  ", "http:/cam", "", "  ",
+		"demo:", "demo:  ", "demo:camera", "demo:printerx", "demo:printer sevenseg"} {
 		if srcPat.MatchString(bad) {
 			t.Errorf("source pattern accepts %q, which the server rejects", bad)
 		}
@@ -241,7 +243,9 @@ func TestAddFormPatternsAgreeWithServer(t *testing.T) {
 			t.Errorf("server accepted source %q (status %d)", bad, resp.StatusCode)
 		}
 	}
-	for _, ok := range []string{"http://cam/snap.jpg", "https://cam/snap.jpg"} {
+	// The demo cameras need nothing installed, so the server is the
+	// reference for them too.
+	for _, ok := range []string{"http://cam/snap.jpg", "https://cam/snap.jpg", "demo:printer", "demo: sevenseg"} {
 		n++
 		resp, _ := postForm(t, h, "/watch/new", url.Values{"name": {"src-" + strings.Repeat("x", n)}, "source": {ok}})
 		if resp.StatusCode != 303 {
