@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +91,11 @@ func TestOCRWatchFiresAndNotifies(t *testing.T) {
 	if len(notifier.sent) != 1 {
 		t.Fatalf("expected 1 notification, got %v", notifier.sent)
 	}
+	// A14: the body names the watch, so a plain webhook (which gets only
+	// the body) still says which one fired.
+	if want := "watchglass: test-watch | test-watch: pattern matched — PRINT COMPLETE"; notifier.sent[0] != want {
+		t.Errorf("notification = %q, want %q", notifier.sent[0], want)
+	}
 }
 
 func TestPixelWatchBaselinesThenFires(t *testing.T) {
@@ -156,7 +162,7 @@ func TestOnReadingHookObservesTicks(t *testing.T) {
 		fired   bool
 	}
 	var calls []call
-	r.OnReading = func(ev trigger.Event, crop image.Image) {
+	r.OnReading = func(ev trigger.Event, crop image.Image, at time.Time) {
 		if crop == nil {
 			t.Error("hook received nil crop")
 		}
@@ -226,7 +232,7 @@ func TestTickOrdersStoreThenHookThenNotify(t *testing.T) {
 
 	var hookRan bool
 	const watchName = "test-watch"
-	r.OnReading = func(ev trigger.Event, crop image.Image) {
+	r.OnReading = func(ev trigger.Event, crop image.Image, at time.Time) {
 		// Assert: store already holds exactly 1 reading (record-before-hook)
 		readings, err := store.LastN(watchName, 5)
 		if err != nil {
@@ -389,7 +395,7 @@ func TestHealthNotifiesOnDownAndRecovery(t *testing.T) {
 	if len(notifier.sent) != 1 {
 		t.Fatalf("threshold reached: want 1 notification, got %v", notifier.sent)
 	}
-	if !strings.Contains(notifier.sent[0], "no reading for 2 consecutive polls") || !strings.Contains(notifier.sent[0], "connection refused") {
+	if !strings.Contains(notifier.sent[0], "watchglass: test-watch (down) | test-watch: no reading for 2 consecutive polls") || !strings.Contains(notifier.sent[0], "connection refused") {
 		t.Errorf("down notification = %q", notifier.sent[0])
 	}
 	if _, err := r.Tick(ctx); err == nil {
@@ -405,7 +411,7 @@ func TestHealthNotifiesOnDownAndRecovery(t *testing.T) {
 	if len(notifier.sent) != 2 {
 		t.Fatalf("recovery should notify, got %v", notifier.sent)
 	}
-	if !strings.Contains(notifier.sent[1], "recovered") {
+	if notifier.sent[1] != "watchglass: test-watch (healthy) | test-watch: stream recovered" {
 		t.Errorf("recovery notification = %q", notifier.sent[1])
 	}
 }
@@ -609,4 +615,186 @@ func TestOnHealthHookFires(t *testing.T) {
 	if len(events) != 2 || events[0].State != "down" || events[1].State != "healthy" {
 		t.Errorf("health hook events = %+v", events)
 	}
+}
+
+// errNotifier fails every send with err while err is set.
+type errNotifier struct {
+	fakeNotifier
+	err error
+}
+
+func (n *errNotifier) Send(ctx context.Context, title, body string) error {
+	if n.err != nil {
+		return n.err
+	}
+	return n.fakeNotifier.Send(ctx, title, body)
+}
+
+// A05: every alert's outcome is reported, a failure with its credentials
+// scrubbed out, and the fire's report carries the time its reading got.
+func TestDeliveryIsReportedPerAlert(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	engine := &fakeOCR{texts: []string{"PRINT COMPLETE", "idle"}}
+	const token = "Xa1b2C3d4E5f6G7h8I9j0KlMnOpQr"
+	w := watchCfg(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 1})
+	w.Notify = []string{"discord://" + token + "@123456789"}
+	n := &errNotifier{err: errors.New(`line 1 of 1 (discord://123456789): Post "https://discord.com/api/webhooks/123456789/` + token + `": 401 Unauthorized` + strings.Repeat(" padding", 40))}
+	r, err := New(w, src, engine, n, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readAt time.Time
+	r.OnReading = func(ev trigger.Event, crop image.Image, at time.Time) {
+		if ev.Fired {
+			readAt = at
+		}
+	}
+	var got []Delivery
+	r.OnDelivery = func(d Delivery) { got = append(got, d) }
+	ctx := context.Background()
+	if _, err := r.Tick(ctx); err != nil {
+		t.Fatalf("a failed send is reported, not returned: %v", err)
+	}
+	if len(got) != 1 || got[0].OK || got[0].Kind != "fired" || !got[0].TS.Equal(readAt) || readAt.IsZero() {
+		t.Fatalf("reports = %+v (reading at %v)", got, readAt)
+	}
+	if strings.Contains(got[0].Err, token) || !strings.Contains(got[0].Err, "401 Unauthorized") {
+		t.Errorf("Err = %q, want the cause without the token", got[0].Err)
+	}
+	if n := len([]rune(got[0].Err)); n > errMax {
+		t.Errorf("Err is %d runes, want at most %d", n, errMax)
+	}
+	// It stops firing (idle), fires again, and this time it goes through.
+	n.err = nil
+	r.Tick(ctx)
+	engine.texts = []string{"PRINT COMPLETE"}
+	r.Tick(ctx)
+	if len(got) != 2 || !got[1].OK || got[1].Err != "" {
+		t.Errorf("after the fix: reports = %+v", got)
+	}
+}
+
+// With no notify URLs a fire is reported as skipped, and nothing is sent.
+func TestDeliveryWithoutNotifierIsSkipped(t *testing.T) {
+	src := &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}
+	r, err := New(watchCfg(config.Trigger{Type: "ocr_match", Pattern: "GO", Confirm: 1}),
+		src, &fakeOCR{texts: []string{"GO"}}, nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Delivery
+	r.OnDelivery = func(d Delivery) { got = append(got, d) }
+	r.Tick(context.Background())
+	if len(got) != 1 || !got[0].Skipped || got[0].OK || got[0].Err != "" {
+		t.Errorf("reports = %+v, want one skipped", got)
+	}
+}
+
+// Health alerts are reported too, as "down" and "recovered".
+func TestHealthAlertsAreReported(t *testing.T) {
+	failing := &flakySource{fail: true}
+	n := &errNotifier{err: errors.New("status 500")}
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10})
+	w.HealthAfter = 1
+	r, err := New(w, failing, nil, n, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Delivery
+	r.OnDelivery = func(d Delivery) { got = append(got, d) }
+	r.Tick(context.Background())
+	n.err = nil
+	failing.fail = false
+	r.Tick(context.Background())
+	if len(got) != 2 || got[0].Kind != "down" || got[0].OK || got[0].Err != "status 500" || got[1].Kind != "recovered" || !got[1].OK {
+		t.Errorf("reports = %+v", got)
+	}
+}
+
+// blockingNotifier holds every send until release is closed.
+type blockingNotifier struct {
+	release chan struct{}
+	calls   chan string
+}
+
+func (b *blockingNotifier) Send(ctx context.Context, title, body string) error {
+	select {
+	case b.calls <- body:
+	default:
+	}
+	<-b.release
+	return nil
+}
+
+// A notification service that hangs never holds up polling: under Run the
+// send happens on its own goroutine, the poll loop keeps its interval, and
+// the report goes Pending first, then OK once the send returns.
+func TestSlowNotifierDoesNotDelayPolling(t *testing.T) {
+	src := &countingSource{}
+	w := watchCfg(config.Trigger{Type: "pixel_change", Threshold: 10, Confirm: 1})
+	w.Interval = config.Duration(20 * time.Millisecond)
+	n := &blockingNotifier{release: make(chan struct{}), calls: make(chan string, 64)}
+	r, err := New(w, src, nil, n, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reports := make(chan Delivery, 256)
+	r.OnDelivery = func(d Delivery) { reports <- d }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	select {
+	case <-n.calls:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no alert was ever sent")
+	}
+	before := src.grabs()
+	time.Sleep(300 * time.Millisecond) // the first send is still hanging
+	if after := src.grabs(); after-before < 5 {
+		t.Errorf("polling stalled behind a hanging send: %d grabs in 300ms", after-before)
+	}
+	select {
+	case first := <-reports:
+		if !first.Pending {
+			t.Errorf("first report = %+v, want Pending", first)
+		}
+	case <-time.After(time.Second):
+		t.Error("no Pending report while the send hangs")
+	}
+	close(n.release)
+	deadline := time.After(3 * time.Second)
+	for ok := false; !ok; {
+		select {
+		case d := <-reports:
+			ok = d.OK
+		case <-deadline:
+			t.Fatal("no OK report after the send returned")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
+
+// countingSource alternates black and white frames, so a pixel_change
+// watch fires on every poll, and counts its grabs.
+type countingSource struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingSource) Grab(ctx context.Context) (image.Image, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return flat(4, 4, uint8(255*(c.n%2))), nil
+}
+
+func (c *countingSource) grabs() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }

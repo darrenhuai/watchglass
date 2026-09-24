@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -51,11 +52,34 @@ func ntfySend(ctx context.Context, target, title, body string, png []byte) error
 	req.Header.Set("X-Title", title)
 	resp, err := ntfyHTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy %s: %w", target, err)
+		// The *url.Error already quotes the endpoint; callers scrub it down
+		// to scheme://host, since a topic on a public server is its password.
+		return fmt.Errorf("ntfy: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("ntfy %s: status %d", target, resp.StatusCode)
+		return fmt.Errorf("ntfy: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ntfyProblem says why an ntfy URL can't be sent to, or "" when it can (or
+// isn't an ntfy URL). ntfy posts to the server's root when there is no
+// topic, which never reaches anyone, so an empty topic is refused up front.
+func ntfyProblem(raw string) string {
+	t := ntfyTarget(raw)
+	if t == "" {
+		return ""
+	}
+	u, err := url.Parse(t)
+	if err != nil {
+		return "not a valid URL"
+	}
+	if u.Host == "" {
+		return "no server: put the ntfy server after the scheme, for example ntfy://ntfy.sh/my-topic"
+	}
+	if strings.Trim(u.Path, "/") == "" {
+		return "no topic: add a topic name after the slash, for example ntfy://ntfy.sh/my-topic"
+	}
+	return ""
 }

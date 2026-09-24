@@ -962,6 +962,138 @@
     });
   });
 
+  // Send test notification. Posts the Notify box as it is now, saved or
+  // not, to /test-notify; the answer (notifytest.html: one row per line,
+  // sent or why not) lands in #notify-result. Nothing is saved. As with
+  // Test, the button stays focusable while it works (aria-busy, not
+  // disabled) and a second press does nothing; it is disabled only while
+  // the box is empty, when there is nothing to send to.
+  var notifyBox = form.elements["notify"];
+  var notifyBtn = document.getElementById("notify-test");
+  var notifyResult = document.getElementById("notify-result");
+  var notifyBusy = false, notifyLabel = notifyBtn ? notifyBtn.textContent : "";
+  // The box as the server last judged it: what the test sent, and what a
+  // refused save came back with. A "Use this" rewrite only replaces its
+  // line while that line still says what was judged.
+  var notifySent = "", notifyLoaded = notifyBox ? notifyBox.value : "", notifyFixing = false;
+  function nonBlankLines(v) {
+    return v.split("\n").map(function (l) { return l.trim(); }).filter(function (l) { return l !== ""; });
+  }
+  function syncNotifyBtn() {
+    if (notifyBtn) notifyBtn.disabled = retired || (!notifyBusy && nonBlankLines(notifyBox.value).length === 0);
+  }
+  function setNotifyBusy(on) {
+    notifyBusy = on;
+    notifyBtn.textContent = on ? "Sending…" : notifyLabel;
+    if (on) notifyBtn.setAttribute("aria-busy", "true");
+    else notifyBtn.removeAttribute("aria-busy");
+    notifyResult.setAttribute("aria-busy", on ? "true" : "false");
+    var pending = notifyResult.querySelector(".notify-pending");
+    if (!on) {
+      if (pending) pending.remove();
+    } else if (!notifyResult.firstElementChild) {
+      var n = nonBlankLines(notifyBox.value).length;
+      notifyResult.appendChild(el("p", "notify-pending", "Sending a test to " + (n === 1 ? "1 URL" : n + " URLs") + "…"));
+    }
+    syncNotifyBtn();
+  }
+  function renderNotifyError(text) {
+    var e = splitError(text);
+    notifyResult.textContent = "";
+    var wrap = el("section", "notify-test notify-test-error");
+    var head = el("div", "notify-test-head");
+    head.appendChild(el("p", "notify-test-title", "Couldn't send the test"));
+    wrap.appendChild(head);
+    wrap.appendChild(el("p", "notify-verdict", e.summary));
+    if (e.raw) wrap.appendChild(techDetail(e.raw));
+    notifyResult.appendChild(wrap);
+  }
+  if (notifyBtn && notifyBox && notifyResult) {
+    notifyBtn.addEventListener("click", function () {
+      if (notifyBusy || retired || nonBlankLines(notifyBox.value).length === 0) return;
+      var sent = notifyBox.value;
+      setNotifyBusy(true);
+      fetch(base + "/watch/" + encodeURIComponent(name) + "/test-notify", {
+        method: "POST",
+        body: new URLSearchParams({ notify: sent })
+      }).then(function (resp) {
+        return resp.text().then(function (t) {
+          var html = (resp.headers.get("Content-Type") || "").indexOf("text/html") === 0;
+          return { ok: resp.ok, html: html, text: t, status: resp.status };
+        });
+      }).then(function (r) {
+        if (r.ok && r.html) {
+          var tpl = document.createElement("template");
+          tpl.innerHTML = r.text;
+          localizeTimes(tpl.content);
+          notifyResult.textContent = "";
+          notifyResult.appendChild(tpl.content);
+          notifySent = sent;
+          return;
+        }
+        renderNotifyError(r.text.trim() || "watchglass answered HTTP " + r.status + ".");
+      }).catch(function () {
+        renderNotifyError("watchglass didn't answer. Is it still running?");
+      }).then(function () {
+        setNotifyBusy(false);
+        var box = notifyResult.getBoundingClientRect();
+        if (box.bottom > window.innerHeight - 88 || box.top < 0) {
+          var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          notifyResult.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+        }
+      });
+    });
+    // An edit by hand makes a shown result old news: it is dimmed with a
+    // note, like a Test result after the region moves.
+    notifyBox.addEventListener("input", function () {
+      syncNotifyBtn();
+      if (notifyFixing) return;
+      var shown = notifyResult.querySelector(".notify-test");
+      if (shown) shown.classList.add("is-stale");
+    });
+    // "Use this": put the suggested rewrite into the line it is for, if
+    // that line still reads what the server judged (else say so), and let
+    // the dirty tracking and the button hear about it.
+    form.addEventListener("click", function (e) {
+      var b = e.target.closest(".notify-use");
+      if (!b) return;
+      var inResult = !!b.closest("#notify-result");
+      var judged = nonBlankLines(inResult ? notifySent : notifyLoaded);
+      var n = parseInt(b.dataset.line, 10);
+      var lines = notifyBox.value.split("\n"), seen = 0, at = -1;
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === "") continue;
+        if (++seen === n) { at = i; break; }
+      }
+      var fix = b.closest(".notify-fix");
+      if (at < 0 || lines[at].trim() !== judged[n - 1]) {
+        b.disabled = true;
+        b.textContent = "Line " + n + " has changed since";
+        return;
+      }
+      lines[at] = b.dataset.fix;
+      notifyBox.value = lines.join("\n");
+      notifyFixing = true;
+      notifyBox.dispatchEvent(new Event("input", { bubbles: true }));
+      notifyFixing = false;
+      if (inResult) notifySent = notifyBox.value;
+      else notifyLoaded = notifyBox.value;
+      var shown = fix && fix.querySelector(".notify-fix-url");
+      if (fix) {
+        fix.textContent = "";
+        fix.appendChild(document.createTextNode("Line " + n + " is now "));
+        fix.appendChild(el("code", "notify-fix-url", shown ? shown.textContent : ""));
+        fix.appendChild(el("span", "notify-fix-next", "Send a test, or save."));
+        fix.classList.add("is-done");
+        var item = fix.closest("li");
+        if (item) item.classList.add("is-fixed");
+      }
+      var errs = document.getElementById("err-notify");
+      if (errs && !errs.querySelector("li:not(.is-fixed)")) notifyBox.removeAttribute("aria-invalid");
+      notifyBox.focus();
+    });
+  }
+
   // The Live panel. The /live fragment is two blocks (see live.html):
   // .live-status (the stale/stopped badge + latest readout) and .strip (the
   // filmstrip). The status is swapped in only when its markup changed; the
@@ -1050,13 +1182,16 @@
   var STATE_WORDS = { running: "Watch running.", stopped: "Watch stopped.", error: "Watch error: " };
   function announceLive(ds, reading) {
     var firedTs = ds.fired === "true" ? ds.ts : "";
-    var now = { state: ds.state, firedTs: firedTs || (heard && heard.firedTs) || "" };
+    var now = { state: ds.state, firedTs: firedTs || (heard && heard.firedTs) || "", delivery: ds.delivery || "" };
     if (heard === null) { heard = now; return false; }
     var newFire = firedTs !== "" && firedTs !== heard.firedTs;
     if (ds.state !== heard.state) {
       announce(STATE_WORDS[ds.state] ? STATE_WORDS[ds.state] + (ds.state === "error" ? (ds.summary || "") : "") : ds.state);
     } else if (newFire) {
       announce("Fired: " + (reading || ""));
+    } else if (now.delivery === "failed" && heard.delivery !== "failed") {
+      // The send finishes after the fire was announced (it runs on its own).
+      announce("The last alert could not be delivered.");
     }
     heard = now;
     return newFire;
@@ -1192,7 +1327,7 @@
   function retire() {
     retired = true;
     var gone = "This watch no longer exists";
-    var btns = [testBtn, editBtn, form.querySelector("button[type=submit]")];
+    var btns = [testBtn, editBtn, notifyBtn, form.querySelector("button[type=submit]")];
     // Disabling a focused button drops focus on <body>; hand it to the
     // notice's way out instead (showNotice has already run).
     var hadFocus = btns.indexOf(document.activeElement) >= 0 || document.activeElement === canvas;
@@ -1542,6 +1677,8 @@
     ppSummary();
     restoreSaveBtn();
     if (testing) setTesting(false);
+    if (notifyBusy) setNotifyBusy(false);
+    syncNotifyBtn();
   }
   resyncFromForm();
 

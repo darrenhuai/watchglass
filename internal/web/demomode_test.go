@@ -21,7 +21,7 @@ func TestDemoBannerOnlyInDemoMode(t *testing.T) {
 
 	s.DemoDir = `C:\Users\me\AppData\Local\Temp\watchglass-demo`
 	want := `<div class="demo-banner" role="note">
-  <p class="demo-banner-text"><strong>Demo mode:</strong> changes are kept in <span class="mono">C:\Users\me\AppData\Local\Temp\watchglass-demo</span> and reset on restart. To get alerts on your phone, paste your ntfy URL into a watch's Notify box and save.</p>
+  <p class="demo-banner-text"><strong>Demo mode:</strong> changes are kept in <span class="mono">C:\Users\me\AppData\Local\Temp\watchglass-demo</span> and reset on restart. To get alerts on your phone, paste your ntfy URL into a watch's Notify box, press Send test notification, then save.</p>
 </div>`
 	for _, p := range []string{"/", "/watch/printer"} {
 		_, body := get(t, s.Handler(), p)

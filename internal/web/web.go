@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
+	"github.com/darrenhuai/watchglass/internal/notify"
 	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
@@ -160,11 +162,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /watch/{name}/snapshot", s.snapshot)
 	mux.HandleFunc("GET /watch/{name}/live", s.live)
 	mux.HandleFunc("POST /watch/{name}/test", s.testRegion)
+	mux.HandleFunc("POST /watch/{name}/test-notify", s.testNotify)
 	mux.HandleFunc("POST /watch/{name}/save", s.save)
 	mux.HandleFunc("POST /watch/{name}/delete", s.remove)
 	// cop rejects cross-origin browser POSTs (via Sec-Fetch-Site, falling
-	// back to Origin-vs-Host) to the four mutation routes above — CSRF
-	// protection for /watch/new, /watch/{name}/test, /save, and /delete.
+	// back to Origin-vs-Host) to the POST routes above — CSRF protection
+	// for /watch/new, /watch/{name}/test, /test-notify, /save and /delete
+	// (a cross-site page must not make watchglass post to URLs of its
+	// choosing any more than it may change the config).
 	// Non-browser clients (curl, scripts) send neither header and are
 	// unaffected; GET/HEAD/OPTIONS are always allowed regardless.
 	//
@@ -251,6 +256,11 @@ type indexRow struct {
 	// only stays latest for one interval, shorter than index.js's poll, so
 	// without this a fire could come and go without the list showing it.
 	FiredAgo string
+	// AlertsFailing is set when the watch's last alert didn't reach its
+	// notify URLs: the sentence the row's "alerts failing" marker carries
+	// as its title (the Live panel shows the same one). A later send that
+	// goes through clears it.
+	AlertsFailing string
 }
 
 // agoText says how long ago something was, in the same words as app.js's
@@ -349,6 +359,9 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 		if t, ok := s.reg.LastFired(wc.Name); ok && !(has && latest.Fired) {
 			row.FiredAgo = agoText(now.Sub(t))
 		}
+		if dv := s.deliveryFor(wc, latest, has); dv.State == "failed" {
+			row.AlertsFailing = dv.Sentence()
+		}
 		rows = append(rows, row)
 	}
 	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile()}
@@ -397,6 +410,11 @@ type liveData struct {
 	Recent []state.Sample
 	Tiles  []stripTile
 	Status watchStatus
+	// Delivery is how the watch's alerts are getting out (the line under
+	// the readout), and FiredTag what the newest reading's fired tag adds
+	// when that reading is a fire: "sent", "not delivered", "sending" or "".
+	Delivery deliveryView
+	FiredTag string
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -407,13 +425,86 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recent := s.reg.Recent(name)
+	var latest state.Sample
+	if len(recent) > 0 {
+		latest = recent[0]
+	}
+	dv := s.deliveryFor(wc, latest, len(recent) > 0)
 	s.renderCached(w, r, "live.html", liveData{
-		Name:   name,
-		Engine: wc.Engine,
-		Recent: recent,
-		Tiles:  collapseSamples(recent),
-		Status: s.statusFor(name, s.isRunning(name)),
+		Name:     name,
+		Engine:   wc.Engine,
+		Recent:   recent,
+		Tiles:    collapseSamples(recent),
+		Status:   s.statusFor(name, s.isRunning(name)),
+		Delivery: dv,
+		FiredTag: dv.firedTag,
 	})
+}
+
+// deliveryView is what the page says about a watch's alerts. State is
+// "failed" (the last alert didn't get through; it stays until one does),
+// "sending", "sent", "none" (no notify URLs, so fires only show here) or
+// "" (nothing sent yet).
+type deliveryView struct {
+	State string
+	At    time.Time // when the alert it describes was raised
+	Kind  string    // "fired", "down" or "recovered"
+	Text  string    // "failed": what went wrong, in sentences (deliveryText)
+	MQTT  bool      // "none": fires still go out over MQTT
+	// firedTag is the suffix for the newest reading's fired tag.
+	firedTag string
+}
+
+// KindNote names a non-fire alert: "" for a fire, " (stream down)",
+// " (stream recovered)".
+func (d deliveryView) KindNote() string {
+	switch d.Kind {
+	case "down":
+		return " (stream down)"
+	case "recovered":
+		return " (stream recovered)"
+	}
+	return ""
+}
+
+// Sentence is the failure as one line for a title attribute, the time in
+// the server's zone.
+func (d deliveryView) Sentence() string {
+	return "Last alert" + d.KindNote() + " at " + d.At.Format("15:04:05") + " could not be delivered: " + d.Text
+}
+
+// deliveryFor works out deliveryView for a watch from the registry.
+// latest is the newest reading (has: there is one), whose fired tag the
+// view also decides.
+func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) deliveryView {
+	if len(wc.Notify) == 0 {
+		s.mu.Lock()
+		mqtt := s.cfg.MQTT != nil
+		s.mu.Unlock()
+		return deliveryView{State: "none", MQTT: mqtt}
+	}
+	var v deliveryView
+	d, done := s.reg.GetDelivery(wc.Name)
+	sendingAt, sending := s.reg.Sending(wc.Name)
+	switch {
+	case done && !d.OK && !d.Skipped:
+		v = deliveryView{State: "failed", At: d.TS, Kind: d.Kind, Text: deliveryText(d.Err)}
+	case sending:
+		v = deliveryView{State: "sending", At: sendingAt, Kind: "fired"}
+	case done && d.OK:
+		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind}
+	}
+	if has && latest.Fired {
+		switch {
+		case done && d.TS.Equal(latest.TS) && d.OK:
+			v.firedTag = "sent"
+		case done && d.TS.Equal(latest.TS) && !d.Skipped:
+			v.firedTag = "not delivered"
+		case sending && sendingAt.Equal(latest.TS):
+			v.firedTag = "sending"
+		}
+	}
+	return v
 }
 
 // sourceError and grabError answer /snapshot and /test when no frame could
@@ -571,6 +662,50 @@ type formState struct {
 	// be written: the form comes back with everything still typed in, so
 	// retrying is one click once the file is writable again.
 	Failure *writeFailure
+	// Notify lists the notify lines a save refused, each with its reason
+	// and the URL it probably meant, shown under the Notify box.
+	Notify []notifyProblem
+}
+
+// notifyProblem is one notify line that can't be used (notify.Check).
+// Fix is the full rewrite a "Use this" button puts in the line; FixShown
+// is the same with its credentials masked, for the page to show.
+type notifyProblem struct {
+	Line     int
+	Label    string
+	Reason   string
+	Fix      string
+	FixShown string
+}
+
+// notifyLines splits the Notify box into its URLs, one per non-blank line,
+// the same way for Save and for Send test notification.
+func notifyLines(v string) []string {
+	var out []string
+	for _, line := range strings.Split(v, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// checkNotify runs notify.Check on each line: the same test a watch's start
+// runs, so a list the form accepts is one the watch starts with.
+func checkNotify(urls []string) []notifyProblem {
+	var out []notifyProblem
+	for i, u := range urls {
+		p := notify.Check(u)
+		if p == nil {
+			continue
+		}
+		np := notifyProblem{Line: i + 1, Label: notify.Label(u), Reason: p.Reason, Fix: p.Fix}
+		if p.Fix != "" {
+			np.FixShown = notify.Redact(p.Fix)
+		}
+		out = append(out, np)
+	}
+	return out
 }
 
 // writeFailure explains a save or create that couldn't be written.
@@ -1027,6 +1162,103 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "testresult.html", res)
 }
 
+// testNotifyTimeout bounds one test send. shoutrrr's routers give up after
+// their own 10 s whatever the context says; the ntfy client honours it.
+const testNotifyTimeout = 10 * time.Second
+
+// testNotifyMax is the most lines one test sends to.
+const testNotifyMax = 10
+
+// notifyTestRow is one line of the Notify box after a test send.
+type notifyTestRow struct {
+	Line  int
+	Label string // scheme://host, never the credential
+	OK    bool
+	// Cause is what went wrong sending (a phrase after Label, see
+	// deliveryCause); Problem is why the URL couldn't be used at all, with
+	// Fix/FixShown when there is an obvious rewrite.
+	Cause   string
+	Problem *notifyProblem
+	// Fix is the rewrite for a URL that was sent to but failed in a way
+	// with one obvious remedy (plain http behind an https URL).
+	Fix *notifyProblem
+}
+
+type notifyTestData struct {
+	Name string
+	At   time.Time
+	Rows []notifyTestRow
+	Sent int
+}
+
+// testNotify sends a test notification to each URL in the form's Notify
+// box as it is now, saved or not, and says line by line whether it got
+// there. Nothing is written and the running watch is untouched. Error
+// bodies are text/plain, like /test's.
+func (s *Server) testNotify(w http.ResponseWriter, r *http.Request) {
+	wc, ok := s.findWatch(r.PathValue("name"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	lines := notifyLines(r.FormValue("notify"))
+	switch {
+	case len(lines) == 0:
+		http.Error(w, "There's nothing to send to yet: add a notification URL first.", http.StatusBadRequest)
+		return
+	case len(lines) > testNotifyMax:
+		http.Error(w, fmt.Sprintf("Test at most %d URLs at a time.", testNotifyMax), http.StatusBadRequest)
+		return
+	}
+	title := "watchglass: " + wc.Name + " (test)"
+	body := "Test from watchglass: " + wc.Name + " can reach you."
+	rows := make([]notifyTestRow, len(lines))
+	var wg sync.WaitGroup
+	for i, u := range lines {
+		rows[i] = notifyTestRow{Line: i + 1, Label: notify.Label(u)}
+		if ps := checkNotify([]string{u}); len(ps) > 0 {
+			ps[0].Line = i + 1
+			rows[i].Problem = &ps[0]
+			continue
+		}
+		wg.Add(1)
+		go func(row *notifyTestRow, u string) {
+			defer wg.Done()
+			n, err := notify.NewShoutrrr([]string{u})
+			if err == nil {
+				ctx, cancel := context.WithTimeout(r.Context(), testNotifyTimeout)
+				err = n.Send(ctx, title, body)
+				cancel()
+			}
+			var se *notify.SendError
+			switch {
+			case err == nil:
+				row.OK = true
+			case errors.As(err, &se) && len(se.Failures) > 0:
+				row.Cause = upperFirst(deliveryCause(se.Failures[0].Msg, row.Label))
+				// A server that answered https with plain http has one obvious
+				// fix, the same URL on +http://: offer it like a refused URL's.
+				if low := strings.ToLower(se.Failures[0].Msg); strings.Contains(low, "gave http response to https client") ||
+					strings.Contains(low, "first record does not look like a tls handshake") {
+					if fix := plainHTTPFix(u); fix != "" {
+						row.Fix = &notifyProblem{Line: row.Line, Fix: fix, FixShown: notify.Redact(fix)}
+					}
+				}
+			default:
+				row.Cause = upperFirst(deliveryCause(notify.Scrub(err.Error(), []string{u}), row.Label))
+			}
+		}(&rows[i], u)
+	}
+	wg.Wait()
+	data := notifyTestData{Name: wc.Name, At: time.Now(), Rows: rows}
+	for _, row := range rows {
+		if row.OK {
+			data.Sent++
+		}
+	}
+	s.render(w, "notifytest.html", data)
+}
+
 // triggerFromForm reads the trigger fields of the detail form, the same way
 // for Save and for Test. A field that doesn't parse keeps base's value and
 // is reported.
@@ -1140,13 +1372,12 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	} else {
 		w.Preprocess = prep
 	}
-	var notifyURLs []string
-	for _, line := range strings.Split(r.FormValue("notify"), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			notifyURLs = append(notifyURLs, line)
-		}
+	w.Notify = notifyLines(r.FormValue("notify"))
+	// Every line is checked before anything is written: a URL shoutrrr can't
+	// use would be saved and then stop the watch at its restart.
+	for _, p := range checkNotify(w.Notify) {
+		fail("notify", fmt.Sprintf("Notify line %d: %s", p.Line, p.Reason))
 	}
-	w.Notify = notifyURLs
 	w.Trigger = trig
 	// The detail form hides Pattern/Compare/Threshold for the types that
 	// never read them (app.js's updateTriggerFields mirrors trigger.New's
@@ -1262,7 +1493,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	// problem marked next to its field (status 400); nothing is written.
 	rejected := func(updated config.Watch, errs []fieldError) {
 		data := s.detailFor(updated)
-		data.Form = formState{Values: watchFormValues(r), Errors: errs}
+		data.Form = formState{Values: watchFormValues(r), Errors: errs, Notify: checkNotify(updated.Notify)}
 		s.renderStatus(w, http.StatusBadRequest, "detail.html", data)
 	}
 	updated, ferrs := parseWatchForm(base, r)
@@ -1324,7 +1555,17 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := s.sup.Restart(s.RunCtx, canonical); err != nil {
+	restartErr := s.sup.Restart(s.RunCtx, canonical)
+	// A delivery failure was about the URLs the watch had; new ones haven't
+	// been tried, so "alerts failing" would now be a claim about the wrong
+	// list. (Send test notification tries them without waiting for a fire.)
+	// Cleared after Restart's Stop, so no report from the old run can land
+	// after it, and before the failure return, since a stopped watch with a
+	// new list must not keep the old list's claim either.
+	if !slices.Equal(base.Notify, canonical.Notify) {
+		s.reg.ClearDelivery(name)
+	}
+	if err := restartErr; err != nil {
 		// must_fix 1 case 1: Restart calls Stop then Start, so a Start
 		// failure here (e.g. the trigger type was switched to ocr_match/
 		// numeric with no tesseract on PATH) leaves the watch fully stopped

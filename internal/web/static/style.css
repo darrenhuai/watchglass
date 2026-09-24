@@ -1894,6 +1894,156 @@ fieldset > .field-error { margin-top: var(--space-2); }
    disabled. */
 .detail-grid.is-gone .stage-frame { opacity: 0.45; transition: opacity var(--dur-fast) var(--ease-out); }
 
+/* ---- Alerts: delivery status and the Notify section ----------------------
+   Whether a watch's alerts get out. The Live panel says so under the
+   readout (.delivery, live.html): a failure is an amber status line with
+   the reason until a later alert goes through; a success and "no URLs" are
+   quiet text. Amber, not red: the watch itself is fine, its alerts need
+   attention. Credentials never reach any of this (notify.Label/Scrub). */
+.delivery {
+  max-width: 72ch;
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+/* The line is usually the panel's last paragraph, where `.panel p:last-child`
+   zeroes the margin and left it 4px off the strip. Restated with the id so
+   it keeps a 16px step above the frames. */
+#live-status > .delivery { margin-bottom: var(--space-4); }
+.delivery .mono { font-size: var(--fs-sm); }
+.delivery a { color: inherit; text-decoration: underline; text-decoration-color: var(--border-control); text-underline-offset: 2px; }
+.delivery a:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
+.delivery-failed {
+  width: fit-content;
+  max-width: min(100%, 72ch);
+  padding: 6px 10px;
+  border: 1px solid var(--amber-a55);
+  border-radius: var(--radius-sm);
+  background: var(--amber-a15);
+  color: var(--text);
+}
+.delivery-failed::before, .alerts-failing::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin: 0 8px 1px 1px;
+  border-radius: 50%;
+  background: var(--amber);
+  vertical-align: middle;
+}
+.delivery-sending { color: var(--text-dim); }
+.delivery-mark { margin-right: 6px; color: var(--accent); font-weight: var(--fw-strong); }
+/* The list's marker, beside "fired 12 s ago": the last alert didn't reach
+   its URLs. The dot and the words carry it, not the colour alone. */
+.reading-body > .alerts-failing, .reading-error > .alerts-failing {
+  flex: none;
+  color: var(--amber);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.reading-error > .alerts-failing { display: block; margin-top: 2px; }
+
+/* The Notify section: the box, then Send test notification with its
+   hint, the test's answer, and the common formats folded away. */
+.notify-problems { margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.notify-problems > li + li { margin-top: var(--space-2); }
+.notify-problems > li.is-fixed::before { background: var(--accent); }
+.notify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+.notify-actions .field-hint { flex: 1 1 12rem; }
+#notify-result > * { margin-top: var(--space-3); }
+#notify-result[aria-busy="true"] > .notify-test { opacity: 0.45; }
+.notify-pending { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.notify-test {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.notify-test-error { border-color: var(--red-a30); }
+.notify-test-head { display: flex; align-items: baseline; gap: var(--space-3); }
+.notify-test-title { margin: 0; font-weight: var(--fw-strong); color: var(--text); }
+.notify-test-meta { margin: 0 0 0 auto; font-size: var(--fs-xs); color: var(--text-faint); }
+.notify-test-stale {
+  display: none;
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.notify-test.is-stale .notify-test-stale { display: block; }
+.notify-test.is-stale .notify-results { opacity: 0.45; }
+.notify-results { margin: var(--space-2) 0 0; padding: 0; list-style: none; transition: opacity var(--dur-fast) var(--ease-out); }
+.notify-row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-hair);
+}
+.notify-row:first-child { border-top: 0; padding-top: 0; }
+.notify-mark { font-weight: var(--fw-strong); line-height: 1.45; text-align: center; }
+.notify-row.is-ok .notify-mark { color: var(--accent); }
+.notify-row.is-fail .notify-mark { color: var(--red); }
+.notify-row-target { margin: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.notify-row-target .mono { font-size: var(--fs-sm); }
+.notify-line { color: var(--text-faint); }
+.notify-verdict { margin: 2px 0 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim); text-wrap: pretty; overflow-wrap: anywhere; }
+.notify-test-error .notify-verdict { color: var(--text); }
+.notify-test .tech-detail { margin-top: var(--space-2); }
+.notify-fix { margin: var(--space-1) 0 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.notify-fix.is-done { color: var(--text-dim); }
+/* A chip that wraps as a whole box: an inline chip broken across lines
+   drew its background as two torn halves under a long URL on phones. */
+.notify-fix-url {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  overflow-wrap: anywhere;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font: var(--fs-xs) var(--font-mono);
+  color: var(--text);
+}
+.notify-use { margin-left: 2px; }
+.notify-fix-next { margin-left: var(--space-2); color: var(--text-faint); }
+.notify-use:disabled { color: var(--text-faint); text-decoration: none; cursor: default; }
+.notify-test-note { margin: var(--space-2) 0 0; font-size: var(--fs-xs); color: var(--text-faint); }
+.notify-formats { margin-top: var(--space-3); }
+/* One grid for the whole list, so every format starts at the same x (each
+   row sizing its own label column put the longest label's value off the
+   line). The rows are subgrids so they keep their rule between them; the
+   fixed first column is the fallback where subgrid isn't supported. */
+.format-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+.format-list > div {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  grid-template-columns: subgrid;
+  column-gap: inherit;
+  padding: 5px 0;
+  border-top: 1px solid var(--border-hair);
+}
+.format-list > div:first-child { border-top: 0; }
+.format-list dt { color: var(--text-dim); }
+.format-list dd { margin: 0; font-size: var(--fs-xs); line-height: 1.6; color: var(--text); overflow-wrap: anywhere; user-select: all; }
+.format-more { margin: var(--space-2) 0 0; font-size: var(--fs-sm); color: var(--text-faint); text-wrap: pretty; }
+.format-more a { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.format-more a:hover { color: var(--accent); }
+
 /* Arrival (app.js): the readout glows and fades when the reading changes,
    amber when a new fire arrives; a new frame slides into the strip. Only
    what changed moves, and nothing moves under reduced motion (the value is
@@ -2003,6 +2153,9 @@ fieldset > .field-error { margin-top: var(--space-2); }
   /* Test (and Edit region on touch screens) share the full width. */
   .region-btns { width: 100%; }
   .region-btns .btn { flex: 1 1 0; }
+  .notify-actions .btn { flex: 1 1 100%; }
+  .format-list { grid-template-columns: minmax(0, 1fr); }
+  .format-list > div { grid-template-columns: minmax(0, 1fr); grid-template-columns: subgrid; row-gap: 2px; }
   .region-manual-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* iOS Safari zooms the page on focus for any control under 16px. */

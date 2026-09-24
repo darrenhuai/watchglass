@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"image"
 	"net/http"
 	"net/url"
@@ -108,8 +109,11 @@ func TestRestartFailureBackLinkIsEscaped(t *testing.T) {
 	if resp, body := postForm(t, h, "/watch/new", url.Values{"name": {"pct 100%"}, "source": {"http://cam2/snap.jpg"}}); resp.StatusCode != 303 {
 		t.Fatalf("create = %d; %s", resp.StatusCode, body)
 	}
+	// A bad notify URL used to be the way to make the restart fail; the form
+	// refuses those before writing now (checkNotify), so the source does.
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) { return nil, errors.New("source: camera went away") }
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "ttype": {"pixel_change"},
-		"tthreshold": {"10"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"}, "notify": {"nope://x"}}
+		"tthreshold": {"10"}, "confirm": {"1"}, "cooldown": {"0s"}, "interval": {"5s"}}
 	resp, body := postForm(t, h, "/watch/pct%20100%25/save", form)
 	if resp.StatusCode != 500 || !strings.Contains(body, `href="/watch/pct%20100%25"`) {
 		t.Errorf("restart failure page should link back to the escaped watch URL; status %d body:\n%s", resp.StatusCode, body)

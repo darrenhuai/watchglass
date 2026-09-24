@@ -167,6 +167,11 @@ func TestFriendlyStartError(t *testing.T) {
 	if got, want := friendlyStartError(notify), `A notify URL can't be used: unknown service: "nope".`; got != want {
 		t.Errorf("notify: got %q, want %q", got, want)
 	}
+	// Today's form: notify.NewShoutrrr names the line and host only.
+	line := errors.New(`watch "cam-a": notify: line 2 (https://ntfy.sh): That's the ntfy web address. watchglass sends to ntfy with the ntfy:// form.`)
+	if got, want := friendlyStartError(line), "Notify line 2 (https://ntfy.sh) can't be used: that's the ntfy web address. watchglass sends to ntfy with the ntfy:// form."; got != want {
+		t.Errorf("notify line: got %q, want %q", got, want)
+	}
 	src := errors.New(`watch "cam": source: unsupported source scheme`)
 	if got, want := friendlyStartError(src), "The source can't be used: unsupported source scheme."; got != want {
 		t.Errorf("source: got %q, want %q", got, want)

@@ -136,3 +136,50 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Errorf("len = %d, want 5", len(r.Recent("w")))
 	}
 }
+
+// A failed delivery stays on record until a later one finishes, a late
+// result for an older alert never replaces a newer one, and Drop and
+// ClearDelivery forget it.
+func TestDeliveryRecord(t *testing.T) {
+	r := New(3)
+	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	if _, ok := r.GetDelivery("w"); ok {
+		t.Fatal("a new watch has no delivery")
+	}
+	r.SetSending("w", t0)
+	if ts, ok := r.Sending("w"); !ok || !ts.Equal(t0) {
+		t.Fatalf("Sending = %v, %v", ts, ok)
+	}
+	r.SetDelivery("w", Delivery{TS: t0, Kind: "fired", Err: "HTTP 404"})
+	if _, ok := r.Sending("w"); ok {
+		t.Error("finishing the alert must clear its sending mark")
+	}
+	// The next alert starts: the failure is still the record.
+	t1 := t0.Add(time.Minute)
+	r.SetSending("w", t1)
+	if d, _ := r.GetDelivery("w"); d.OK || d.Err != "HTTP 404" {
+		t.Errorf("record while the next alert sends = %+v", d)
+	}
+	r.SetDelivery("w", Delivery{TS: t1, Kind: "fired", OK: true})
+	// A straggler for the older alert changes nothing.
+	r.SetDelivery("w", Delivery{TS: t0, Kind: "fired", Err: "late"})
+	if d, _ := r.GetDelivery("w"); !d.OK || !d.TS.Equal(t1) {
+		t.Errorf("record = %+v, want the newer success", d)
+	}
+	if _, ok := r.GetDelivery("other"); ok {
+		t.Error("delivery leaked to another watch")
+	}
+	r.ClearDelivery("w")
+	if _, ok := r.GetDelivery("w"); ok {
+		t.Error("ClearDelivery kept the record")
+	}
+	r.SetSending("w", t1)
+	r.SetDelivery("w", Delivery{TS: t1, Err: "x"})
+	r.Drop("w")
+	if _, ok := r.GetDelivery("w"); ok {
+		t.Error("Drop kept the delivery")
+	}
+	if _, ok := r.Sending("w"); ok {
+		t.Error("Drop kept the sending mark")
+	}
+}

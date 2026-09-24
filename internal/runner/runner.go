@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/health"
@@ -37,14 +39,53 @@ type Runner struct {
 	maxIvl  time.Duration
 
 	// OnReading, when set, is called once per completed Tick with the trigger
-	// outcome and the RAW crop (before preprocessing). The web UI uses it to
-	// feed the live readout; keep it fast — it runs on the poll goroutine.
-	OnReading func(ev trigger.Event, crop image.Image)
+	// outcome, the RAW crop (before preprocessing) and the time the tick
+	// stamps on it (a fire's alert carries the same time, see Delivery.TS).
+	// The web UI uses it to feed the live readout; keep it fast — it runs on
+	// the poll goroutine.
+	OnReading func(ev trigger.Event, crop image.Image, at time.Time)
 
 	// OnHealth, when set, is called on every stream health transition, after
 	// it is logged and before the notifier is attempted. Keep it fast — it
 	// runs on the poll goroutine.
 	OnHealth func(hev health.Event)
+
+	// OnDelivery, when set, hears how each alert (a fire, a stream going
+	// down or recovering) went out: Pending when it is handed to the
+	// sender, then OK or Err when the send finishes, or Skipped at once
+	// when the watch has no notify URLs. Under Run the finished report comes
+	// from the sender goroutine, not the poll goroutine. Keep it fast.
+	OnDelivery func(d Delivery)
+
+	// outbox feeds the sender goroutine Run starts, so a slow or dead
+	// notification service never holds up the next poll. nil outside Run
+	// (Tick driven directly, as the tests do): alerts are then sent inline.
+	outbox chan alert
+}
+
+// Delivery is one report on an alert's way out (see OnDelivery).
+type Delivery struct {
+	TS      time.Time // when the alert was raised; a fire's is its reading's time
+	Kind    string    // "fired", "down" or "recovered"
+	Pending bool      // handed to the sender; the outcome follows
+	OK      bool      // every notify URL took it
+	Skipped bool      // no notify URLs: nothing to send
+	Err     string    // the failure, scrubbed of credentials (notify.Scrub), at most errMax runes per failed line
+}
+
+// errMax caps a delivery error kept for display.
+const errMax = 200
+
+// outboxSize is how many alerts may wait behind one that is being sent
+// before new ones are dropped (and reported as not delivered).
+const outboxSize = 16
+
+// alert is one notification waiting to go out.
+type alert struct {
+	ts          time.Time
+	kind        string
+	title, body string
+	png         []byte
 }
 
 func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.Notifier,
@@ -76,8 +117,19 @@ func (r *Runner) SeedDown() {
 }
 
 // Run polls until ctx is cancelled. Errors are logged, never fatal: a
-// watcher that dies on one bad frame is worse than no watcher.
+// watcher that dies on one bad frame is worse than no watcher. Alerts go out
+// from a goroutine of their own (sendLoop), so a webhook that takes its
+// full 10-15 s to time out delays nothing but itself. Stop doesn't wait for
+// that goroutine: it finishes what was queued and exits.
 func (r *Runner) Run(ctx context.Context) {
+	if r.notifier != nil {
+		r.outbox = make(chan alert, outboxSize)
+		go r.sendLoop(ctx, r.outbox)
+		defer func() {
+			close(r.outbox)
+			r.outbox = nil
+		}()
+	}
 	interval := r.baseIvl
 	var lastReading string
 	timer := time.NewTimer(0)
@@ -110,6 +162,7 @@ func (r *Runner) Run(ctx context.Context) {
 // (the zero Event when the poll produced no evaluation, e.g. the pixel
 // baseline frame). Exported so tests can drive it deterministically.
 func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
+	at := time.Now()
 	img, err := r.src.Grab(ctx)
 	if err != nil {
 		return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("grab: %w", err))
@@ -147,28 +200,88 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		}
 	}
 	if r.OnReading != nil {
-		r.OnReading(ev, crop)
+		r.OnReading(ev, crop, at)
 	}
-	if ev.Fired && r.notifier != nil {
-		title := fmt.Sprintf("watchglass: %s", r.watch.Name)
-		body := fmt.Sprintf("%s — %s", ev.Reason, ev.Reading)
-		var sendErr error
-		if is, ok := r.notifier.(notify.ImageSender); ok {
+	if ev.Fired {
+		// The body names the watch too: a plain webhook (generic without
+		// ?template=json) gets only the body, and "pattern matched — PRINT
+		// COMPLETE" alone doesn't say which printer.
+		a := alert{ts: at, kind: "fired", title: fmt.Sprintf("watchglass: %s", r.watch.Name),
+			body: fmt.Sprintf("%s: %s — %s", r.watch.Name, ev.Reason, ev.Reading)}
+		if _, ok := r.notifier.(notify.ImageSender); ok {
 			var buf bytes.Buffer
 			if err := png.Encode(&buf, crop); err != nil {
 				r.logf("watch %s: encode crop for notification: %v", r.watch.Name, err)
-				sendErr = r.notifier.Send(ctx, title, body)
 			} else {
-				sendErr = is.SendImage(ctx, title, body, buf.Bytes())
+				a.png = buf.Bytes()
 			}
-		} else {
-			sendErr = r.notifier.Send(ctx, title, body)
 		}
-		if sendErr != nil {
-			return ev, fmt.Errorf("notify: %w", sendErr)
-		}
+		r.raise(ctx, a)
 	}
 	return ev, nil
+}
+
+// raise sends an alert, or says why it isn't sent. Under Run it only queues
+// it: the send happens on the sender goroutine (sendLoop).
+func (r *Runner) raise(ctx context.Context, a alert) {
+	if r.notifier == nil {
+		r.report(Delivery{TS: a.ts, Kind: a.kind, Skipped: true})
+		return
+	}
+	if r.outbox == nil {
+		r.deliver(ctx, a)
+		return
+	}
+	r.report(Delivery{TS: a.ts, Kind: a.kind, Pending: true})
+	select {
+	case r.outbox <- a:
+	default:
+		r.logf("watch %s: notify: %d alerts are still waiting to be sent, so this %s alert was dropped", r.watch.Name, outboxSize, a.kind)
+		r.report(Delivery{TS: a.ts, Kind: a.kind, Err: "not sent: the alerts before it were still waiting to go out"})
+	}
+}
+
+// sendLoop sends queued alerts in order until Run closes box. Sends are
+// cut loose from ctx: an alert raised just before the watch was stopped
+// (a Save & restart) still goes out, bounded by the services' own timeouts.
+func (r *Runner) sendLoop(ctx context.Context, box <-chan alert) {
+	sendCtx := context.WithoutCancel(ctx)
+	for a := range box {
+		r.deliver(sendCtx, a)
+	}
+}
+
+// deliver sends one alert and reports the outcome. A failure is logged and
+// reported with every URL cut down to scheme://host and every credential
+// masked (notify.Scrub): the report is shown in the web UI.
+func (r *Runner) deliver(ctx context.Context, a alert) {
+	var err error
+	if is, ok := r.notifier.(notify.ImageSender); ok && a.png != nil {
+		err = is.SendImage(ctx, a.title, a.body, a.png)
+	} else {
+		err = r.notifier.Send(ctx, a.title, a.body)
+	}
+	d := Delivery{TS: a.ts, Kind: a.kind, OK: err == nil}
+	if err != nil {
+		msg := notify.Scrub(err.Error(), r.watch.Notify)
+		r.logf("watch %s: notify (%s): %s", r.watch.Name, a.kind, msg)
+		// Capped per failed line, so a long first error can't push the
+		// second line's cause (its status code) out of the record.
+		parts := strings.Split(msg, "; ")
+		for i, p := range parts {
+			if utf8.RuneCountInString(p) > errMax {
+				parts[i] = string([]rune(p)[:errMax-1]) + "…"
+			}
+		}
+		d.Err = strings.Join(parts, "; ")
+	}
+	r.report(d)
+}
+
+func (r *Runner) report(d Delivery) {
+	if r.OnDelivery != nil {
+		r.OnDelivery(d)
+	}
 }
 
 // pollFailed records a poll that produced no reading with the health
@@ -195,19 +308,20 @@ func (r *Runner) pollSucceeded(ctx context.Context) {
 }
 
 // notifyHealth reports a stream up/down transition. Failures to notify are
-// logged, never fatal — the watch keeps polling regardless.
+// logged and reported (OnDelivery), never fatal — the watch keeps polling
+// regardless.
 func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
 	r.logf("watch %s: %s", r.watch.Name, hev.Message)
 	if r.OnHealth != nil {
 		r.OnHealth(hev)
 	}
-	if r.notifier == nil {
-		return
+	kind := "recovered"
+	if hev.State == "down" {
+		kind = "down"
 	}
-	title := fmt.Sprintf("watchglass: %s (%s)", r.watch.Name, hev.State)
-	if err := r.notifier.Send(ctx, title, hev.Message); err != nil {
-		r.logf("watch %s: notify health: %v", r.watch.Name, err)
-	}
+	r.raise(ctx, alert{ts: time.Now(), kind: kind,
+		title: fmt.Sprintf("watchglass: %s (%s)", r.watch.Name, hev.State),
+		body:  fmt.Sprintf("%s: %s", r.watch.Name, hev.Message)})
 }
 
 // NextInterval computes the next poll gap. With max unset (or not above

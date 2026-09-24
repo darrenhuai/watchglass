@@ -67,6 +67,10 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	if _, ok := s.running[w.Name]; ok {
 		return fmt.Errorf("watch %q already running", w.Name)
 	}
+	// A watch that isn't running has nothing in flight. Stop clears its
+	// "sending" mark too; this covers a first Start after a boot or a
+	// Start that failed before the watch ever ran.
+	s.reg.ClearSending(w.Name)
 	var notifier notify.Notifier
 	if len(w.Notify) > 0 {
 		n, err := notify.NewShoutrrr(w.Notify)
@@ -98,13 +102,16 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// caller's misuse, matching NewSource's semantics.
 	onEvent := s.OnEvent
 	onHealth := s.OnHealth
-	r.OnReading = func(ev trigger.Event, crop image.Image) {
+	h := &handle{done: make(chan struct{})}
+	r.OnReading = func(ev trigger.Event, crop image.Image, at time.Time) {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, crop); err != nil {
 			s.logf("watch %s: encode sample: %v", name, err)
 			return
 		}
-		s.reg.Add(name, state.Sample{TS: time.Now(), Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes()})
+		// at is also the TS of this reading's alert (runner.Delivery), which
+		// is how the Live panel ties "sent" / "not delivered" to its fire.
+		s.reg.Add(name, state.Sample{TS: at, Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes()})
 		// Reuse the same encoding for the hook; buf.Bytes() is read-only from
 		// here on, matching the registry's PNG read-only convention.
 		if onEvent != nil {
@@ -139,8 +146,27 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			onHealth(name, hev)
 		}
 	}
+	// Delivery reports come from the runner's sender goroutine, which may
+	// still be finishing an alert after Stop. Only the watch's current run
+	// reports: a straggler from before a Save & restart (possibly about
+	// notify URLs the save just replaced) is dropped. The check and the
+	// registry write happen under s.mu, the lock Stop takes to remove the
+	// run and clear its "sending" mark, so a report can't slip in after
+	// that clear and leave the mark behind.
+	r.OnDelivery = func(d runner.Delivery) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.running[name] != h {
+			return
+		}
+		if d.Pending {
+			s.reg.SetSending(name, d.TS)
+			return
+		}
+		s.reg.SetDelivery(name, state.Delivery{TS: d.TS, Kind: d.Kind, OK: d.OK, Skipped: d.Skipped, Err: d.Err})
+	}
 	wctx, cancel := context.WithCancel(ctx)
-	h := &handle{cancel: cancel, done: make(chan struct{})}
+	h.cancel = cancel
 	s.running[name] = h
 	go func() {
 		r.Run(wctx)
@@ -166,6 +192,10 @@ func (s *Supervisor) Stop(name string) {
 	h, ok := s.running[name]
 	if ok {
 		delete(s.running, name)
+		// The run's in-flight send (if any) can no longer report, so its
+		// "sending" mark would otherwise stay until the next successful
+		// Start: forever, if that Start fails.
+		s.reg.ClearSending(name)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -200,6 +230,9 @@ func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	hs := s.running
 	s.running = map[string]*handle{}
+	for name := range hs {
+		s.reg.ClearSending(name)
+	}
 	s.mu.Unlock()
 	for _, h := range hs {
 		h.cancel()

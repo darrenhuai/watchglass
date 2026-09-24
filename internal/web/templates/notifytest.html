@@ -1,0 +1,36 @@
+{{/* The answer to "Send test notification", inserted under the button by
+     app.js. Nothing in here holds a credential: a line is named by its
+     number and scheme://host (notify.Label), a suggested rewrite is shown
+     masked (notify.Redact), and only the "Use this" button's data-fix
+     carries the whole URL, to put back into the box it came from. No
+     <style>/<script> in here. */}}
+<section class="notify-test" aria-labelledby="notify-test-title">
+  <div class="notify-test-head">
+    <p id="notify-test-title" class="notify-test-title">{{if eq .Sent (len .Rows)}}Test sent{{else if eq .Sent 0}}Test not delivered{{else}}Test reached {{.Sent}} of {{len .Rows}}{{end}}</p>
+    <p class="notify-test-meta mono"><time datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time></p>
+  </div>
+  <p class="notify-test-stale">The URLs changed since this test. Send it again to check them.</p>
+  <ul class="notify-results">
+  {{range .Rows}}
+    <li class="notify-row {{if .OK}}is-ok{{else}}is-fail{{end}}">
+      <span class="notify-mark" aria-hidden="true">{{if .OK}}✓{{else}}✗{{end}}</span>
+      <div class="notify-row-body">
+        <p class="notify-row-target">{{if gt (len $.Rows) 1}}<span class="notify-line">Line {{.Line}}</span> {{end}}<span class="mono">{{.Label}}</span><span class="sr-only">: {{if .OK}}sent{{else}}not sent{{end}}</span></p>
+        {{if .OK}}<p class="notify-verdict">Sent. Check that it arrived.</p>
+        {{else if .Problem}}<p class="notify-verdict">{{.Problem.Reason}}</p>{{template "notifyFix" .Problem}}
+        {{else}}<p class="notify-verdict">{{.Cause}}</p>{{with .Fix}}{{template "notifyFix" .}}{{end}}{{end}}
+      </div>
+    </li>
+  {{end}}
+  </ul>
+  <p class="notify-test-note">Nothing was saved.{{if .Sent}} Save to keep {{if eq .Sent (len .Rows)}}these URLs{{else}}the URLs that worked{{end}}.{{end}}</p>
+</section>
+
+{{/* A refused notify URL's likely rewrite, shared by this fragment and the
+     rejected-save list under the Notify box (detail.html). app.js puts
+     data-fix into line data-line (counting non-blank lines, as the server
+     does), but only while that line still reads what the server judged:
+     after a hand edit, Use this says "Line N has changed since" instead.
+     A shown test result is also dimmed as stale on a hand edit; the
+     refused-save list isn't, since its lines are guarded the same way. */}}
+{{define "notifyFix"}}{{if .Fix}}<p class="notify-fix">Suggested: <code class="notify-fix-url">{{.FixShown}}</code> <button type="button" class="link-button notify-use" data-line="{{.Line}}" data-fix="{{.Fix}}">Use this</button></p>{{end}}{{end}}

@@ -55,13 +55,24 @@ func TestNtfyURLPartitioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewShoutrrr: %v", err)
 	}
+	var ntfy []string
+	for _, tg := range n.targets {
+		if tg.ntfy != "" {
+			ntfy = append(ntfy, tg.ntfy)
+		} else if tg.sender == nil {
+			t.Errorf("line %d has neither an ntfy endpoint nor a router", tg.line)
+		}
+	}
 	want := []string{
 		"https://ntfy.example/topic",
 		"https://ntfy.example/secure",
 		"http://127.0.0.1:8099/local",
 	}
-	if !reflect.DeepEqual(n.ntfyTargets, want) {
-		t.Errorf("ntfy targets = %v, want %v", n.ntfyTargets, want)
+	if !reflect.DeepEqual(ntfy, want) {
+		t.Errorf("ntfy targets = %v, want %v", ntfy, want)
+	}
+	if len(n.targets) != 4 || n.targets[3].line != 4 || n.targets[3].label != "generic+https://example.com" {
+		t.Errorf("targets = %+v, want 4 in list order with labels", n.targets)
 	}
 }
 

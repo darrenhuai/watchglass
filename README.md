@@ -175,9 +175,19 @@ the text.
 
 ### Other notification services
 
-Every `notify` URL is handed to [shoutrrr](https://containrrr.dev/shoutrrr/)
-under the hood — see its docs for the full list of supported services and
-URL formats (Discord, Slack, Telegram, Pushover, and more), not just ntfy.
+Every `notify` URL is handed to [shoutrrr](https://shoutrrr.nickfedor.com/latest/services/overview/)
+(the maintained nicholas-fedor fork) under the hood — see its docs for the
+full list of supported services and URL formats (Discord, Slack, Telegram,
+Pushover, and more), not just ntfy. A plain webhook is
+`generic+http://host:port/path?template=json`.
+
+A fire arrives titled `watchglass: printer` with the body
+`printer: pattern matched — PRINT COMPLETE`: the watch's name is in the body
+too, because a plain webhook only gets the body. **Send test notification**
+under the Notify box sends a test to the URLs as typed, before you save.
+Saving refuses a URL that can't work (`https://ntfy.sh/topic`, a pasted
+Discord webhook link) and offers the right form. The Live panel and the watch
+list show when an alert couldn't be delivered.
 
 ## Web UI
 

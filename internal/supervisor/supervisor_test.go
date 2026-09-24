@@ -6,6 +6,8 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -528,4 +530,126 @@ func TestStartPixelChangeIgnoresEngine(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	s.StopAll()
+}
+
+// flipSource alternates black and white frames: a pixel_change watch fires
+// on every poll after the first.
+type flipSource struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (f *flipSource) Grab(ctx context.Context) (image.Image, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n++
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	v := uint8(255 * (f.n % 2))
+	for i := range img.Pix {
+		img.Pix[i] = v
+	}
+	return img, nil
+}
+
+// A05: a fire's delivery outcome lands in the registry under the same time
+// as the fired reading, so the Live panel can say which fire it was about.
+func TestDeliveryIsMirroredIntoTheRegistry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer srv.Close()
+	reg := state.New(10)
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &flipSource{}, nil }
+	w := testWatch("a")
+	w.Interval = config.Duration(50 * time.Millisecond)
+	w.Notify = []string{"ntfy+" + srv.URL + "/secret-topic"}
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if d, ok := reg.GetDelivery("a"); ok {
+			if d.OK || d.Kind != "fired" || !strings.Contains(d.Err, "status 404") || strings.Contains(d.Err, "secret-topic") {
+				t.Fatalf("delivery = %+v", d)
+			}
+			fired := false
+			for _, smp := range reg.Recent("a") {
+				fired = fired || (smp.Fired && smp.TS.Equal(d.TS))
+			}
+			if last, _ := reg.LastFired("a"); !fired && last.Before(d.TS) {
+				t.Errorf("no fired sample at the delivery's time %v", d.TS)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no delivery recorded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// An alert in flight when a Save & restart fails must not leave the
+// watch saying "Sending the alert from …" for as long as it stays
+// stopped: the old run's final report is dropped (it's no longer the
+// current run), so the mark has to go when that run is stopped.
+func TestFailedRestartLeavesNoSendingMark(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	reg := state.New(10)
+	s := New(nil, reg, ocr.Engines{}, func(string, ...any) {})
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &flipSource{}, nil }
+	w := testWatch("a")
+	w.Interval = config.Duration(50 * time.Millisecond)
+	w.Notify = []string{"ntfy+" + srv.URL + "/topic"}
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	waitSending(t, reg)
+	s.NewSource = func(w config.Watch) (source.Source, error) { return nil, errors.New("camera gone") }
+	if err := s.Restart(context.Background(), w); err == nil {
+		t.Fatal("restart with a broken source succeeded")
+	}
+	if ts, ok := reg.Sending("a"); ok {
+		t.Fatalf("a stopped watch still has an alert in flight from %v", ts)
+	}
+	// A plain Stop clears it (with no Start after it to hide a miss)...
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &flipSource{}, nil }
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	waitSending(t, reg)
+	s.Stop("a")
+	if _, ok := reg.Sending("a"); ok {
+		t.Fatal("Stop left the run's sending mark behind")
+	}
+	// ...and a Start drops one left from before it.
+	reg.SetSending("a", time.Now())
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Sending("a"); ok {
+		t.Fatal("Start kept a sending mark from before it")
+	}
+}
+
+func waitSending(t *testing.T, reg *state.Registry) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := reg.Sending("a"); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no alert went in flight")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

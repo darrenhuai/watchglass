@@ -31,6 +31,7 @@ var (
 	ffmpegCtxRe  = regexp.MustCompile(`\[[^\]@\s]+ @ (?:0x)?[0-9A-Fa-f]+\]\s*`)
 	watchPrefix  = regexp.MustCompile(`^watch (?:\d+|"(?:[^"\\]|\\.)*"):? `)
 	notifyWrapRe = regexp.MustCompile(`^creating sender for URLs \[[^\]]*\]: `)
+	notifyLineRe = regexp.MustCompile(`^line (\d+) \(([^)]*)\): (.*)$`)
 )
 
 const summaryMaxRunes = 90
@@ -139,7 +140,10 @@ func loopbackHost(hostport string) bool {
 // withHint is summary followed by errHint's sentence, when there is one.
 func withHint(summary, msg string) string {
 	if h := errHint(msg); h != "" {
-		return strings.TrimSuffix(summary, ".") + ". " + h
+		if !strings.HasSuffix(summary, "?") && !strings.HasSuffix(summary, "!") {
+			summary = strings.TrimSuffix(summary, ".") + "."
+		}
+		return summary + " " + h
 	}
 	return summary
 }
@@ -358,6 +362,10 @@ func friendlyStartError(err error) string {
 	case errors.Is(err, ocr.ErrNoRapidOCR):
 		return "This watch reads with rapidocr, and no Python with the rapidocr package was found. Run pip install rapidocr onnxruntime, or switch Engine."
 	case strings.HasPrefix(msg, "notify: "):
+		// notify.NewShoutrrr names the line and its host, never the rest.
+		if m := notifyLineRe.FindStringSubmatch(strings.TrimPrefix(msg, "notify: ")); m != nil {
+			return "Notify line " + m[1] + " (" + m[2] + ") can't be used: " + lowerFirst(strings.TrimSuffix(m[3], ".")) + "."
+		}
 		return "A notify URL can't be used: " + innermost(notifyWrapRe.ReplaceAllString(strings.TrimPrefix(msg, "notify: "), "")) + "."
 	case strings.HasPrefix(msg, "source: "):
 		return "The source can't be used: " + strings.TrimSuffix(innermost(strings.TrimPrefix(msg, "source: ")), ".") + "."
@@ -373,4 +381,116 @@ func joinOr(items []string) string {
 		return items[0]
 	}
 	return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
+}
+
+// Delivery errors. The runner records notify.SendError's text, already
+// scrubbed down to scheme://host per failed line ("line 2 of 3
+// (ntfy://ntfy.sh): ntfy: status 404; ..."); these turn it into sentences
+// that name the line only when the list has more than one.
+
+var (
+	deliveryPartRe  = regexp.MustCompile(`^line (\d+) of (\d+) \(([^)]*)\): (.*)$`)
+	deliveryCodeRe  = regexp.MustCompile(`(?i)status(?: code)?:?\s+"?(\d{3})\b`)
+	deliverySchemes = map[string]string{"generic": "generic+http://", "ntfy": "ntfy+http://", "ntfys": "ntfy+http://"}
+)
+
+// deliveryText is the whole failure as one or more sentences, e.g.
+// "ntfy+http://10.0.0.2:81 answered HTTP 404: check the topic and the server address."
+func deliveryText(raw string) string {
+	var out []string
+	for _, part := range strings.Split(strings.TrimSpace(raw), "; ") {
+		m := deliveryPartRe.FindStringSubmatch(part)
+		switch {
+		case m == nil:
+			out = append(out, upperFirst(deliveryCause(part, "")))
+		case m[2] == "1":
+			out = append(out, m[3]+" "+deliveryCause(m[4], m[3]))
+		default:
+			out = append(out, "Line "+m[1]+" ("+m[3]+") "+deliveryCause(m[4], m[3]))
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// deliveryCause says what went wrong sending to one notify URL, as the
+// rest of a sentence whose subject is label (scheme://host): "answered
+// HTTP 404: check the topic and the server address." It never adds more of the URL than
+// label, and label may be "" (the phrase then stands alone).
+func deliveryCause(msg, label string) string {
+	low := strings.ToLower(msg)
+	scheme, _, _ := strings.Cut(label, "://")
+	scheme, _, _ = strings.Cut(scheme, "+")
+	switch {
+	case strings.Contains(low, "gave http response to https client"),
+		strings.Contains(low, "first record does not look like a tls handshake"):
+		if alt := deliverySchemes[scheme]; alt != "" {
+			return "speaks plain http, not https: use " + alt + "… instead."
+		}
+		return "speaks plain http, not https."
+	case strings.Contains(low, "refused"), strings.Contains(low, "no connection could be made"):
+		return withHint("refused the connection. Is anything listening on that port?", label+" "+msg)
+	case strings.Contains(low, "no such host"), strings.Contains(low, "name resolution"), strings.Contains(low, "name or service not known"):
+		return "couldn't be found (no such host)."
+	case strings.Contains(low, "timed out"), strings.Contains(low, "deadline exceeded"), strings.Contains(low, "timeout"):
+		return "didn't answer in time."
+	case strings.Contains(low, "certificate"), strings.Contains(low, "x509"):
+		return "has a TLS certificate watchglass doesn't trust."
+	}
+	if m := deliveryCodeRe.FindStringSubmatch(msg); m != nil {
+		switch code := m[1]; {
+		case code == "401" || code == "403":
+			return "turned the request down (HTTP " + code + "): check the token or password in the URL."
+		case code == "404":
+			return "answered HTTP 404: " + notFoundHint(scheme)
+		case code == "429":
+			return "is limiting how often it takes messages (HTTP 429)."
+		case code[0] == '5':
+			return "had a server error (HTTP " + code + ")."
+		default:
+			return "answered HTTP " + code + "."
+		}
+	}
+	if strings.HasPrefix(low, "not sent: ") {
+		return "wasn't sent: " + strings.TrimSuffix(msg[len("not sent: "):], ".") + "."
+	}
+	cause := clip(innermost(msg))
+	if !strings.HasSuffix(cause, "…") {
+		cause = strings.TrimSuffix(cause, ".") + "."
+	}
+	// "failed to send notification to …" already says it failed.
+	if strings.HasPrefix(strings.ToLower(cause), "failed ") {
+		return lowerFirst(cause)
+	}
+	return "failed: " + cause
+}
+
+// notFoundHint is what an HTTP 404 most likely means for a service: the
+// part of the URL that names where the message goes is wrong.
+func notFoundHint(scheme string) string {
+	switch scheme {
+	case "ntfy", "ntfys":
+		return "check the topic and the server address."
+	case "generic":
+		return "check the path after the address."
+	case "discord", "slack", "teams", "googlechat", "mattermost", "rocketchat", "zulip":
+		return "check that the webhook still exists and the token in the URL is right."
+	case "telegram":
+		return "check the bot token."
+	}
+	return "check the URL."
+}
+
+// plainHTTPFix is the rewrite for a URL whose server answered https with
+// plain http: the same URL on the service's +http:// form, or "".
+func plainHTTPFix(u string) string {
+	low := strings.ToLower(u)
+	for _, pre := range []struct{ from, to string }{
+		{"generic+https://", "generic+http://"}, {"generic://", "generic+http://"},
+		{"ntfy+https://", "ntfy+http://"}, {"ntfys://", "ntfy+http://"}, {"ntfy://", "ntfy+http://"},
+	} {
+		if strings.HasPrefix(low, pre.from) {
+			return pre.to + u[len(pre.from):]
+		}
+	}
+	return ""
 }

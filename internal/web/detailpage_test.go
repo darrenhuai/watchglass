@@ -40,7 +40,7 @@ func TestDetailCompositionSectionsAndTestBesideStage(t *testing.T) {
 		`<fieldset id="fs-preprocess" class="fs-fold" aria-labelledby="pp-label">`,
 		`<span id="pp-label" class="fold-title">Preprocess</span>`,
 		`name="pp_threshold"`,
-		`<legend>Notify <span class="legend-note">one URL per line · <a href="https://containrrr.dev/shoutrrr/" target="_blank" rel="noopener">shoutrrr format</a></span></legend>`,
+		`<legend>Notify <span class="legend-note">one URL per line · <a href="https://shoutrrr.nickfedor.com/latest/services/overview/" target="_blank" rel="noopener">supported services</a></span></legend>`,
 		`<div class="form-actions">`,
 		`<p class="save-note" title="Merged into config.yaml: comments, key order and quoting are kept. See the README for the few things YAML can't round-trip."><span class="save-note-file">Writes to <code>config.yaml</code></span><span class="save-note-more">· comments kept</span></p>`,
 		`<button type="submit" class="btn btn-primary">Save &amp; restart watch</button>`,

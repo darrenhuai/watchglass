@@ -33,11 +33,30 @@ type Health struct {
 	Since   time.Time // when this Down/healthy state began
 }
 
+// Delivery is how the last alert a watch raised went out: a fire, or a
+// stream going down or recovering. TS is when the alert was raised (for a
+// fire, the fired Sample's TS), so the page can tell which reading it
+// belongs to. Err is already safe to show: no URL beyond scheme://host and
+// no credential (notify.Scrub), at most 200 characters.
+type Delivery struct {
+	TS      time.Time
+	Kind    string // "fired", "down" or "recovered"
+	OK      bool   // every notify URL took it
+	Skipped bool   // the watch has no notify URLs, so nothing was sent
+	Err     string // why it wasn't delivered, when !OK && !Skipped
+}
+
 type Registry struct {
 	mu     sync.Mutex
 	n      int
 	buf    map[string][]Sample // newest first
 	health map[string]Health
+	// delivery is each watch's newest finished (or skipped) delivery, and
+	// sending the TS of an alert handed to the sender that hasn't finished.
+	// They are kept apart so a failure stays on show until a later send
+	// actually succeeds, not merely until the next one starts.
+	delivery map[string]Delivery
+	sending  map[string]time.Time
 	// fired is when each watch last fired. buf only keeps the last n
 	// samples, and with confirm/cooldown the fired sample is usually gone
 	// a few readings later; the dashboard still needs to say it happened.
@@ -45,7 +64,8 @@ type Registry struct {
 }
 
 func New(n int) *Registry {
-	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}, fired: map[string]time.Time{}}
+	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}, fired: map[string]time.Time{},
+		delivery: map[string]Delivery{}, sending: map[string]time.Time{}}
 }
 
 func (r *Registry) Add(watch string, s Sample) {
@@ -100,6 +120,66 @@ func (r *Registry) Drop(watch string) {
 	delete(r.buf, watch)
 	delete(r.health, watch)
 	delete(r.fired, watch)
+	delete(r.delivery, watch)
+	delete(r.sending, watch)
+}
+
+// SetSending notes that the alert raised at ts has been handed to the
+// sender. SetDelivery for that alert (or a later one) clears it.
+func (r *Registry) SetSending(watch string, ts time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ts.After(r.sending[watch]) {
+		r.sending[watch] = ts
+	}
+}
+
+// ClearSending forgets an alert in flight: a watch that restarts has none
+// of its own yet, and its previous run's reports no longer count.
+func (r *Registry) ClearSending(watch string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.sending, watch)
+}
+
+// Sending is the TS of the newest alert still being sent, if any.
+func (r *Registry) Sending(watch string) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.sending[watch]
+	return t, ok
+}
+
+// SetDelivery records how an alert went out. An older alert's result that
+// arrives late never replaces a newer one's.
+func (r *Registry) SetDelivery(watch string, d Delivery) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.delivery[watch]; !ok || !d.TS.Before(cur.TS) {
+		r.delivery[watch] = d
+	}
+	if s, ok := r.sending[watch]; ok && !s.After(d.TS) {
+		delete(r.sending, watch)
+	}
+}
+
+// GetDelivery returns the watch's newest finished delivery, or false if it
+// hasn't raised an alert since watchglass started (or since ClearDelivery).
+func (r *Registry) GetDelivery(watch string) (Delivery, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.delivery[watch]
+	return d, ok
+}
+
+// ClearDelivery forgets a watch's delivery record. A save that changes the
+// notify URLs calls it: a failure to reach URLs that are no longer in the
+// list says nothing about the new ones.
+func (r *Registry) ClearDelivery(watch string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.delivery, watch)
+	delete(r.sending, watch)
 }
 
 // SetHealth records watch's current stream health verdict, overwriting

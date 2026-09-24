@@ -282,12 +282,37 @@
           </div>
         </details>
       </fieldset>
-      <fieldset>
-        <legend>Notify <span class="legend-note">one URL per line · <a href="https://containrrr.dev/shoutrrr/" target="_blank" rel="noopener">shoutrrr format</a></span></legend>
+      {{/* Notify: the URLs a fire goes to, one per line (shoutrrr's format;
+           go.mod ships the nicholas-fedor fork, so the docs link is its).
+           Save refuses a line notify.Check refuses, with the reason and,
+           when there is an obvious one, the rewrite (notifyFix, in
+           notifytest.html). Send test notification posts the box as it is
+           now to /test-notify: nothing is saved and the watch is untouched;
+           the answer lands in #notify-result. */}}
+      <fieldset id="fs-notify">
+        <legend>Notify <span class="legend-note">one URL per line · <a href="https://shoutrrr.nickfedor.com/latest/services/overview/" target="_blank" rel="noopener">supported services</a></span></legend>
         <label for="f-notify" class="sr-only">Notification URLs</label>
-        <textarea id="f-notify" class="mono" name="notify" rows="3" spellcheck="false" autocapitalize="off" placeholder="ntfy://ntfy.sh/my-topic&#10;telegram://token@telegram?chats=@channel"{{with .Form.Err "notify"}} aria-invalid="true" aria-describedby="err-notify"{{end}}>{{range .Watch.Notify}}{{.}}
+        <textarea id="f-notify" class="mono" name="notify" rows="3" spellcheck="false" autocapitalize="off" placeholder="ntfy://ntfy.sh/my-topic&#10;telegram://token@telegram?chats=@channel"{{if or .Form.Notify (.Form.Err "notify")}} aria-invalid="true" aria-describedby="err-notify notify-help"{{else}} aria-describedby="notify-help"{{end}}>{{range .Watch.Notify}}{{.}}
 {{end}}</textarea>
-        {{with .Form.Err "notify"}}<p id="err-notify" class="field-error">{{.}}</p>{{end}}
+        {{with .Form.Notify}}<ul id="err-notify" class="notify-problems">
+          {{range .}}<li class="field-error">Line {{.Line}}: {{.Reason}}{{template "notifyFix" .}}</li>{{end}}
+        </ul>{{else}}{{with .Form.Err "notify"}}<p id="err-notify" class="field-error">{{.}}</p>{{end}}{{end}}
+        <div class="notify-actions">
+          <button type="button" id="notify-test" class="btn btn-outline"{{if not .Watch.Notify}} disabled{{end}}>Send test notification</button>
+          <p id="notify-help" class="field-hint">Sends to the URLs above now, saved or not.</p>
+        </div>
+        <div id="notify-result" aria-live="polite" aria-atomic="true"></div>
+        <details class="tech-detail notify-formats">
+          <summary>Common formats</summary>
+          <dl class="format-list">
+            <div><dt>ntfy.sh topic</dt><dd class="mono">ntfy://ntfy.sh/your-topic</dd></div>
+            <div><dt>Your own ntfy server</dt><dd class="mono">ntfy+http://192.168.1.10:8081/your-topic</dd></div>
+            <div><dt>Any webhook (JSON POST)</dt><dd class="mono">generic+http://192.168.1.10:9000/hook?template=json</dd></div>
+            <div><dt>Discord webhook</dt><dd class="mono">discord://TOKEN@WEBHOOK_ID</dd></div>
+            <div><dt>Telegram bot</dt><dd class="mono">telegram://BOT_TOKEN@telegram?chats=@channel</dd></div>
+          </dl>
+          <p class="format-more">Pasted a web address such as https://ntfy.sh/topic or a Discord webhook link? Save or test it and watchglass offers the right form. <a href="https://shoutrrr.nickfedor.com/latest/services/overview/" target="_blank" rel="noopener">All services and their options</a>.</p>
+        </details>
       </fieldset>
       {{/* The bar stays at the bottom of the viewport while the form is
            longer than the screen, so Save is always one click away. The

@@ -40,12 +40,12 @@
           <span class="tag">Stopped</span>
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
-          <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span></span>
+          <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span>{{with .AlertsFailing}}<span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}</span>
         {{else if .Has}}{{$r := reading .Watch.Engine .Latest.Reading}}
           {{/* Fired stays first: an alert is never hidden behind "unreadable". */}}
           {{/* An earlier fire, once newer readings came in: "fired 12 s ago". */}}
           <span class="led {{if .Latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}</span>
+          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}} <span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}</span>
         {{else}}
           <span class="led led-off" aria-hidden="true"></span>
           <span class="reading-pending">No readings yet</span>

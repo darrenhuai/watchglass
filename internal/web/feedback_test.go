@@ -168,13 +168,23 @@ func TestGrabErrorsArePlainTextSummaryThenDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The one place the answer is parsed as markup sits inside the
-	// ok+text/html branch, which returns before the text-only error path.
+	// The two places an answer is parsed as markup (Test this region and
+	// Send test notification) each sit inside their ok+text/html branch,
+	// which returns before that button's text-only error path.
 	src := string(js)
-	guard := strings.Index(src, "if (r.ok && r.html) {")
-	parse := strings.Index(src, "tpl.innerHTML = r.text;")
-	errPath := strings.Index(src, `renderTestError(box, r.text.trim()`)
-	if guard < 0 || parse < guard || errPath < parse || strings.Count(src, "innerHTML = r.text") != 1 || strings.Contains(src, "el.innerHTML = html") {
+	for _, errCall := range []string{`renderTestError(box, r.text.trim()`, `renderNotifyError(r.text.trim()`} {
+		errPath := strings.Index(src, errCall)
+		if errPath < 0 {
+			t.Errorf("app.js lacks %s", errCall)
+			continue
+		}
+		parse := strings.LastIndex(src[:errPath], "tpl.innerHTML = r.text;")
+		guard := strings.LastIndex(src[:errPath], "if (r.ok && r.html) {")
+		if guard < 0 || parse < guard || !strings.Contains(src[parse:errPath], "return;") {
+			t.Errorf("app.js must only insert a successful text/html answer as markup (%s)", errCall)
+		}
+	}
+	if strings.Count(src, "innerHTML = r.text") != 2 || strings.Contains(src, "el.innerHTML = html") {
 		t.Error("app.js must only insert a successful text/html Test answer as markup")
 	}
 }

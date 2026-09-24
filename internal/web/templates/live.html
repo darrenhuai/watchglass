@@ -8,8 +8,10 @@
      data-fired/data-ts tell a new fire from the one already shown.
      The badges only say how old what's below is; the error itself is shown
      once, under the page title. "Error" is not always a camera (an OCR
-     pass can fail too), so the no-readings badge doesn't guess a cause. */}}
-<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
+     pass can fail too), so the no-readings badge doesn't guess a cause.
+     data-delivery (deliveryView.State) lets app.js announce an alert that
+     didn't get through. */}}
+<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}" data-delivery="{{.Delivery.State}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
 {{if eq .Status.State "error"}}
 {{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale — last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
 {{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
@@ -23,7 +25,7 @@
   {{/* Two rows at every width (style.css): LED, label, fired tag and the
        time on the first, the reading full width under them. */}}
   <span class="readout-label">Latest reading</span>
-  {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired</span>{{end}}
+  {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired{{with $.FiredTag}} · {{.}}{{end}}</span>{{end}}
   <time class="readout-ts mono" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
   {{if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>
   {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>{{end}}
@@ -31,6 +33,14 @@
 {{else}}
 <p class="muted">No readings yet</p>
 {{end}}
+{{/* Whether alerts are getting out (deliveryFor in web.go). A failure
+     stays until a later alert goes through or the URLs are changed; the
+     error names each URL by scheme://host only. */}}
+{{with .Delivery}}{{if eq .State "failed"}}<p class="delivery delivery-failed">Last alert{{.KindNote}} at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time> could not be delivered: {{.Text}} Use <a href="#notify-test">Send test notification</a> to check the URL.</p>
+{{else if eq .State "sending"}}<p class="delivery delivery-sending">Sending the alert from <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>…</p>
+{{else if eq .State "sent"}}<p class="delivery delivery-sent"><span class="delivery-mark" aria-hidden="true">✓</span>Last alert{{.KindNote}} sent at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>.</p>
+{{else if eq .State "none"}}<p class="delivery delivery-none">No notification URLs: fires are only shown here{{if .MQTT}} and sent to MQTT{{end}}. <a href="#f-notify">Add one under Notify</a>.</p>
+{{end}}{{end}}
 </div>
 {{if .Tiles}}
 {{/* Focusable so the keyboard can scroll it (Safari doesn't make scroll
