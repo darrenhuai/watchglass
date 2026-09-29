@@ -558,7 +558,7 @@ func Load(path string) (*Config, error) {
 }
 
 // freshFile is what a config that doesn't exist yet is written as when cfg
-// has nothing to say: the same skeleton the README's quick start writes.
+// has nothing to say: an empty watch list, which a first run creates.
 const freshFile = "watches: []\n"
 
 // Save writes cfg to path atomically (tmp file + rename) so a crash mid-write

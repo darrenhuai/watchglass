@@ -274,3 +274,16 @@ func patternOf(t *testing.T, body, id string) *regexp.Regexp {
 	}
 	return re
 }
+
+// The Source hint points a stranger at the camera URL cookbook, the page
+// that answers "what's my camera's snapshot URL?". It opens in a new tab so
+// a half-filled add form isn't lost. (internal/docscheck checks that the
+// linked file exists in the repository.)
+func TestSourceHintLinksTheCameraURLCookbook(t *testing.T) {
+	s, _ := newTestServer(t)
+	_, body := get(t, s.Handler(), "/")
+	want := `input arguments. <a href="https://github.com/darrenhuai/watchglass/blob/master/docs/recipes/camera-urls.md" target="_blank" rel="noopener">URLs by camera brand</a></p>`
+	if !strings.Contains(body, `<p id="hint-source" class="field-hint">`) || !strings.Contains(body, want) {
+		t.Errorf("the Source hint should link the camera URL cookbook:\n%s", body)
+	}
+}

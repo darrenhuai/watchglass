@@ -2,7 +2,7 @@
 
 ## The quick way: `watchglass -demo`
 
-```
+```bash
 watchglass -demo
 ```
 
@@ -25,7 +25,7 @@ in the temp directory (`watchglass-demo-<uid>` on Linux and macOS, where
 that directory is shared) and starts them fresh every time. It never creates or
 changes a `config.yaml` in the current directory. Docker works the same way:
 
-```
+```bash
 docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
 
@@ -34,8 +34,9 @@ watch** button. It creates `demo-printer` on the built-in camera so you can
 draw the region yourself.
 
 The rest of this page is the older rig: a fake camera served over HTTP by
-a Python script, for recording the launch GIF and for testing the HTTP
-snapshot path end to end.
+a Python script, for testing the HTTP snapshot path end to end. It needs a
+clone of the repository, Python and Go. How the demo GIF is recorded is in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#record-the-demo-gif-and-screenshots).
 
 ## The frames
 
@@ -51,7 +52,7 @@ files.
 
 Terminal 1, the fake camera:
 
-```
+```bash
 python examples/demo/fakecam.py
 ```
 
@@ -62,29 +63,17 @@ real IP cameras that lie about their format.
 
 Terminal 2, watchglass:
 
-```
+```bash
 go run ./cmd/watchglass -config examples/demo/config.yaml -db demo.db -listen 127.0.0.1:8123
 ```
 
 Open http://127.0.0.1:8123/watch/demo-printer and watch the live readout
 change as the frames cycle. `config.yaml` uses an `ocr_match` trigger, so it
-needs `tesseract` on PATH (`apt install tesseract-ocr` / `choco install
-tesseract`), or `engine: rapidocr` with a Python that has `pip install
-rapidocr onnxruntime`. Without one of them watchglass refuses to start a
-text watch. The file has a commented-out `pixel_change` block that needs
-neither.
-
-## Recording the launch GIF
-
-These are the beats to record with this rig instead of a real printer:
-
-1. Open `demo-printer`'s live preview and drag a rectangle around the status
-   line. The region is already set, but the drag is the visual beat.
-2. Show the trigger picker set to a match rule, with the live readout
-   underneath showing it really reads `PRINTING NN%`.
-3. Kill terminal 1 and restart it with `--once-complete`, so the printer
-   finishes exactly once. Then let the timelapse jump to `PRINT COMPLETE`
-   and the notification land.
+needs tesseract (`sudo apt install tesseract-ocr`, `brew install tesseract`
+or `winget install UB-Mannheim.TesseractOCR`), or `engine: rapidocr` with a
+Python that has `pip install rapidocr onnxruntime`. Without one of them the
+text watch doesn't start, and its page says what to install. The file has a
+commented-out `pixel_change` block that needs neither.
 
 ## Seven-segment display rig
 
@@ -99,14 +88,14 @@ small) and committed as-is. The script is not part of the repo.
 
 Serve them instead of the printer frames:
 
-```
+```bash
 python examples/demo/fakecam.py --frames sevenseg
 ```
 
 (`--frames` also takes a directory. The old `examples/demo/frames-sevenseg`
 path still works too.) Then run watchglass against the matching config:
 
-```
+```bash
 go run ./cmd/watchglass -config examples/demo/config-sevenseg.yaml -db demo.db -listen 127.0.0.1:8123
 ```
 
@@ -118,7 +107,7 @@ trigger (`op: gt`, `threshold: 25`) fires when the frames reach `25.3`.
 
 ## Cleanup
 
-```
+```bash
 rm demo.db
 ```
 
@@ -130,7 +119,9 @@ runtime.
 Running watchglass in Docker instead? Start the camera on every interface
 and point the watch at the host:
 
-    python fakecam.py --bind 0.0.0.0
+```bash
+python examples/demo/fakecam.py --bind 0.0.0.0
+```
 
 and use `http://host.docker.internal:8100/snapshot.jpg` as the source (the
 compose file maps `host.docker.internal` to the host on Linux too).

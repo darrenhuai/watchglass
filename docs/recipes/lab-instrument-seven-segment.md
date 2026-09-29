@@ -58,7 +58,7 @@ watches:
       confirm: 2
       cooldown: 1m
     notify:
-      - ntfy://ntfy.sh/example-lab-scale
+      - ntfy://ntfy.sh/<TOPIC>
 
   # Fallback: skip reading entirely, just detect that the display changed.
   - name: lab-scale-any-change
@@ -70,7 +70,7 @@ watches:
       threshold: 5
       cooldown: 30s
     notify:
-      - ntfy://ntfy.sh/example-lab-scale
+      - ntfy://ntfy.sh/<TOPIC>
 ```
 
 A watch with no `engine:` line still uses tesseract; nothing changes for
@@ -90,10 +90,13 @@ own; a stricter pattern that pins the digit count you expect, say
 
 `confirm: 2` is a reasonable default here where the printed-text recipes
 go higher: the decoder is deterministic, so a display that isn't changing
-produces the identical string poll after poll, and two matching polls are
-enough to rule out a frame caught mid-refresh. A reading that changes every
-poll (a scale settling) never reaches "stable" at any `confirm`, which is
-the intended behaviour: it fires once the value holds.
+produces the same reading poll after poll, and two readings in a row above
+the threshold are enough to rule out a frame caught mid-refresh. For a
+`numeric` watch `confirm` counts readings that meet the condition, not
+identical ones, so a scale that wobbles between 512.3 and 512.4 still
+fires. With an `mqtt:` block, the watch's Value sensor in Home Assistant is
+the median of the last 2 × `confirm` − 1 readings, so a misread digit never
+reaches the graph.
 
 Leave `preprocess` alone to start. The decoder binarizes the crop itself
 and picks the polarity, so `invert` and `threshold` add nothing on a clean

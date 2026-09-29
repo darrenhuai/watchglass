@@ -138,7 +138,7 @@
     <label for="new-source">Source URL</label>
     <input id="new-source" name="source" placeholder="http://camera/snapshot.jpg or rtsp://…" required value="{{.Form.Val "source" ""}}" spellcheck="false" autocapitalize="off" inputmode="url" pattern="\s*(?:(?:(?:https?|rtsps?):\/\/|(?:v4l2|dshow|ffmpeg):)\s*\S.*|demo:\s*(?:printer|sevenseg)\s*)" title="Start with http://, https://, rtsp://, rtsps://, v4l2:, dshow: or ffmpeg:." aria-describedby="{{if $srcErr}}err-source {{end}}hint-source"{{if $srcErr}} aria-invalid="true"{{if not $nameErr}} autofocus{{end}}{{end}}>
     {{with $srcErr}}<p id="err-source" class="field-error">{{.}}</p>{{end}}
-    <p id="hint-source" class="field-hint">An HTTP(S) snapshot, an <span class="mono">rtsp://</span> stream, a <span class="mono">v4l2:</span> or <span class="mono">dshow:</span> device, or <span class="mono">ffmpeg:</span> input arguments.</p>
+    <p id="hint-source" class="field-hint">An HTTP(S) snapshot, an <span class="mono">rtsp://</span> stream, a <span class="mono">v4l2:</span> or <span class="mono">dshow:</span> device, or <span class="mono">ffmpeg:</span> input arguments. <a href="https://github.com/darrenhuai/watchglass/blob/master/docs/recipes/camera-urls.md" target="_blank" rel="noopener">URLs by camera brand</a></p>
   </div>
   <button type="submit" class="btn btn-primary">Create</button>
 </form>

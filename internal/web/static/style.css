@@ -1350,6 +1350,10 @@ fieldset > .field-error { margin-top: var(--space-2); }
    field's width instead of widening it. */
 .field-hint { margin: 0; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-faint); text-wrap: pretty; }
 .field-hint .mono { font-size: var(--fs-xs); color: var(--text-dim); }
+/* A link in a hint (the Source hint's camera URL cookbook) sits one step
+   brighter than the hint, like the Notify legend's link. */
+.field-hint a { color: var(--text-dim); }
+.field-hint a:hover { color: var(--accent); }
 .form-inline-add .field-hint { width: 0; min-width: 100%; }
 
 /* ---- Detail page header ------------------------------------------------*/

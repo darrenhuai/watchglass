@@ -30,10 +30,10 @@ watches:
     trigger:
       type: ocr_match
       pattern: "(?i)print complete"
-      confirm: 3        # require 3 consecutive identical readings first
+      confirm: 3        # 3 readings in a row must match the pattern first
       cooldown: 2h       # a print run is long; don't re-notify on flicker
     notify:
-      - ntfy://ntfy.sh/example-bambu
+      - ntfy://ntfy.sh/<TOPIC>
 
   - name: printer-error
     source: http://192.168.1.55/snapshot.jpg
@@ -48,7 +48,7 @@ watches:
       confirm: 3        # same glare protection, independent of the watch above
       cooldown: 15m      # errors deserve a faster re-alert than completions
     notify:
-      - ntfy://ntfy.sh/example-bambu
+      - ntfy://ntfy.sh/<TOPIC>
 ```
 
 ## Why two watches, not one pattern
@@ -98,7 +98,7 @@ states on a slower or rate-limited camera.
 gallery: touchscreen photos are exactly the kind of filmed-screen shot most
 prone to glare, camera-shake blur, and moiré from the screen's own refresh —
 a single bad frame misreading text is a false positive you don't want.
-Three consecutive identical reads before believing a transition filters
+Three readings in a row that match before believing a transition filters
 almost all of that out. Each watch tracks its own confirm count, so a run
 of glare that confuses one doesn't affect the other.
 
@@ -119,7 +119,7 @@ cooldown while something is jammed.
   night is a common miss), not just once at setup time.
 - If tesseract keeps misreading the LCD's font even with the preprocessing
   tuned — thin or stylised glyphs, a low-contrast panel — set
-  `engine: rapidocr` on both watches (see "OCR engines" in the README): a
+  `engine: rapidocr` on both watches (see [OCR engines](../configuration.md#ocr-engines)): a
   neural OCR model that copes with harder text, at the cost of a Python
   install and a few seconds per read.
 - A firmware update that changes the touchscreen's layout, font, or wording

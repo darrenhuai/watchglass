@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Camera URL cookbook
+    url: https://github.com/darrenhuai/watchglass/blob/master/docs/recipes/camera-urls.md
+    about: The snapshot or stream URL for your camera, by brand.
+  - name: Documentation
+    url: https://github.com/darrenhuai/watchglass/tree/master/docs
+    about: Install, sources, notifications, Home Assistant and security.

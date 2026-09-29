@@ -580,4 +580,12 @@ func TestSevenSegColon(t *testing.T) {
 	if digits != "1234" || strings.Contains(got, "?") {
 		t.Errorf("12:34 read %q (%+v)", got, words)
 	}
+	// A clean colon is as sure as the digits round it: Test this region
+	// marks a glyph under 60 as low confidence, and a clock or countdown
+	// that read perfectly shouldn't carry that warning.
+	for _, w := range words {
+		if w.Text == ":" && w.Conf < 60 {
+			t.Errorf("the colon of a clean 12:34 scored %v (%+v)", w.Conf, words)
+		}
+	}
 }

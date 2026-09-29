@@ -1168,9 +1168,16 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 }
 
 // separator is the glyph for a decimal point or colon: confident while it
-// is small against the row.
+// is small against the row. A colon's blob is its two dots merged, so its
+// height spans the gap between them; its width is one dot's size, and that
+// is what is judged (judging the height scored every colon 0, which Test
+// this region showed as a low-confidence glyph on a clean read).
 func separator(ch byte, b blob, rowH float64) glyph {
-	size := float64(max(b.w(), b.h())) / (pointSizeFrac * rowH)
+	extent := max(b.w(), b.h())
+	if ch == ':' {
+		extent = b.w()
+	}
+	size := float64(extent) / (pointSizeFrac * rowH)
 	conf := math.Round(100 * math.Min(1, math.Max(0, pointConfSlope*(1-size))))
 	return glyph{ch: ch, conf: conf, x0: b.x0, x1: b.x1, x: b.cx()}
 }

@@ -10,10 +10,16 @@
 # comment block parked above it moves to the next watch.
 watches:
   - name: printer-lcd
-    # Any URL that returns a JPEG/PNG. Most IP cameras expose one
-    # (e.g. http://CAMERA-IP/snapshot.jpg). For RTSP cameras, use an
-    # rtsp:// source directly — see the instrument-readout watch below.
+    # Any URL that returns a JPEG/PNG, or an MJPEG stream (the first frame
+    # is read). docs/recipes/camera-urls.md lists the URL by camera brand.
+    # A login goes in the URL (http://user:pass@CAMERA-IP/...; Basic and
+    # Digest both work). For RTSP cameras, use an rtsp:// source directly —
+    # see the instrument-readout watch below.
     source: http://192.168.1.50/snapshot.jpg
+    # For an https:// camera with a self-signed certificate:
+    # tls_insecure: true
+    # Extra request headers, curl -H style, e.g. an API key:
+    # headers: ["X-Api-Key: <KEY>"]
     interval: 5s
     # Normalized coordinates (0.0-1.0): this watches the middle strip.
     region: {x: 0.25, y: 0.45, w: 0.5, h: 0.1}
@@ -26,9 +32,11 @@ watches:
     trigger:
       type: ocr_match
       pattern: "(?i)print complete"
-      confirm: 3       # require 3 consecutive identical readings (glare protection)
+      confirm: 3       # 3 readings in a row must match before it fires (glare protection)
       cooldown: 30m    # don't re-fire within 30 minutes
     notify:
+      # One URL per line; the web UI's Send test notification checks them.
+      # docs/notifications.md has the forms for Discord, Telegram, email...
       - ntfy://ntfy.sh/my-printer-topic
 
   - name: printer-motion
@@ -57,16 +65,22 @@ watches:
     region: {x: 0.3, y: 0.4, w: 0.4, h: 0.15}
     # A seven-segment LED/LCD readout: the built-in decoder reads it with no
     # tesseract and no preprocessing. Omit engine (or say tesseract) for
-    # printed text; say rapidocr for printed text tesseract misreads (needs
-    # python with `pip install rapidocr onnxruntime`; ~3 s per read).
+    # printed text, one line per watch; say rapidocr for text tesseract
+    # misreads or several lines (needs python with
+    # `pip install rapidocr onnxruntime`; ~3 s per read).
     engine: sevenseg
     trigger:
       type: numeric
       pattern: "([0-9]+\\.[0-9])"
       op: gt
       threshold: 80.0
-      confirm: 3
+      confirm: 3       # readings in a row above 80, not identical readings
       cooldown: 15m
+    # How Home Assistant shows the number (the MQTT Value sensor). A
+    # device_class needs one of the units HA takes for it; see
+    # docs/home-assistant.md.
+    unit: "°C"
+    device_class: temperature
     notify:
       - ntfy://ntfy.sh/my-lab-topic
 
@@ -81,8 +95,10 @@ watches:
 #   password: change-me
 
 # Optional: publish every watch to Home Assistant via MQTT auto-discovery.
-# Each watch appears as a device with reading, health, motion, and snapshot
-# entities — no HA YAML needed. Omit the block to disable.
+# Each watch appears as a device with Reading, Health, Motion and Snapshot
+# entities, plus a Value sensor for numeric watches — no HA YAML needed.
+# The top of every page shows whether the broker is connected. Changes to
+# this block need a restart. Omit the block to disable.
 # mqtt:
 #   broker: tcp://homeassistant.local:1883
 #   username: watchglass

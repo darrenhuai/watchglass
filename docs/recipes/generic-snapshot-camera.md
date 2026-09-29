@@ -15,10 +15,12 @@ recipe in this gallery is a variation on the same `watches:` shape.
   ONVIF device-manager tool) will hand you the exact URL. watchglass doesn't
   speak ONVIF itself and has no camera-discovery feature — you find the URL
   once, then paste it into `source:`.
-- If the endpoint needs HTTP Basic auth, put credentials right in the URL:
-  `http://user:pass@192.168.1.42/snapshot.jpg` — watchglass's HTTP source is
-  a stock Go `http.Client`, which sends the `Authorization` header for you
-  when the URL carries a userinfo part.
+- The [camera URL cookbook](camera-urls.md) has the snapshot URL for the
+  common brands.
+- If the endpoint needs a login, put it right in the URL:
+  `http://user:pass@192.168.1.42/snapshot.jpg`. Basic and Digest auth both
+  work. A token or API key goes in `headers:` instead (see
+  [sources.md](../sources.md#logins)).
 
 ## Watches config
 
@@ -35,7 +37,7 @@ watches:
       threshold: 20      # fire when >20% of the region's pixels change
       cooldown: 2m
     notify:
-      - ntfy://ntfy.sh/example-workshop
+      - ntfy://ntfy.sh/<TOPIC>
 
   # The same camera also has a small text readout in frame — OCR it
   # instead, and fire whenever the text settles on something new.
@@ -51,7 +53,7 @@ watches:
       confirm: 3
       cooldown: 1m
     notify:
-      - ntfy://ntfy.sh/example-workshop
+      - ntfy://ntfy.sh/<TOPIC>
 ```
 
 ## Tuning notes
@@ -71,12 +73,13 @@ get a working watch on day one, useful for lights, needles, anything where
 
 ## Caveats
 
-- The HTTP source decodes a single JPEG or PNG per request — it does not
-  parse a multipart MJPEG stream. If your camera's "MJPEG URL" is actually
-  a continuous multipart response rather than a single-image snapshot
-  endpoint, look for a still-image path instead (most cameras that offer
-  MJPEG streaming also offer a plain snapshot URL).
+- An MJPEG stream URL works too: watchglass reads the first frame and
+  closes the connection. A plain snapshot URL is still lighter on the
+  camera if it has one.
 - Every poll is a fresh request; if the camera caches or rate-limits its
   snapshot endpoint, readings can lag behind what's really on screen.
-- Basic auth via the URL only covers HTTP Basic — cameras that require a
-  session cookie or a login form aren't supported.
+- Cameras that only accept a login form aren't supported. One that takes a
+  session cookie can be given it with `headers: ["Cookie: <COOKIE>"]`, for
+  as long as the cookie lasts.
+- A camera with a self-signed HTTPS certificate needs `tls_insecure: true`
+  (or the Certificate box under Polling).

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in watchglass doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Take passwords, tokens and notification URLs out of anything you paste. watchglass hides them on its own pages, but not in config.yaml or your shell history.
+  - type: input
+    id: version
+    attributes:
+      label: watchglass version
+      description: The output of `watchglass -version` (in Docker, `docker exec watchglass watchglass -version`).
+      placeholder: watchglass 0.1.8
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose or docker run
+        - Home Assistant add-on
+        - Binary on Linux
+        - Binary on macOS
+        - Binary on Windows
+        - Built from source or go install
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The lines around the problem, starting with the `engines:` line from start-up. In Docker, `docker logs watchglass`.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: The watch's config
+      description: Optional. The watch from config.yaml, with passwords and tokens replaced by <PASSWORD> and <TOKEN>.
+      render: yaml
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Optional. The watch's page or the Test this region result often says more than the log.

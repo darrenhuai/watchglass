@@ -6,6 +6,9 @@ still image, so turning it into a frame needs a decoder. watchglass doesn't
 carry one: it shells out to `ffmpeg`, grabs exactly one frame, and lets the
 process exit.
 
+The [camera URL cookbook](camera-urls.md) has the RTSP path for common
+brands (Tapo, Wyze through its bridge, UniFi Protect).
+
 ## Watches config
 
 ```yaml
@@ -21,13 +24,14 @@ watches:
       threshold: 15
       cooldown: 5m
     notify:
-      - ntfy://ntfy.sh/example-driveway
+      - ntfy://ntfy.sh/<TOPIC>
 ```
 
 ## Tuning notes
 
 **ffmpeg must be on PATH.** Prebuilt watchglass binaries don't bundle it —
-`apt install ffmpeg`, `choco install ffmpeg`, or your distro's equivalent.
+`sudo apt install ffmpeg`, `brew install ffmpeg`, `winget install Gyan.FFmpeg`,
+or your distro's equivalent.
 Docker images that already ship it (like the official watchglass image) need
 nothing extra.
 

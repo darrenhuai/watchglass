@@ -1,0 +1,69 @@
+name: Recipe request
+description: A screen you'd like watchglass to watch. Attach a frame of it.
+title: "Recipe: "
+labels: [recipe]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us about the device and what you want to know from its screen. A frame from your camera (or a phone photo of the panel) is the most useful part: recipes are tested against a real frame.
+
+        Before you attach anything, crop out people, addresses, serial numbers and anything else personal, and take passwords and tokens out of URLs.
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Make and model, if you know them.
+      placeholder: Daikin Altherma 3 heat pump, indoor unit panel
+    validations:
+      required: true
+  - type: textarea
+    id: screen
+    attributes:
+      label: What's on the screen
+      description: What the display shows, and what kind of display it is (text LCD, seven-segment digits, LEDs, a monitor).
+      placeholder: A two-line text LCD. Line 1 is the flow temperature, like "LWT 45.0°C". Error codes like "U4" replace line 2.
+    validations:
+      required: true
+  - type: dropdown
+    id: capture
+    attributes:
+      label: How you capture it
+      options:
+        - IP camera with a snapshot URL
+        - IP camera, RTSP only
+        - ESP32-CAM or ESPHome
+        - Phone (IP Webcam or similar)
+        - USB webcam or HDMI capture card
+        - KVM over IP (PiKVM, NanoKVM, JetKVM…)
+        - A camera that's in Home Assistant
+        - Not set up yet
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera or source
+      description: Camera model and the shape of its URL, with the password taken out.
+      placeholder: Reolink E1 Zoom, https://CAMERA/cgi-bin/api.cgi?cmd=Snap&channel=0
+  - type: textarea
+    id: frame
+    attributes:
+      label: A frame of the screen
+      description: Drag an image in here. The camera's own snapshot is best; a phone photo is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: What should trigger an alert
+      description: Or what number you'd like in Home Assistant.
+      placeholder: Any error code, and the flow temperature as a sensor in HA.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you've tried
+      description: Optional. What Test this region read, which engine and settings you used.
