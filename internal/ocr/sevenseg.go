@@ -166,6 +166,19 @@ const (
 	// long, is a bezel line or a reflection off the glass.
 	bezelThinFrac = 0.025
 	bezelLongFrac = 0.5
+	// rimMaxStrokeFrac: ink along the crop's top or bottom edge thinner
+	// than this share of a bar, lying flat and separated from the digits
+	// by a blank row, is the rim of the display window, not a bar.
+	rimMaxStrokeFrac = 0.6
+	// cellMaxAspect: a cell wider than this many row heights is two
+	// glyphs run together or the frame round the display, never a digit.
+	cellMaxAspect = 1.0
+	// minusMaxStrokes, minusBand0/1: a short cluster is a "-" only when
+	// it is at most this many strokes tall and its centre lies in this
+	// band of the row; anything else short is a fragment and dropped.
+	minusMaxStrokes = 1.5
+	minusBand0      = 0.3
+	minusBand1      = 0.7
 	// lineWideFrac, lineThinFrac: a blob wider than lineWideFrac*inkH and
 	// shorter than lineThinFrac*inkH is a line across the row, never a bar.
 	lineWideFrac = 1.5
@@ -481,6 +494,7 @@ func (d *decoder) readAt(level int, bright bool) reading {
 	m := binarize(d.g, d.thr[level], bright, d.wk.bufs[0])
 	m = denoise(m, d.wk.bufs[1])
 	blobs := dropBezels(m, components(m, d.wk))
+	blobs = dropRims(m, blobs, d.wk)
 	if !d.sheared[p] {
 		d.shear[p] = shearEstimate(m, d.wk)
 		d.sheared[p] = true
@@ -603,6 +617,51 @@ func dropBezels(m bitmap, blobs []blob) []blob {
 		onX := (b.x0 == 0 || b.x1 == m.w-1) && b.w() <= thinX && float64(b.h()) >= bezelLongFrac*float64(m.h)
 		onY := (b.y0 == 0 || b.y1 == m.h-1) && b.h() <= thinY && float64(b.w()) >= bezelLongFrac*float64(m.w)
 		if onX || onY {
+			erase(m, b)
+			continue
+		}
+		kept = append(kept, b)
+	}
+	return kept
+}
+
+// dropRims removes the rim of the display window: the edge of a red LED
+// filter or an LCD's bezel, caught along the top or bottom of the crop. It
+// is a few pixels thick — thinner than a bar, but thicker than the
+// hairline dropBezels looks for — and glare breaks it into pieces too
+// short for that rule, yet it spans the digits, so clusterBars would fold
+// every digit it overlaps into one glyph. A piece is a rim when it lies
+// on the top or bottom edge, is flat, is thinner than rimMaxStrokeFrac of
+// the stroke, and a blank row separates it from the rest of the ink; a
+// digit's own top bar on a tight crop is a stroke thick and stays.
+func dropRims(m bitmap, blobs []blob, wk *work) []blob {
+	inkTop, inkBot := rowExtent(blobs, minBlobArea)
+	if inkBot < inkTop {
+		return blobs
+	}
+	stroke := strokeEstimate(m, blobs, inkBot-inkTop+1, wk)
+	limit := max(1, int(rimMaxStrokeFrac*float64(stroke)))
+	// blank reports whether rows y0..y1 carry no ink in columns x0..x1.
+	blank := func(x0, x1, y0, y1 int) bool {
+		for y := max(0, y0); y <= min(m.h-1, y1); y++ {
+			for x := x0; x <= x1; x++ {
+				if m.on[y*m.w+x] {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	kept := blobs[:0]
+	for _, b := range blobs {
+		flat := b.h() <= limit && b.w() >= 2*b.h()
+		// Sensor specks along the same edge, which the speckle floor
+		// removes later, may sit between a rim and the edge; the rim
+		// counts as on the edge when it is within its own thickness of
+		// it. The digits lie on the other side, past a blank row or two.
+		top := b.y0 <= limit && blank(b.x0, b.x1, b.y1+1, b.y1+2)
+		bottom := b.y1 >= m.h-1-limit && blank(b.x0, b.x1, b.y0-2, b.y0-1)
+		if flat && (top || bottom) {
 			erase(m, b)
 			continue
 		}
@@ -785,7 +844,33 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 		r.glyphs = append(r.glyphs, separator(':', c, rowH))
 	}
 	sort.SliceStable(r.glyphs, func(i, j int) bool { return r.glyphs[i].x < r.glyphs[j].x })
+	r.glyphs = dropLoneColons(r.glyphs)
 	return r
+}
+
+// dropLoneColons removes a colon with no glyph on one side of it. A
+// clock's colon separates digits; two marks astride the row with nothing
+// beyond them are the unlit colon of a display showing a word ("End"), or
+// a pair of specks, and reporting them would turn the '?' such a display
+// reads as into "?:".
+func dropLoneColons(glyphs []glyph) []glyph {
+	kept := glyphs[:0]
+	for i, g := range glyphs {
+		if g.ch == ':' {
+			left, right := false, false
+			for _, o := range glyphs[:i] {
+				left = left || o.digit()
+			}
+			for _, o := range glyphs[i+1:] {
+				right = right || o.digit()
+			}
+			if !left || !right {
+				continue
+			}
+		}
+		kept = append(kept, g)
+	}
+	return kept
 }
 
 // rowExtent is the vertical span of every blob at least minArea big;
@@ -1015,9 +1100,10 @@ type cell struct {
 	x0, y0     int
 	x1, y1     int
 	fromRow    bool    // y0/y1 still to be filled from the row's extent
-	offCrop    bool    // a "1" whose cell would start left of the crop
+	offCrop    bool    // a "1" cut through by the crop's left edge
 	thin       bool    // a line thinner than half a stroke, not a "1"
 	degree     bool    // a degree sign: dropped from the reading
+	fragment   bool    // too small for a bar or a "-": dropped
 	centre     float64 // reading order
 }
 
@@ -1041,6 +1127,15 @@ func layoutCells(m bitmap, clusters []blob, stroke, inkTop, inkH int) (cells []c
 			k.fromRow = true
 			squarish := 2*c.w() <= 3*c.h() && 2*c.h() <= 3*c.w()
 			k.degree = squarish && c.cy() < float64(inkTop)+degreeTopFrac*fInk
+			// A "-" is one bar thick and sits across the middle of the
+			// row. A short cluster that is taller than a bar or sits
+			// elsewhere is the edge of a unit symbol or a mark beside the
+			// digits caught in the box; laid out as a cell it would
+			// overlap the digit next to it and read that digit's bars as
+			// its own.
+			barLike := float64(c.h()) <= minusMaxStrokes*float64(stroke) &&
+				c.cy() >= float64(inkTop)+minusBand0*fInk && c.cy() <= float64(inkTop)+minusBand1*fInk
+			k.fragment = !k.degree && !barLike
 		} else {
 			if !k.wide || !barAcross(m, c, c.y0, min(c.y1, c.y0+max(1, stroke/2)-1)) {
 				k.y0 -= reach
@@ -1071,7 +1166,12 @@ func layoutCells(m bitmap, clusters []blob, stroke, inkTop, inkH int) (cells []c
 		case k.tall: // a "1": its two bars sit at the right of the cell
 			k.x1 = k.c.x1
 			k.x0 = k.x1 - W + 1
-			k.offCrop = k.x0 < 0
+			// A leading "1" is the leftmost thing on most displays and
+			// its cell always begins before its bars, so the cell may
+			// start left of the crop. The bars themselves must not: ink
+			// on the crop's edge is a bezel, a reflection or a digit the
+			// box cut through.
+			k.offCrop = k.x0 < 0 && k.c.x0 < max(2, stroke/2)
 			k.thin = float64(k.c.w()) < oneMinStrokeFrac*float64(stroke)
 		default: // a "-": centred
 			k.x0 = int(k.centre) - W/2
@@ -1137,7 +1237,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 	minRun := max(1, int(math.Round(probeMinRunFrac*rowH)))
 	var r reading
 	for _, k := range cells {
-		if k.degree {
+		if k.degree || k.fragment {
 			continue
 		}
 		var (
@@ -1146,10 +1246,14 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			blank bool
 		)
 		if k.offCrop || k.thin {
-			// A tall narrow blob at the crop's left edge with no room for
-			// a cell, or thinner than half a stroke, is a bezel, a
-			// reflection or a sliver of a digit the crop cut through —
-			// never a "1" to be read at full confidence.
+			// A tall narrow blob on the crop's left edge, or thinner than
+			// half a stroke, is a bezel, a reflection or a sliver of a
+			// digit the crop cut through — never a "1" to be read at full
+			// confidence.
+			ch, conf = '?', unsureConf
+		} else if float64(k.x1-k.x0+1) > cellMaxAspect*rowH {
+			// Wider than the row is tall: digits run together, or the
+			// frame round the display, whose ring of edges spells "0".
 			ch, conf = '?', unsureConf
 		} else {
 			ch, conf, blank = classify(m, k, stroke, minRun)
