@@ -7,8 +7,22 @@ import (
 	"image"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
+
+// deviceSlots serializes grabs per capture device. A webcam or capture card
+// (dshow, v4l2, avfoundation via ffmpeg:) can be opened by one process at a
+// time: when the poll loop, the detail page's snapshot and a Test each spawn
+// ffmpeg against the same device, all but one fail with "Could not run
+// graph" or "Device or resource busy", and the watch goes down for no
+// reason. Network streams have no such limit and are never queued.
+var deviceSlots sync.Map // input string -> chan struct{} (capacity 1)
+
+func deviceSlot(input string) chan struct{} {
+	slot, _ := deviceSlots.LoadOrStore(input, make(chan struct{}, 1))
+	return slot.(chan struct{})
+}
 
 // defaultFFmpegTimeout bounds one frame grab. A hung ffmpeg against a dead
 // camera is the most likely reliability failure in this design, so every
@@ -31,6 +45,7 @@ type FFmpeg struct {
 
 	inputArgs []string // format/transport flags plus -i <input>
 	run       ffmpegRunFunc
+	slot      chan struct{} // nil for network streams; see deviceSlots
 }
 
 // NewFFmpeg builds a frame source for an rtsp://, rtsps://, v4l2:, dshow:,
@@ -41,12 +56,16 @@ func NewFFmpeg(input string) (*FFmpeg, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FFmpeg{
+	f := &FFmpeg{
 		Bin:       "ffmpeg",
 		Timeout:   defaultFFmpegTimeout,
 		inputArgs: args,
 		run:       runFFmpeg,
-	}, nil
+	}
+	if !strings.HasPrefix(input, "rtsp://") && !strings.HasPrefix(input, "rtsps://") {
+		f.slot = deviceSlot(input)
+	}
+	return f, nil
 }
 
 func ffmpegInputArgs(input string) ([]string, error) {
@@ -78,6 +97,17 @@ func (f *FFmpeg) Grab(ctx context.Context) (image.Image, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// Waiting for the device counts against the grab's timeout, so a
+	// queue behind a hung ffmpeg still fails in bounded time.
+	if f.slot != nil {
+		select {
+		case f.slot <- struct{}{}:
+			defer func() { <-f.slot }()
+		case <-ctx.Done():
+			return nil, fmt.Errorf("ffmpeg: waiting for the device: %w", ctx.Err())
+		}
+	}
 
 	args := make([]string, 0, len(f.inputArgs)+9)
 	args = append(args, "-nostdin", "-loglevel", "error")

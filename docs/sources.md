@@ -11,6 +11,8 @@ A watch's `source` is where watchglass gets a frame from each time it polls. For
 | `ffmpeg:<args>` | anything ffmpeg can open, including your own screen; the args go to ffmpeg as they are | ffmpeg |
 | `demo:printer`, `demo:sevenseg` | the fake cameras built into watchglass | nothing |
 
+A webcam or capture card can be opened by one program at a time, so grabs from the same device take turns: two watches on one webcam, or the detail page's snapshot while a poll is running, wait for each other instead of failing.
+
 ## Snapshot URLs and MJPEG streams
 
 An `http(s)://` source is fetched once per poll. If the answer is a single image, that's the frame. If it's an MJPEG stream (`multipart/x-mixed-replace`, what an ESP32-CAM's `:81/stream`, OctoPrint's `?action=stream` or IP Webcam's `/video` send), watchglass reads the first frame and closes the connection, so the stream isn't held open between polls. Each fetch has 10 seconds to finish.

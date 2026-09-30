@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -182,6 +184,88 @@ func TestFFmpegGrabRejectsOversizedOutput(t *testing.T) {
 
 // Integration: only runs where a real ffmpeg is installed. lavfi's testsrc
 // needs no camera, so this exercises the real subprocess path end to end.
+// A webcam can be opened by one ffmpeg at a time, so grabs of the same
+// device input serialize even across separately built sources (the poll
+// loop, the snapshot route and Test each build their own).
+func TestFFmpegSerializesDeviceGrabs(t *testing.T) {
+	const input = "dshow:video=Test Cam " + "serialize"
+	var running, maxRunning atomic.Int32
+	run := func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		n := running.Add(1)
+		for {
+			m := maxRunning.Load()
+			if n <= m || maxRunning.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		running.Add(-1)
+		return pngOf(t, 4, 4), nil
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		f, err := NewFFmpeg(input)
+		if err != nil {
+			t.Fatalf("NewFFmpeg: %v", err)
+		}
+		f.run = run
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := f.Grab(context.Background()); err != nil {
+				t.Errorf("Grab: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := maxRunning.Load(); got != 1 {
+		t.Errorf("max concurrent ffmpeg runs on one device = %d, want 1", got)
+	}
+}
+
+func TestFFmpegNetworkStreamsAreNotSerialized(t *testing.T) {
+	f, err := NewFFmpeg("rtsp://cam.local/stream1")
+	if err != nil {
+		t.Fatalf("NewFFmpeg: %v", err)
+	}
+	if f.slot != nil {
+		t.Error("rtsp source got a device slot; streams must not queue behind each other")
+	}
+}
+
+func TestFFmpegDeviceWaitHonoursContext(t *testing.T) {
+	const input = "v4l2:/dev/video" + "ctx"
+	holder, err := NewFFmpeg(input)
+	if err != nil {
+		t.Fatalf("NewFFmpeg: %v", err)
+	}
+	release := make(chan struct{})
+	holder.run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		<-release
+		return pngOf(t, 4, 4), nil
+	}
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		holder.Grab(context.Background()) //nolint:errcheck // the holder only occupies the device
+	}()
+	<-started
+	time.Sleep(20 * time.Millisecond)
+
+	waiter, _ := NewFFmpeg(input)
+	waiter.run = func(ctx context.Context, bin string, args ...string) ([]byte, error) {
+		t.Error("waiter ran ffmpeg while the device was held")
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = waiter.Grab(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiting grab error = %v, want context deadline", err)
+	}
+	close(release)
+}
+
 func TestFFmpegRealBinary(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
