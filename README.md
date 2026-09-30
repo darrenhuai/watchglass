@@ -2,7 +2,9 @@
 
 **Get a notification when a screen changes, even one with no API.**
 
-Point a camera you already own at a heat pump panel, a washer's countdown, a bench scale or a server console. Think changedetection.io, but for physical screens: self-hosted, nothing leaves your network.
+You have a device with a screen and no way to ask it anything: a 3D printer, a heat pump panel, a boiler, a bench scale, a server console, a washer with a countdown. Point a camera you already own at it, drag a box around the part you care about, and watchglass reads the text or digits in that box every few seconds and pings your phone when they change or match a pattern. PRINT COMPLETE shows up on the printer and your phone buzzes; the boiler shows an error code and you get the photo on Telegram; a number becomes a Home Assistant sensor with a graph.
+
+Think changedetection.io, but for physical screens: self-hosted, one binary, nothing leaves your network.
 
 [![Release](https://img.shields.io/github/v/release/darrenhuai/watchglass)](https://github.com/darrenhuai/watchglass/releases/latest)
 [![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fdarrenhuai%2Fwatchglass-blue)](https://github.com/darrenhuai/watchglass/pkgs/container/watchglass)
