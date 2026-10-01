@@ -121,7 +121,7 @@ A `?` also shows up when a digit is caught half-lit or behind a reflection, whic
 ## Mounting the camera
 
 - **Glare** is the main enemy. A glossy panel reflects windows and ceiling lights, and a reflection across a digit reads as a different digit. Angle the camera 10-20° off square, so reflections go past it, and check the view with the room lights on and off, and in daylight.
-- **Angle**: keep it as close to head-on as the glare allows. tesseract copes with a little perspective; `sevenseg` expects upright digits and loses side bars on a strong slant.
+- **Angle**: keep it as close to head-on as the glare allows. tesseract copes with a little perspective; `sevenseg` expects upright digits and loses side bars on a strong slant. If the camera only fits on its side, that is fine: set `preprocess: {rotate: 90}` (or `270`) and the crop is turned before it is read ([configuration.md](../configuration.md#a-display-that-is-sideways)).
 - **Backlight timeout**: many panels turn the backlight off after a minute. A dark LCD reads as nothing: the poll counts as a normal one, the Reading in Home Assistant goes blank, the Value sensor keeps its last number, and no alert goes out. watchglass doesn't alert on a blank display today; "down" is only for a camera that stops delivering frames. If your panel always goes dark, look for a setting that keeps it on, or watch the one indicator that stays lit (a fault LED) with `pixel_change`. To be told when the backlight goes off, an `ocr_changed` watch on the same box fires when the reading changes, blank included, but also on every other change.
 - **Night**: a camera with IR night vision may wash out an LCD. Most panels are lit anyway; turn the camera's IR off if it helps.
 

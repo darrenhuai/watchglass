@@ -325,10 +325,23 @@
            summary beside the title says "off"); a tuned watch, or a
            rejected save that names one of these fields, opens it so nothing
            configured is hidden. The fieldset keeps the id app.js hides for
-           pixel_change, which reads no pixels through OCR. */}}
+           pixel_change, which reads no pixels through OCR. The rows are in
+           the order the steps run (imgproc.Apply): Rotate first, for a
+           camera or display mounted sideways. The stage is never turned:
+           the region stays a box on the frame as the camera sends it, and
+           Test this region shows the turned crop. */}}
       <fieldset id="fs-preprocess" class="fs-fold" aria-labelledby="pp-label">
-        <details class="fold"{{if or (ppSet .Watch.Preprocess) (.Form.Err "pp_threshold") (.Form.Err "pp_upscale")}} open{{end}}>
+        <details class="fold"{{if or (ppSet .Watch.Preprocess) (.Form.Err "pp_threshold") (.Form.Err "pp_upscale") (.Form.Err "pp_rotate")}} open{{end}}>
           <summary class="fold-summary"><span id="pp-label" class="fold-title">Preprocess</span><span id="pp-summary" class="fold-note mono">{{ppSummary .Watch.Preprocess}}</span></summary>
+          <div class="field-row{{if .Form.Err "pp_rotate"}} field-invalid{{end}}">
+            <label for="f-rotate">Rotate</label>
+            <select id="f-rotate" name="pp_rotate" class="control-medium"{{with .Form.Err "pp_rotate"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "pp_rotate"}}err-pp-rotate {{end}}rotate-help">
+              {{range rotateOptions}}<option value="{{.Deg}}" {{if eq $.Watch.Preprocess.Rotate .Deg}}selected{{end}}>{{.Label}}</option>
+              {{end}}
+            </select>
+            {{with .Form.Err "pp_rotate"}}<p id="err-pp-rotate" class="field-error">{{.}}</p>{{end}}
+            <p id="rotate-help" class="field-hint">For a display that is sideways or upside down in the picture. Draw the box on the picture as it arrives; the crop is turned before it is read.</p>
+          </div>
           <div class="field-row field-row-check">
             <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> Grayscale</label>
             <label class="checkbox"><input type="checkbox" name="pp_invert" {{if .Watch.Preprocess.Invert}}checked{{end}}> Invert</label>

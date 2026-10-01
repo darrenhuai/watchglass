@@ -62,7 +62,7 @@ In practice you don't type the region: open the watch, drag a box around the dig
 | `-f white`, `invert` | Not needed. `sevenseg` works out whether the digits are light on dark (LEDs) or dark on light (LCDs). |
 | `digits` | Not needed. It reads however many digits are lit. Blank leading positions are skipped, so ` 23.5` reads `23.5`. |
 | `extra_arguments` such as `-D`, `dilation`, `erosion`, `make_mono`, `greyscale` | Not needed. The decoder copes with the gaps between bars, LED glow and the faint unlit "ghost" segments. Test this region shows the crop it used, which replaces ssocr's debug image. |
-| `rotate` | watchglass doesn't rotate frames itself. Mount the camera level, or let ffmpeg turn the picture: `source: "ffmpeg:-i http://<CAMERA>/snapshot.jpg -vf rotate=-4*PI/180"` straightens a display that leans 4° clockwise. A mild slant in the digits' own font is fine as it is. |
+| `rotate` | For a display that is on its side or upside down, `preprocess: {rotate: 90}` (or `180`, `270`) turns the crop that many degrees clockwise before it is read ([configuration.md](../configuration.md#a-display-that-is-sideways)). It takes quarter turns only. For a display that leans a few degrees, mount the camera level, or let ffmpeg turn the picture: `source: "ffmpeg:-i http://<CAMERA>/snapshot.jpg -vf rotate=-4*PI/180"` straightens one that leans 4° clockwise. A mild slant in the digits' own font is fine as it is. |
 | `source: entity_id` | The camera's snapshot URL, or HA's camera proxy as above. |
 | The `image_processing` entity's state | The watch's **Value** sensor over MQTT, with a unit and device class if you give it one. See [home-assistant.md](../home-assistant.md). |
 

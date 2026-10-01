@@ -39,8 +39,11 @@ type Runner struct {
 	maxIvl  time.Duration
 
 	// OnReading, when set, is called once per completed Tick with the trigger
-	// outcome, the RAW crop (before preprocessing) and the time the tick
-	// stamps on it (a fire's alert carries the same time, see Delivery.TS).
+	// outcome, the crop and the time the tick stamps on it (a fire's alert
+	// carries the same time, see Delivery.TS). The crop is the region in
+	// the camera's own colours, before grayscale, invert, binarize and
+	// upscale, but already turned by preprocess.rotate on a watch that
+	// reads text: the same picture a fire attaches to its alert.
 	// The web UI uses it to feed the live readout; keep it fast — it runs on
 	// the poll goroutine.
 	OnReading func(ev trigger.Event, crop image.Image, at time.Time)
@@ -181,7 +184,15 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		r.prev = crop
 		ev = r.eval.ObservePixel(pct)
 	} else {
-		prepped := imgproc.Apply(crop, r.watch.Preprocess)
+		// A sideways display is turned upright once, here, and the turned
+		// crop is what goes everywhere from now on: to the engine (after the
+		// rest of the preprocessing), to OnReading (the Live panel and Home
+		// Assistant's camera) and into the alert. Someone reading an alert
+		// on a phone wants the picture the right way up.
+		pp := r.watch.Preprocess
+		crop = imgproc.Rotate(crop, pp.Rotate)
+		pp.Rotate = 0 // already turned
+		prepped := imgproc.Apply(crop, pp)
 		text, err := r.engine.Recognize(ctx, prepped)
 		if err != nil {
 			// A frame that arrives but can't be read is still a poll with

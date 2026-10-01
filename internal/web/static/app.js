@@ -859,7 +859,7 @@
   // checks and the preprocessing. Interval, notify and the like don't
   // change what a test shows.
   var TEST_FIELDS = { ttype: 1, engine: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
-    pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
+    pp_rotate: 1, pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
   function testFieldChanged(e) {
     if (e.target && TEST_FIELDS[e.target.name]) markTestStale();
   }
@@ -881,13 +881,17 @@
     return (form.elements["engine"] && form.elements["engine"].value) || "tesseract";
   }
   // The crop's on-screen size, worked out the way .crop-frame img will
-  // lay it out: the region in frame pixels, times Upscale, shrunk to fit
-  // the box and 180px tall. Null when there is no frame to measure.
+  // lay it out: the region in frame pixels, on its side when Rotate is a
+  // quarter turn, times Upscale, shrunk to fit the box and 180px tall.
+  // Null when there is no frame to measure. pixel_change shows the crop
+  // as the camera sends it: no Upscale, no Rotate.
   function cropSize(width) {
     if (img.hidden || !img.naturalWidth) return null;
     var r = region(), up = parseInt((form.elements["pp_upscale"] || {}).value, 10);
+    var turn = (form.elements["pp_rotate"] || {}).value;
     if (!(up > 1) || testEngine() === "") up = 1;
     var w = r.w * img.naturalWidth * up, h = r.h * img.naturalHeight * up;
+    if ((turn === "90" || turn === "270") && testEngine() !== "") { var t = w; w = h; h = t; }
     if (!(w >= 1) || !(h >= 1)) return null;
     var k = Math.min(1, width / w, 180 / h);
     return [Math.max(Math.round(w * k), 24), Math.max(Math.round(h * k), 16)];
@@ -1484,7 +1488,7 @@
   // the crossing only and takes the number from Pattern's first group.
   var opDefaulted = false; // Compare was set to "gt" by updateTriggerFields, not the user
   var TRIGGER_HELP = {
-    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares pixels, so Engine isn't used.",
+    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares the pixels as the camera sends them, so Engine and Preprocess (Rotate included) aren't used.",
     ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
     ocr_changed: "Fires each time the text read from the region settles on a new value.",
     numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
@@ -1755,15 +1759,18 @@
     out.classList.toggle("is-off", off);
   }
   if (range && out) range.addEventListener("input", syncRange);
-  // The folded Preprocess section's readout ("off", "grayscale · binarize
-  // 128 · 2×"): the server renders it (preprocessSummary in web.go) and
-  // this keeps it in step with the controls, so a closed section still
-  // says what it holds. Same wording as the Go side.
+  // The folded Preprocess section's readout ("off", "rotate 90° ·
+  // grayscale · binarize 128 · 2×"): the server renders it
+  // (preprocessSummary in formview.go) and this keeps it in step with the
+  // controls, so a closed section still says what it holds. Same wording
+  // and order as the Go side.
   var ppSummaryEl = document.getElementById("pp-summary");
   function ppSummary() {
     if (!ppSummaryEl) return;
     var p = [];
     var gray = form.elements["pp_grayscale"], inv = form.elements["pp_invert"], up = form.elements["pp_upscale"];
+    var turn = form.elements["pp_rotate"];
+    if (turn && turn.value !== "0") p.push("rotate " + turn.value + "°");
     if (gray && gray.checked) p.push("grayscale");
     if (inv && inv.checked) p.push("invert");
     if (range && range.value !== "0") p.push("binarize " + range.value);

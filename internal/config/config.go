@@ -22,10 +22,19 @@ import (
 // LCDs/consoles becomes legible to the engine. The zero value is a no-op.
 // Pixel-diff triggers always compare raw crops; preprocessing is OCR-only.
 type Preprocess struct {
+	// Rotate turns the crop clockwise by 90, 180 or 270 degrees before
+	// anything else, for a camera or display mounted sideways; 0 is off. The
+	// region stays a box on the frame as the camera sends it.
+	Rotate    int  `yaml:"rotate,omitempty"`
 	Grayscale bool `yaml:"grayscale,omitempty"`
 	Invert    bool `yaml:"invert,omitempty"`
 	Threshold int  `yaml:"threshold,omitempty"` // 0 = off; 1-255 binarize at this gray level
 	Upscale   int  `yaml:"upscale,omitempty"`   // 0/1 = off; 2-4 integer nearest-neighbor
+}
+
+// ValidRotate reports whether deg is a turn Preprocess.Rotate takes.
+func ValidRotate(deg int) bool {
+	return deg == 0 || deg == 90 || deg == 180 || deg == 270
 }
 
 // MQTT configures the optional Home Assistant integration: one broker
@@ -523,6 +532,9 @@ func (c *Config) Validate() error {
 		}
 		if w.Preprocess.Upscale < 0 || w.Preprocess.Upscale > 4 {
 			return fmt.Errorf("watch %q: preprocess upscale must be 0-4", w.Name)
+		}
+		if !ValidRotate(w.Preprocess.Rotate) {
+			return fmt.Errorf("watch %q: preprocess rotate must be 0, 90, 180 or 270 (degrees clockwise), got %d", w.Name, w.Preprocess.Rotate)
 		}
 		// Notify URLs: cheap sanity via url.Parse + a non-empty scheme.
 		// Deliberately does NOT call shoutrrr.CreateSender here (that's a

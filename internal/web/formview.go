@@ -16,15 +16,35 @@ import (
 // default (most watches never touch it) and keeps it open when a setting
 // is tuned, so nothing configured is ever out of sight.
 func preprocessSet(p config.Preprocess) bool {
-	return p.Grayscale || p.Invert || p.Threshold > 0 || p.Upscale >= 2
+	return p.Rotate != 0 || p.Grayscale || p.Invert || p.Threshold > 0 || p.Upscale >= 2
+}
+
+// rotateOption is one choice of the Rotate select: the degrees clockwise
+// that config.yaml takes, and how the option reads.
+type rotateOption struct {
+	Deg   int
+	Label string
+}
+
+// rotateOptions are the Rotate select's choices, in order. Each label
+// leads with the number the file and the folded section's summary show
+// ("rotate 270°"); three quarter turns also say what they are to the eye.
+var rotateOptions = []rotateOption{
+	{0, "none"},
+	{90, "90° clockwise"},
+	{180, "180°"},
+	{270, "270° (90° counter-clockwise)"},
 }
 
 // preprocessSummary is the one-line readout beside the folded section's
-// title: "off", or the options that are on, e.g. "grayscale · binarize 128
-// · 2×". app.js (ppSummary) keeps it in step as the controls change; the
-// wording here and there must agree.
+// title: "off", or the options that are on, in the order they are applied,
+// e.g. "rotate 90° · grayscale · binarize 128 · 2×". app.js (ppSummary) keeps
+// it in step as the controls change; the wording here and there must agree.
 func preprocessSummary(p config.Preprocess) string {
 	var parts []string
+	if p.Rotate != 0 {
+		parts = append(parts, "rotate "+strconv.Itoa(p.Rotate)+"°")
+	}
 	if p.Grayscale {
 		parts = append(parts, "grayscale")
 	}

@@ -74,11 +74,22 @@ These only affect reading text; `pixel_change` always compares the raw crop. Tun
 
 ```yaml
 preprocess:
+  rotate: 90        # 90, 180 or 270: turn the crop this many degrees clockwise; 0 is off
   grayscale: true
   invert: false     # light text on a dark screen often reads better inverted
   threshold: 128    # 1-255: turn every pixel black or white at this level; 0 is off
   upscale: 2        # 2-4: enlarge small text; 0 or 1 is off
 ```
+
+They run in that order.
+
+### A display that is sideways
+
+A phone on its side, an ESP32-CAM screwed in at a right angle, a meter whose LCD faces the wrong way: tesseract and `sevenseg` both need the text upright. `rotate` turns the crop a quarter or half turn before it is read: `90` when the tops of the letters point left in the picture, `270` when they point right, `180` when the display is upside down. In the UI it is **Rotate**, the first control under Preprocess. Try a value and press **Test this region**: the result shows the turned crop.
+
+The region doesn't change. It stays a box on the picture as the camera sends it, and the page keeps showing that picture unturned; only the crop is turned. The crops in the Live panel, the picture attached to an ntfy alert and Home Assistant's snapshot are the turned crop too, so they arrive the right way up.
+
+`rotate` takes those four values and nothing in between. A display that leans a few degrees is a different problem: see the `ffmpeg:` source trick in the [seven_segments recipe](recipes/from-seven-segments.md#setting-by-setting), or straighten the camera.
 
 ## OCR engines
 

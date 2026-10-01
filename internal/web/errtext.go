@@ -274,6 +274,7 @@ var configFieldErrors = []struct {
 	{"numeric op must be gt or lt", "op", "Under Compare, choose whether the reading must go above or below Threshold."},
 	{"preprocess threshold must be 0-255", "pp_threshold", "Binarize must be between 0 and 255."},
 	{"preprocess upscale must be 0-4", "pp_upscale", "Upscale must be off, 2x, 3x or 4x."},
+	{"preprocess rotate must be 0, 90, 180 or 270", "pp_rotate", "Rotate must be 0, 90, 180 or 270 degrees clockwise."},
 	{"notify: empty URL", "notify", "Remove the empty notify line."},
 	{"source is required", "source", "Enter the camera's source URL."},
 	{"source has no arguments", "source", "An ffmpeg: source needs its input arguments after the colon, for example ffmpeg:-i rtsp://cam/stream."},

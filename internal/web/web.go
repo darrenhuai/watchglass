@@ -137,6 +137,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"isoTime":         isoTime,
 		"ppSet":           preprocessSet,
 		"ppSummary":       preprocessSummary,
+		"rotateOptions":   func() []rotateOption { return rotateOptions },
 		"trigLabel":       triggerLabel,
 		"confirmHelp":     confirmHelp,
 		"patternHelp":     patternHelp,
@@ -776,6 +777,7 @@ var fieldAnchors = map[string]string{
 	"health_after": "f-health",
 	"pp_threshold": "f-binarize",
 	"pp_upscale":   "f-upscale",
+	"pp_rotate":    "f-rotate",
 	"notify":       "f-notify",
 	"unit":         "f-unit",
 	"device_class": "f-dclass",
@@ -1005,12 +1007,28 @@ func parseRegion(r *http.Request) (config.Region, error) {
 	return reg, nil
 }
 
-// parsePreprocess reads preprocess options from form fields pp_grayscale,
-// pp_invert, pp_threshold, pp_upscale. All fields are optional.
-func parsePreprocess(r *http.Request) (config.Preprocess, error) {
+// errRotate is parsePreprocess's refusal of a pp_rotate that isn't one of
+// the Rotate select's four values (the caller adds the capital and the
+// full stop).
+var errRotate = errors.New("rotate must be 0, 90, 180 or 270 degrees clockwise")
+
+// parsePreprocess reads preprocess options from form fields pp_rotate,
+// pp_grayscale, pp_invert, pp_threshold, pp_upscale. All fields are
+// optional. A request without pp_rotate (curl, a page loaded before the
+// field existed) keeps savedRotate, the way one without engine keeps the
+// saved engine: dropping the turn would stop a sideways watch reading.
+func parsePreprocess(r *http.Request, savedRotate int) (config.Preprocess, error) {
 	var p config.Preprocess
 	p.Grayscale = r.FormValue("pp_grayscale") == "on"
 	p.Invert = r.FormValue("pp_invert") == "on"
+	p.Rotate = savedRotate
+	if _, ok := r.Form["pp_rotate"]; ok { // r.Form: FormValue above parsed it
+		n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("pp_rotate")))
+		if err != nil || !config.ValidRotate(n) {
+			return p, errRotate
+		}
+		p.Rotate = n
+	}
 	if v := r.FormValue("pp_threshold"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 255 {
@@ -1115,7 +1133,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
-	prep, err := parsePreprocess(r)
+	prep, err := parsePreprocess(r, wc.Preprocess.Rotate)
 	if err != nil {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
@@ -1136,6 +1154,20 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		grabError(w, err)
 		return
+	}
+	// pixel_change compares the crop as the camera sends it, so its Test
+	// shows that crop: Rotate turns it for the engines that read it only
+	// (runner.Tick does the same). The Preprocess controls are hidden for
+	// pixel_change but still submit, hence the check here. The type is the
+	// form's when it sends one and the saved one otherwise (curl, an older
+	// client), as for the verdict below, so a pixel_change watch with a
+	// leftover rotate in its file isn't turned here when the runner doesn't.
+	ttype := wc.Trigger.Type
+	if _, ok := r.Form["ttype"]; ok {
+		ttype = r.FormValue("ttype")
+	}
+	if ttype == "pixel_change" {
+		prep.Rotate = 0
 	}
 	prepped := imgproc.Apply(imgproc.Crop(img, region), prep)
 	var buf bytes.Buffer
@@ -1417,10 +1449,13 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 			w.HealthAfter = n
 		}
 	}
-	if prep, err := parsePreprocess(r); err != nil {
+	if prep, err := parsePreprocess(r, base.Preprocess.Rotate); err != nil {
 		field := "pp_threshold"
 		if strings.HasPrefix(err.Error(), "upscale") {
 			field = "pp_upscale"
+		}
+		if errors.Is(err, errRotate) {
+			field = "pp_rotate"
 		}
 		fail(field, upperFirst(err.Error())+".")
 	} else {

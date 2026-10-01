@@ -73,6 +73,10 @@ To capture part of a big screen, add `-offset_x 0 -offset_y 0 -video_size 1280x7
 
 HomeKit, Nest, Ring and other WebRTC-only cameras: run [go2rtc](https://github.com/AlexxIT/go2rtc) next to watchglass and use its snapshot URL, `http://go2rtc-host:1984/api/frame.jpeg?src=cam1`. A camera that's already in Home Assistant can be read through HA's camera proxy (see the [cookbook](recipes/camera-urls.md)).
 
+## My display is sideways
+
+watchglass never turns the frame itself, so a camera mounted on its side shows a sideways picture on the watch's page. That is fine: draw the box on the picture as it is, then set **Rotate** under Preprocess (`preprocess: {rotate: 90}`, or `180` or `270`) and the crop is turned before it is read. It works with every kind of source. [configuration.md](configuration.md#a-display-that-is-sideways) says which value is which.
+
 ## When a stream dies
 
 After `health_after` failed polls in a row (3 by default), whether the grab failed or the engine errored on the frame, a watch sends one "down" notification quoting the error, and one more when it comes back. It never repeats while the camera stays down, and it keeps polling the whole time. A frame that arrives and reads as blank (a dark display) is a normal poll with an empty reading, not a failure. The verdict survives a save: a watch that was down stays down until a poll produces a reading again, and recovers exactly once.
