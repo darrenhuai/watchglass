@@ -589,3 +589,112 @@ func TestSevenSegColon(t *testing.T) {
 		}
 	}
 }
+
+// What photos of real displays showed the decoder getting wrong: a red LED
+// timer behind a filter window, and a backlit LCD panel meter reading 18.9
+// with its unit beside the digits. Each case draws the condition onto a
+// clean render, since the photos themselves aren't ours to ship.
+func TestSevenSegRealPhotoConditions(t *testing.T) {
+	led := color.RGBA{230, 40, 40, 255}
+	lcdInk := color.RGBA{30, 30, 34, 255}
+	rect := func(img *image.RGBA, r image.Rectangle, c color.RGBA) {
+		draw.Draw(img, r, image.NewUniform(c), image.Point{}, draw.Src)
+	}
+	lcd := clean
+	lcd.Dark = true
+	margin := max(2, clean.H/5)
+
+	// The edge of the filter window runs along the top and bottom of the
+	// crop: a few pixels thick, broken into pieces by glare, the lower one
+	// just clear of the edge with sensor specks under it. It spans both
+	// digits and used to fold them into one unreadable glyph.
+	t.Run("window rim in pieces", func(t *testing.T) {
+		img := render("09", clean)
+		w, h := img.Bounds().Dx(), img.Bounds().Dy()
+		rect(img, image.Rect(w/6, 0, w/2-4, 5), led)
+		rect(img, image.Rect(w/2+4, 0, w-w/8, 5), led)
+		rect(img, image.Rect(4, h-7, w/2-10, h-3), led)
+		rect(img, image.Rect(w/2, h-7, w-6, h-3), led)
+		rect(img, image.Rect(w/3, h-2, w/3+3, h), led)
+		rect(img, image.Rect(w-20, h-2, w-17, h), led)
+		got, words := decode(t, img)
+		if got != "09" || minConf(words) < 60 {
+			t.Errorf("read %q, want a confident 09 (%+v)", got, words)
+		}
+	})
+
+	// A digit's own top and bottom bars on a box drawn tight to the digits
+	// are a stroke thick, not a rim, and must stay.
+	t.Run("tight box keeps the top and bottom bars", func(t *testing.T) {
+		img := render("28", clean)
+		b := img.Bounds()
+		tight := img.SubImage(image.Rect(b.Min.X, b.Min.Y+margin, b.Max.X, b.Max.Y-margin))
+		if got, words := decode(t, tight); got != "28" {
+			t.Errorf("read %q, want 28 (%+v)", got, words)
+		}
+	})
+
+	// A leading "1" is the leftmost thing on the display, and its bars sit
+	// at the right of its cell, so the cell starts left of any box drawn
+	// round the digits. That alone used to make it a '?'.
+	barX := margin + lcd.cellW() - lcd.Stroke
+	t.Run("leading 1 with a little room before it", func(t *testing.T) {
+		img := render("18.9", lcd)
+		b := img.Bounds()
+		near := img.SubImage(image.Rect(barX-8, b.Min.Y, b.Max.X, b.Max.Y))
+		got, words := decode(t, near)
+		if got != "18.9" || minConf(words) < 60 {
+			t.Errorf("read %q, want a confident 18.9 (%+v)", got, words)
+		}
+	})
+	t.Run("bar on the crop's left edge is not a confident 1", func(t *testing.T) {
+		img := render("18.9", lcd)
+		b := img.Bounds()
+		cut := img.SubImage(image.Rect(barX, b.Min.Y, b.Max.X, b.Max.Y))
+		got, words := decode(t, cut)
+		if len(words) == 0 || (words[0].Text == "1" && words[0].Conf >= 60) {
+			t.Errorf("read %q with the first bar cut by the crop; it must not be a confident 1 (%+v)", got, words)
+		}
+	})
+
+	// The left stroke of the unit ("A") caught at the right of the box:
+	// short, narrow, two bars tall. Laid out as a "-" cell it overlapped
+	// the last digit and added a '?'.
+	t.Run("unit symbol beside the digits", func(t *testing.T) {
+		img := render("18.9", lcd)
+		b := img.Bounds()
+		rect(img, image.Rect(b.Max.X-9, margin+55, b.Max.X-1, margin+79), lcdInk)
+		got, words := decode(t, img)
+		if got != "18.9" || minConf(words) < 60 {
+			t.Errorf("read %q, want a confident 18.9 (%+v)", got, words)
+		}
+	})
+
+	// A box that takes in the housing round the display: the housing is
+	// brighter than the digits, and at the threshold that leaves only it
+	// lit, its ring of edges spells a perfect "0".
+	t.Run("bright frame round the display is not a 0", func(t *testing.T) {
+		img := render("09", clean)
+		w, h := img.Bounds().Dx(), img.Bounds().Dy()
+		housing := color.RGBA{230, 200, 60, 255}
+		rect(img, image.Rect(0, 0, w, 8), housing)
+		rect(img, image.Rect(0, h-8, w, h), housing)
+		rect(img, image.Rect(0, 0, 8, h), housing)
+		rect(img, image.Rect(w-8, 0, w, h), housing)
+		got, words := decode(t, img)
+		for _, wd := range words {
+			if wd.Text != "?" && wd.Conf >= 60 && got != "09" {
+				t.Errorf("read %q off the frame (%+v); want 09 or no confident glyph", got, words)
+				break
+			}
+		}
+	})
+
+	// A display showing a word keeps its colon marks in view with nothing
+	// readable after them; the colon is not part of a reading then.
+	t.Run("colon with nothing after it", func(t *testing.T) {
+		if got, words := decode(t, render("8:", clean)); got != "8" {
+			t.Errorf("read %q, want 8 (%+v)", got, words)
+		}
+	})
+}
