@@ -34,6 +34,13 @@ type Runner struct {
 	prev     *image.RGBA
 	logf     func(string, ...any)
 
+	// fingerprint keys the saved trigger state to this watch's question,
+	// saved is the state as the store has it, and restoredFire the fire
+	// time New restored, if any (see persist.go).
+	fingerprint  string
+	saved        trigger.State
+	restoredFire time.Time
+
 	health  *health.Tracker
 	baseIvl time.Duration
 	maxIvl  time.Duration
@@ -103,9 +110,11 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		logf("watch %s: invalid interval %v, defaulting to %v", w.Name, base, 5*time.Second)
 		base = 5 * time.Second
 	}
-	return &Runner{watch: w, src: src, engine: engine, notifier: notifier,
+	r := &Runner{watch: w, src: src, engine: engine, notifier: notifier,
 		store: store, eval: eval, logf: logf,
-		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}, nil
+		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}
+	r.restoreState(time.Now())
+	return r, nil
 }
 
 // SeedDown starts the health tracker in the down state. The supervisor
@@ -200,6 +209,9 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 			r.logf("watch %s: history: %v", r.watch.Name, err)
 		}
 	}
+	// Before the alert is raised: a fire is remembered from the moment it
+	// is decided, so a restart right after it can't send it twice.
+	r.saveState()
 	if r.OnReading != nil {
 		r.OnReading(ev, crop, at)
 	}

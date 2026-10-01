@@ -145,6 +145,65 @@ func New(cfg config.Trigger) (*Evaluator, error) {
 	return e, nil
 }
 
+// State is what an Evaluator has to remember for a restart not to look like
+// news: when it last fired, which is where Cooldown counts from, and the
+// settled state its edge logic compares the next confirmed reading with.
+// Everything else it holds (the Confirm count in progress, the numeric
+// window, Home Assistant's settled reading) rebuilds itself within a few
+// readings and starts empty.
+type State struct {
+	// LastFired is zero for a watch that has never fired.
+	LastFired time.Time
+	// Stable is the last confirmed state, once there is one (HasStable):
+	// the text itself for ocr_changed, and "cond:true" or "cond:false" for
+	// ocr_match and numeric, which settle on whether the condition holds.
+	// pixel_change has none.
+	Stable    string
+	HasStable bool
+}
+
+// Equal reports whether two states are the same, comparing the fire times
+// as instants (a time read back from storage has lost its monotonic clock
+// reading and location, which == would count as a difference).
+func (s State) Equal(o State) bool {
+	return s.LastFired.Equal(o.LastFired) && s.HasStable == o.HasStable && s.Stable == o.Stable
+}
+
+// State returns what Restore needs to carry on from here.
+func (e *Evaluator) State() State {
+	s := State{LastFired: e.lastFired}
+	if e.hasStable {
+		s.Stable, s.HasStable = e.stable, true
+	}
+	return s
+}
+
+// Restore puts back a State an earlier Evaluator for the same trigger
+// exported, so the first readings after a restart are judged against what
+// was already known: a condition that was met and still is doesn't fire
+// again, and a cooldown that was running ends when it was going to. The
+// caller decides whether s still applies (same trigger, recent enough); a
+// settled state this trigger type could not have produced is dropped, the
+// fire time is kept. Call it before the first reading.
+func (e *Evaluator) Restore(s State) {
+	e.lastFired = s.LastFired
+	e.stable, e.hasStable, e.numCond = "", false, false
+	if !s.HasStable {
+		return
+	}
+	switch e.cfg.Type {
+	case "ocr_changed":
+	case "ocr_match", "numeric":
+		if s.Stable != condMet && s.Stable != condUnmet {
+			return
+		}
+	default: // pixel_change keeps no settled state
+		return
+	}
+	e.stable, e.hasStable = s.Stable, true
+	e.numCond = e.cfg.Type == "numeric" && s.Stable == condMet
+}
+
 func (e *Evaluator) coolingDown() bool {
 	return e.cfg.Cooldown > 0 && !e.lastFired.IsZero() &&
 		e.Now().Sub(e.lastFired) < time.Duration(e.cfg.Cooldown)

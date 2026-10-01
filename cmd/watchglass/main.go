@@ -122,6 +122,7 @@ func run(o options) error {
 
 	var engines ocr.Engines
 	demoDir := ""
+	newConfig := false // config.yaml didn't exist and was just created empty
 	if o.demo {
 		// demo-printer reads the text when tesseract is here, so the
 		// engines are found before its config is written.
@@ -145,6 +146,7 @@ func run(o options) error {
 			abs, _ := filepath.Abs(o.configPath)
 			log.Printf("created %s (empty; add watches in the web UI)", abs)
 		}
+		newConfig = created
 	}
 
 	cfg, err := config.Load(o.configPath)
@@ -254,7 +256,7 @@ func run(o options) error {
 		}()
 	}
 
-	startWatches(ctx, sup, cfg.Watches, log.Printf)
+	bootWatches(ctx, sup, cfg.Watches, newConfig, log.Printf)
 
 	ws, err := web.New(o.configPath, cfg, sup, reg, engines, log.Printf)
 	if err != nil {
@@ -263,14 +265,16 @@ func run(o options) error {
 	ws.RunCtx = ctx
 	ws.BasePath = o.basePath
 	ws.DemoDir = demoDir
+	var publish func([]config.Watch)
 	if pub != nil {
 		// UI saves hand the publisher the new list through the same
 		// SyncAsync queue the reconnect resync reads from, so a save racing
 		// a reconnect can't desync the two: whichever lands second just
 		// republishes the same current state the first one did.
-		ws.OnConfigChanged = pub.SyncAsync
+		publish = pub.SyncAsync
 		ws.MQTTStatus = pub.Status
 	}
+	ws.OnConfigChanged = configChanged(sup, publish)
 
 	if cfg.Auth == nil && !isLoopback(o.listen) {
 		// SUPERVISOR_TOKEN: the Home Assistant add-on runs this same image
@@ -313,6 +317,35 @@ func run(o options) error {
 		return err
 	}
 	return nil
+}
+
+// bootWatches starts the configured watches at boot. First it drops the
+// saved trigger state of any watch deleted or renamed in config.yaml while
+// watchglass was off, unless the config was only just created: then an
+// empty list most likely means a wrong -config path next to the real -db,
+// and wiping every watch's state would repeat all their alerts on the next
+// correct start. A stale row left by that is dropped on the next change in
+// the web UI or the next boot.
+func bootWatches(ctx context.Context, sup *supervisor.Supervisor, watches []config.Watch, newConfig bool, logf func(string, ...any)) {
+	if !newConfig {
+		sup.ForgetExcept(watches)
+	}
+	startWatches(ctx, sup, watches, logf)
+}
+
+// configChanged is what runs after every save, create and delete in the web
+// UI, with the new watch list. A deleted watch's saved trigger state goes
+// with it, so a watch created later under the same name starts as a new
+// one; the handler has already stopped the watch, so nothing writes that
+// row again. Then Home Assistant hears about the list, if MQTT is on
+// (publish is nil when it isn't).
+func configChanged(sup *supervisor.Supervisor, publish func([]config.Watch)) func([]config.Watch) {
+	return func(watches []config.Watch) {
+		sup.ForgetExcept(watches)
+		if publish != nil {
+			publish(watches)
+		}
+	}
 }
 
 // checkEngines is the boot-time refusal for a config that can't run: every

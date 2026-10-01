@@ -66,6 +66,10 @@ The three text types fire on an edge: when the condition starts to hold, not on 
 
 **`cooldown`** delays a repeat alert rather than dropping it. A new state that holds through the cooldown still fires once, at the first reading after it ends; one that goes away before then never fires. `pixel_change` has no edge, so a change that persists fires again once per cooldown.
 
+**Restarts don't repeat an alert.** Each watch keeps when it last fired and what it last settled on in the history database, so restarting watchglass, updating it, or pressing **Save & restart watch** doesn't send the same alert again, and a running cooldown still ends on time. What it settled on is only trusted if the watch read the screen within the last 15 minutes (or its `cooldown`, or twice its slowest poll interval, if that is longer); after a longer break, a condition that holds when watchglass comes back is reported as new.
+
+A watch starts fresh, and fires once if its condition already holds, when you change what it looks at or looks for: `source` (a new camera password doesn't count), `region`, `engine` and `preprocess` (`pixel_change` reads neither), or the trigger's `type`, and its `pattern`, `op` or `threshold` where the type uses them. Changing `notify`, `interval`, `confirm`, `cooldown` or anything else keeps what it knew. Renaming a watch makes it a new one, and deleting a watch deletes what it knew.
+
 A new watch on the UI shows three presets above the trigger fields, which fill them in without saving: **Status text** (`ocr_match` on `(?i)complete|done|error`), **Digit display** (`sevenseg` and `numeric`) and **Any change** (`pixel_change` at 20%).
 
 ## Preprocess
@@ -104,7 +108,7 @@ rapidocr runs the PaddleOCR PP-OCR models through the [RapidOCR](https://github.
 
 ## History
 
-Every reading goes into a SQLite database (`-db`, default `watchglass.db`). `history_days` sets how long readings are kept: 30 days by default, or `-1` to keep everything. Old readings are pruned at start-up and then once a day.
+Every reading goes into a SQLite database (`-db`, default `watchglass.db`). `history_days` sets how long readings are kept: 30 days by default, or `-1` to keep everything. Old readings are pruned at start-up and then once a day. The same file keeps one small row per watch with what its trigger knows ([restarts](#triggers)); pruning leaves those alone, and a watch's row goes when the watch is deleted.
 
 For sizing: a reading takes about 189 bytes with its indexes, so a watch polling every 2 s writes about 8 MB a day, roughly 245 MB over the default 30 days. That scales with the interval (poll half as often, half the size) and with the number of watches, which matters on an SD card.
 

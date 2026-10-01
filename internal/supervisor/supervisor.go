@@ -98,6 +98,13 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		return err
 	}
 	name := w.Name
+	// The runner has just restored the watch's saved trigger state, if it
+	// still applied (runner.Fingerprint, the history database). The registry
+	// is in memory, so after a restart of watchglass it only knows the watch
+	// fired because of this.
+	if t, ok := r.RestoredFire(); ok {
+		s.reg.SeedFired(name, t)
+	}
 	// Captured under s.mu so a data race with a later field write is the
 	// caller's misuse, matching NewSource's semantics.
 	onEvent := s.OnEvent
@@ -208,6 +215,25 @@ func (s *Supervisor) Stop(name string) {
 func (s *Supervisor) Restart(ctx context.Context, w config.Watch) error {
 	s.Stop(w.Name)
 	return s.Start(ctx, w)
+}
+
+// ForgetExcept deletes the saved trigger state of every watch that is not
+// in watches: one that was deleted, or renamed (a new name is a new watch).
+// main calls it at start-up and after every config change the web UI makes,
+// so a watch created later under an old name never inherits what its
+// namesake knew. It is one small DELETE; without a history store it does
+// nothing.
+func (s *Supervisor) ForgetExcept(watches []config.Watch) {
+	if s.store == nil {
+		return
+	}
+	names := make([]string, len(watches))
+	for i, w := range watches {
+		names[i] = w.Name
+	}
+	if _, err := s.store.KeepTriggerState(names); err != nil {
+		s.logf("history: dropping trigger state of deleted watches: %v", err)
+	}
 }
 
 // Running returns the sorted names of currently-running watches.
