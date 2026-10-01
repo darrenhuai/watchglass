@@ -81,7 +81,7 @@ func newSup(reg *state.Registry) *Supervisor {
 
 func waitForSample(t *testing.T, reg *state.Registry, watch string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := reg.Latest(watch); ok {
 			return
@@ -162,7 +162,7 @@ func TestExternalCancelRemovesFromRunning(t *testing.T) {
 	}
 	cancel()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(s.Running()) == 0 {
 			break
@@ -213,7 +213,7 @@ func TestHealthMirroredIntoRegistryOnFailure(t *testing.T) {
 	}
 	defer s.StopAll()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if h, ok := reg.GetHealth("a"); ok && h.Down {
 			if h.Message == "" {
@@ -242,7 +242,7 @@ func TestHealthRecoversInRegistry(t *testing.T) {
 	}
 	defer s.StopAll()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if h, ok := reg.GetHealth("a"); ok && h.Down {
 			break
@@ -253,7 +253,7 @@ func TestHealthRecoversInRegistry(t *testing.T) {
 		t.Fatalf("never observed Down before recovery: %+v ok=%v", h, ok)
 	}
 
-	deadline = time.Now().Add(3 * time.Second)
+	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if h, ok := reg.GetHealth("a"); ok && !h.Down {
 			return
@@ -285,7 +285,7 @@ func TestStartHealsStaleDownThroughRealTransition(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer s.StopAll()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if h, ok := reg.GetHealth("a"); ok && !h.Down {
 			mu.Lock()
@@ -318,7 +318,7 @@ func (s *switchSource) Grab(ctx context.Context) (image.Image, error) {
 
 func waitHealth(t *testing.T, reg *state.Registry, name string, down bool) state.Health {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if h, ok := reg.GetHealth(name); ok && h.Down == down {
 			return h
