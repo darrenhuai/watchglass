@@ -340,7 +340,7 @@
               {{end}}
             </select>
             {{with .Form.Err "pp_rotate"}}<p id="err-pp-rotate" class="field-error">{{.}}</p>{{end}}
-            <p id="rotate-help" class="field-hint">For a display that is sideways or upside down in the picture. Draw the box on the picture as it arrives; the crop is turned before it is read.</p>
+            <p id="rotate-help" class="field-hint">For a display that is sideways or upside down in the picture. Pick 90° when the tops of the letters point left, 270° when they point right. Draw the box on the picture as it arrives; the crop is turned before it is read.</p>
           </div>
           <div class="field-row field-row-check">
             <label class="checkbox"><input type="checkbox" name="pp_grayscale" {{if .Watch.Preprocess.Grayscale}}checked{{end}}> Grayscale</label>

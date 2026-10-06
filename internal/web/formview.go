@@ -26,11 +26,13 @@ type rotateOption struct {
 	Label string
 }
 
-// rotateOptions are the Rotate select's choices, in order. Each label
-// leads with the number the file and the folded section's summary show
-// ("rotate 270°"); three quarter turns also say what they are to the eye.
+// rotateOptions are the Rotate select's choices, in order. 0 reads "off",
+// the word Upscale, Binarize and the folded section's summary use for a
+// step that isn't on. Each other label leads with the number the file and
+// the summary show ("rotate 270°"); three quarter turns also say what they
+// are to the eye.
 var rotateOptions = []rotateOption{
-	{0, "none"},
+	{0, "off"},
 	{90, "90° clockwise"},
 	{180, "180°"},
 	{270, "270° (90° counter-clockwise)"},

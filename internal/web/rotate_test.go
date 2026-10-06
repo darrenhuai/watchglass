@@ -272,11 +272,11 @@ func TestRotateFormRendersAndSavesTheTurn(t *testing.T) {
 	for _, want := range []string{
 		`<label for="f-rotate">Rotate</label>`,
 		`<select id="f-rotate" name="pp_rotate" class="control-medium" aria-describedby="rotate-help">`,
-		`<option value="0" selected>none</option>`,
+		`<option value="0" selected>off</option>`,
 		`<option value="90" >90° clockwise</option>`,
 		`<option value="180" >180°</option>`,
 		`<option value="270" >270° (90° counter-clockwise)</option>`,
-		`<p id="rotate-help" class="field-hint">For a display that is sideways or upside down in the picture. Draw the box on the picture as it arrives; the crop is turned before it is read.</p>`,
+		`<p id="rotate-help" class="field-hint">For a display that is sideways or upside down in the picture. Pick 90° when the tops of the letters point left, 270° when they point right. Draw the box on the picture as it arrives; the crop is turned before it is read.</p>`,
 		`<details class="fold">`,
 	} {
 		if !strings.Contains(body, want) {
@@ -306,7 +306,7 @@ func TestRotateFormRendersAndSavesTheTurn(t *testing.T) {
 	_, body = get(t, h, "/watch/printer")
 	for _, want := range []string{
 		`<option value="270" selected>270° (90° counter-clockwise)</option>`,
-		`<option value="0" >none</option>`,
+		`<option value="0" >off</option>`,
 		`<details class="fold" open>`, // a turned watch shows its Preprocess group
 		`<span id="pp-summary" class="fold-note mono">rotate 270°</span>`,
 	} {
