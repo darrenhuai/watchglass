@@ -908,6 +908,12 @@ type detailData struct {
 	// what was submitted (Watch holds every field that parsed) and the
 	// field errors, and nothing was written.
 	Form formState
+	// SavedInterval is the interval in the config file, which a
+	// pixel_change Test goes by when the Interval field doesn't hold a
+	// usable one (testInterval). On a rejected save Watch.Interval is the
+	// submitted value, so the field carries this one in data-saved for
+	// app.js's "Comparing two frames N s apart…" line.
+	SavedInterval config.Duration
 }
 
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
@@ -922,8 +928,13 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) detailFor(wc config.Watch) detailData {
+	saved := wc.Interval
+	if sw, ok := s.findWatch(wc.Name); ok {
+		saved = sw.Interval
+	}
 	return detailData{
 		Watch:              wc,
+		SavedInterval:      saved,
 		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		TesseractAvailable: s.engines.Tesseract != nil,
 		RapidOCRAvailable:  s.engines.RapidOCR != nil,
@@ -1064,6 +1075,22 @@ type testResult struct {
 	NoteDetail string
 	// Verdict is the trigger's condition checked against this one reading.
 	Verdict *testVerdict
+	// Pixel is set for a pixel_change Test, which compares two frames:
+	// Crop is then the region in the first one.
+	Pixel *pixelTest
+}
+
+// pixelTest is the second half of a pixel_change Test: the region in the
+// second frame and how long after the first it arrived.
+type pixelTest struct {
+	Second template.URL
+	// Gap is the time between the two frames, as the result words it
+	// ("3.0 s").
+	Gap string
+	// Changed is the measured share of the region, as the result words it
+	// ("4.2%"), and Threshold the form's Threshold ("20%").
+	Changed   string
+	Threshold string
 }
 
 // testVerdict answers "would this fire?" for one test. State is "met",
@@ -1083,6 +1110,13 @@ type testVerdict struct {
 // when the display shows 24.5 would be false confidence, so it comes back
 // as info.
 func verdictFor(trig config.Trigger, reading string, view readingView, errs []fieldError) *testVerdict {
+	// Only a request without ttype on a saved pixel_change watch gets here
+	// with that type (curl, an older client): the engine read the crop, and
+	// one frame says nothing about a change, so there is no verdict. The
+	// form's pixel_change Test compares two frames (testPixelChange).
+	if trig.Type == "pixel_change" {
+		return nil
+	}
 	// Only a threshold the numeric check needs can stop it; a bad Confirm
 	// or Cooldown is Save's to report (their base values stand in).
 	for _, e := range errs {
@@ -1095,8 +1129,6 @@ func verdictFor(trig config.Trigger, reading string, view readingView, errs []fi
 		return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
 	}
 	switch {
-	case !cond.Evaluable && trig.Type == "pixel_change":
-		return &testVerdict{State: "info", Title: "Nothing to compare yet", Detail: cond.Detail + "."}
 	case !cond.Evaluable:
 		return &testVerdict{State: "info", Title: "No verdict from one reading", Detail: cond.Detail + "."}
 	case view.Unreadable:
@@ -1155,6 +1187,14 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		grabError(w, err)
 		return
 	}
+	// pixel_change reads no text: its Test grabs a second frame and
+	// measures what the watch would. (Only when the form says so: a request
+	// without ttype, from curl or an older client, is read by the engine as
+	// before.)
+	if r.FormValue("ttype") == "pixel_change" {
+		s.testPixelChange(w, r, wc, src, img, region)
+		return
+	}
 	// pixel_change compares the crop as the camera sends it, so its Test
 	// shows that crop: Rotate turns it for the engines that read it only
 	// (runner.Tick does the same). The Preprocess controls are hidden for
@@ -1185,14 +1225,6 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	trig, trigErrs := wc.Trigger, []fieldError(nil)
 	if _, ok := r.Form["ttype"]; ok {
 		trig, trigErrs = triggerFromForm(r, wc.Trigger)
-	}
-	// pixel_change reads no text, so a test of it doesn't run an engine:
-	// its answer is the crop and the note that one frame has nothing to
-	// compare with. (Only when the form says so; see above.)
-	if r.FormValue("ttype") == "pixel_change" {
-		res.Verdict = verdictFor(trig, "", readingView{}, trigErrs)
-		s.render(w, "testresult.html", res)
-		return
 	}
 	// The form's engine wins over the saved one so the decoder can be tried
 	// before saving; a request without the field (curl, an older client)

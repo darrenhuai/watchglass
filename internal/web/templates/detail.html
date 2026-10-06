@@ -292,7 +292,7 @@
         <legend>Polling</legend>
         <div class="field-row{{if .Form.Err "interval"}} field-invalid{{end}}">
           <label for="f-interval">Interval</label>
-          <input class="control-short" id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false"{{with .Form.Err "interval"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "interval"}}err-interval {{end}}interval-help">
+          <input class="control-short" id="f-interval" name="interval" value="{{.Form.Val "interval" (dur .Watch.Interval)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" required pattern="(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 5s, 1m30s or 2h (at least 1s)" spellcheck="false" data-saved="{{dur .SavedInterval}}"{{with .Form.Err "interval"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "interval"}}err-interval {{end}}interval-help">
           {{with .Form.Err "interval"}}<p id="err-interval" class="field-error">{{.}}</p>{{end}}
           <p id="interval-help" class="field-hint">How often to grab a frame: at least 1s, e.g. 5s or 1m30s.</p>
         </div>

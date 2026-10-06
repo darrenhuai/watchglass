@@ -330,12 +330,14 @@ func TestTestResultPanelHeadAndVerdict(t *testing.T) {
 		t.Errorf("a bad pattern is reported, not evaluated; body:\n%s", body)
 	}
 
-	// pixel_change: no engine runs, nothing is "read", and one frame has
-	// nothing to compare with.
+	// pixel_change: no engine runs and nothing is "read": it compares two
+	// frames (the fake camera sends the same one twice) and says whether
+	// that would fire. pixeltest_test.go covers the numbers.
 	_, body = postForm(t, h, "/watch/printer/test", with("ttype", "pixel_change", "tthreshold", "10"))
 	if !strings.Contains(body, `<p class="test-meta mono"><time datetime="`) || strings.Contains(body, "<dt>Read</dt>") ||
-		!strings.Contains(body, `verdict-info`) || !strings.Contains(body, "Nothing to compare yet") || strings.Contains(body, "tesseract") {
-		t.Errorf("pixel_change test: time only, no reading, an info verdict; body:\n%s", body)
+		!strings.Contains(body, `verdict-unmet`) || !strings.Contains(body, "Would not fire") || strings.Contains(body, "tesseract") ||
+		strings.Count(body, "data:image/png;base64,") != 2 || strings.Contains(body, "nothing to compare") {
+		t.Errorf("pixel_change test: time only, no reading, two crops and a would-not-fire verdict; body:\n%s", body)
 	}
 }
 

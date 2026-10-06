@@ -1702,11 +1702,11 @@ fieldset > .field-error { margin-top: var(--space-2); }
   text-wrap: pretty;
 }
 .test-panel.is-stale .test-stale { display: block; }
-.test-panel > .verdict, .test-panel > .crop-frame, .test-panel > .test-facts, .test-panel > .test-note,
-.test-panel > .test-note-detail {
+.test-panel > .verdict, .test-panel > .crop-frame, .test-panel > .crop-pair, .test-panel > .test-facts,
+.test-panel > .test-note, .test-panel > .test-note-detail {
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-.test-panel.is-stale > .verdict, .test-panel.is-stale > .crop-frame,
+.test-panel.is-stale > .verdict, .test-panel.is-stale > .crop-frame, .test-panel.is-stale > .crop-pair,
 .test-panel.is-stale > .test-facts, .test-panel.is-stale > .test-note,
 .test-panel.is-stale > .test-note-detail { opacity: 0.45; }
 
@@ -1734,6 +1734,22 @@ fieldset > .field-error { margin-top: var(--space-2); }
   background: var(--bg-inset);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+}
+/* A pixel_change Test: the region in its two frames. Two 13rem columns
+   need about 27rem of panel, so they sit side by side from a tablet up and
+   stack on a phone; each image still shrinks to its column. The pending
+   panel (app.js) holds two skeletons in the same box. */
+.crop-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+.crop-pair > .crop-frame { flex: 1 1 13rem; min-width: 0; margin: 0; }
+.crop-pair figcaption {
+  margin-top: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
 }
 /* Label / value pairs: "Read" and "Confidence". */
 .test-facts {

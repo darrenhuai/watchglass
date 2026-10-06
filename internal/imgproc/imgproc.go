@@ -25,6 +25,12 @@ func Crop(img image.Image, r config.Region) *image.RGBA {
 	return out
 }
 
+// NoiseTolerance is the tol a pixel_change watch passes to PercentChanged:
+// a pixel counts as changed when its grayscale value moves by more than
+// this between two frames. The runner and the web UI's Test both use it,
+// so Test measures exactly what the watch will.
+const NoiseTolerance = 32
+
 // PercentChanged reports the percentage (0-100) of pixels whose grayscale
 // value differs by more than tol between a and b. Filmed screens flicker;
 // tol absorbs sensor noise so only real change counts. Dimension mismatch

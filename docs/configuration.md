@@ -68,6 +68,10 @@ The three text types fire on an edge: when the condition starts to hold, not on 
 
 A new watch on the UI shows three presets above the trigger fields, which fill them in without saving: **Status text** (`ocr_match` on `(?i)complete|done|error`), **Digit display** (`sevenseg` and `numeric`) and **Any change** (`pixel_change` at 20%).
 
+### Picking a pixel_change threshold
+
+A camera never sends exactly the same picture twice, and a backlight may flicker, so some pixels change even when nothing on the screen does. Draw the box, leave the screen alone and press **Test this region**. For `pixel_change` it grabs two frames, waits the watch's interval in between (kept between 1 and 3 seconds), and says how much of the region changed and whether the Threshold in the form would fire. It compares them the way the running watch compares each frame with the one before (the number the Live panel shows as "4.2% changed"), only with the Test's own two frames 1 to 3 seconds apart rather than one interval apart. With nothing moving, that number is the camera's own noise: the floor. A threshold a few times above it stays quiet; one at or below it fires on its own. Then press Test again while the screen does what you want to hear about (a light comes on, a page changes) and check that the change clears the threshold.
+
 ## Preprocess
 
 These only affect reading text; `pixel_change` always compares the raw crop. Tune them with **Test this region**, which shows the crop after preprocessing next to what was read.

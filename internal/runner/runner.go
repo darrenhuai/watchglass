@@ -21,8 +21,9 @@ import (
 	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
-// diffTolerance absorbs camera sensor noise in pixel_change watches.
-const diffTolerance = 32
+// diffTolerance absorbs camera sensor noise in pixel_change watches. It is
+// shared with the web UI's Test (imgproc.NoiseTolerance).
+const diffTolerance = imgproc.NoiseTolerance
 
 type Runner struct {
 	watch    config.Watch
