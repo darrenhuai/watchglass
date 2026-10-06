@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/notify"
 	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
@@ -78,7 +80,14 @@ func newRig(t *testing.T, store *history.Store) *rig {
 
 func (g *rig) start(w config.Watch) *Runner {
 	g.t.Helper()
-	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, g.disp, g.notifier, g.store, g.logs.logf)
+	return g.startWith(w, g.notifier)
+}
+
+// startWith is start with another notifier; nil is a watch with no notify
+// URLs.
+func (g *rig) startWith(w config.Watch, n notify.Notifier) *Runner {
+	g.t.Helper()
+	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, g.disp, n, g.store, g.logs.logf)
 	if err != nil {
 		g.t.Fatalf("New: %v", err)
 	}
@@ -308,8 +317,9 @@ func TestRestartAfterAnEdit(t *testing.T) {
 	}
 }
 
-// saveOld writes what a run that fired and then stopped `ago` ago leaves in
-// the database: the state, and a last reading that old.
+// saveOld writes what a run that fired (and sent its alert) and then
+// stopped `ago` ago leaves in the database: the state, and a last reading
+// that old.
 func saveOld(t *testing.T, store *history.Store, w config.Watch, ago time.Duration) time.Time {
 	t.Helper()
 	at := time.Now().Add(-ago)
@@ -317,31 +327,41 @@ func saveOld(t *testing.T, store *history.Store, w config.Watch, ago time.Durati
 		t.Fatal(err)
 	}
 	if err := store.SaveTriggerState(w.Name, history.TriggerState{
-		Fingerprint: Fingerprint(w), LastFired: at, Stable: "cond:true", HasStable: true}); err != nil {
+		Fingerprint: Fingerprint(w), LastFired: at, Stable: "cond:true", HasStable: true, Delivered: true}); err != nil {
 		t.Fatal(err)
 	}
 	return at
 }
 
 // State is only trusted while it is recent: the watch must have read its
-// region within the last 15 minutes, or within its cooldown or twice its
-// poll gap if that is longer. Older than that, a condition that holds when
-// watchglass comes back is reported as new.
+// region within the last 15 minutes, or twice its poll gap if that is
+// longer. Older than that, a condition that holds when watchglass comes
+// back is reported as new. The cooldown doesn't stretch that (the display
+// may have been through a whole new event meanwhile); it still holds the
+// new alert back until it ends, as it would have without the restart.
 func TestRestartWithStaleState(t *testing.T) {
 	match := config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 2}
+	hour := func(w *config.Watch) { w.Trigger.Cooldown = config.Duration(time.Hour) }
+	const (
+		quiet = "carries on" // the settled state is restored: nothing to report
+		fires = "fires"      // fresh, and no cooldown is running
+		held  = "held"       // fresh, and held until the restored cooldown ends
+	)
 	cases := []struct {
-		name      string
-		edit      func(w *config.Watch)
-		ago       time.Duration
-		wantFresh bool
+		name string
+		edit func(w *config.Watch)
+		ago  time.Duration
+		want string
 	}{
-		{"5 minutes off", func(w *config.Watch) {}, 5 * time.Minute, false},
-		{"20 minutes off", func(w *config.Watch) {}, 20 * time.Minute, true},
-		{"a day off", func(w *config.Watch) {}, 24 * time.Hour, true},
-		{"20 minutes off, cooldown 1h", func(w *config.Watch) { w.Trigger.Cooldown = config.Duration(time.Hour) }, 20 * time.Minute, false},
-		{"2 hours off, cooldown 1h", func(w *config.Watch) { w.Trigger.Cooldown = config.Duration(time.Hour) }, 2 * time.Hour, true},
-		{"20 minutes off, polls every 15 minutes", func(w *config.Watch) { w.Interval = config.Duration(15 * time.Minute) }, 20 * time.Minute, false},
-		{"20 minutes off, backs off to 15 minutes", func(w *config.Watch) { w.MaxInterval = config.Duration(15 * time.Minute) }, 20 * time.Minute, false},
+		{"5 minutes off", func(w *config.Watch) {}, 5 * time.Minute, quiet},
+		{"20 minutes off", func(w *config.Watch) {}, 20 * time.Minute, fires},
+		{"a day off", func(w *config.Watch) {}, 24 * time.Hour, fires},
+		{"5 minutes off, cooldown 1h", hour, 5 * time.Minute, quiet},
+		{"20 minutes off, cooldown 1h", hour, 20 * time.Minute, held},
+		{"3 hours off, cooldown 6h", func(w *config.Watch) { w.Trigger.Cooldown = config.Duration(6 * time.Hour) }, 3 * time.Hour, held},
+		{"2 hours off, cooldown 1h", hour, 2 * time.Hour, fires},
+		{"20 minutes off, polls every 15 minutes", func(w *config.Watch) { w.Interval = config.Duration(15 * time.Minute) }, 20 * time.Minute, quiet},
+		{"20 minutes off, backs off to 15 minutes", func(w *config.Watch) { w.MaxInterval = config.Duration(15 * time.Minute) }, 20 * time.Minute, quiet},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -351,14 +371,32 @@ func TestRestartWithStaleState(t *testing.T) {
 			firedAt := saveOld(t, g.store, w, c.ago)
 			r := g.start(w)
 			ev := g.show(r, "PRINT COMPLETE", 2)
-			if ev.Fired != c.wantFresh {
-				t.Errorf("fired = %v, want %v", ev.Fired, c.wantFresh)
+			got := quiet
+			switch {
+			case ev.Fired:
+				got = fires
+			case ev.Pending == ev.Need && ev.Need > 0:
+				got = held
 			}
-			if c.wantFresh {
+			if got != c.want {
+				t.Fatalf("after the restart the watch %s (%+v), want it %s", got, ev, c.want)
+			}
+			if c.want == fires {
 				return
 			}
 			if got, ok := r.RestoredFire(); !ok || !got.Equal(firedAt) {
 				t.Errorf("RestoredFire = %v, %v; want %v, true", got, ok, firedAt)
+			}
+			if c.want == held {
+				// It goes out when the cooldown that was running ends, not
+				// before and not never.
+				if end := firedAt.Add(time.Duration(w.Trigger.Cooldown)); !ev.CooldownEnds.Equal(end) {
+					t.Errorf("held until %v, want the original cooldown end %v", ev.CooldownEnds, end)
+				}
+				g.now = ev.CooldownEnds.Add(time.Second)
+				if ev := g.show(r, "PRINT COMPLETE", 1); !ev.Fired {
+					t.Errorf("after the cooldown: %+v, want the held alert to fire", ev)
+				}
 			}
 		})
 	}
@@ -391,6 +429,114 @@ func TestRestartWithStaleState(t *testing.T) {
 	}
 	if ev := g2.show(g2.start(w2), "PRINT COMPLETE", 2); !ev.Fired {
 		t.Errorf("state with no reading to date it: %+v, want a fresh start", ev)
+	}
+}
+
+// failingNotifier refuses every alert, as a notify URL with a typo does.
+type failingNotifier struct{ tries int }
+
+func (f *failingNotifier) Send(ctx context.Context, title, body string) error {
+	f.tries++
+	return errors.New("generic+http://127.0.0.1:9 answered HTTP 404")
+}
+
+// An alert that never went out was not "already sent". The user sees it
+// failed, fixes the notify URL and presses Save & restart watch: a
+// condition that still holds fires once, to the new URL, without waiting
+// out the cooldown of a fire nobody heard about. Once that one is sent the
+// next restart is quiet again.
+func TestRestartResendsAnAlertThatWasNotSent(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 2, Cooldown: tenMin})
+	bad := &failingNotifier{}
+	if ev := g.show(g.startWith(w, bad), "PRINT COMPLETE", 2); !ev.Fired || bad.tries != 1 {
+		t.Fatalf("first run: %+v after %d sends; want a fire whose send fails", ev, bad.tries)
+	}
+	firedAt := g.now
+
+	fixed := w
+	fixed.Notify = []string{"generic://example.invalid/fixed"}
+	g.now = g.now.Add(time.Minute)
+	r2 := g.start(fixed)
+	if !g.logs.has("may not have gone out") {
+		t.Errorf("no log line says why the watch starts fresh: %q", g.logs.lines)
+	}
+	if got, ok := r2.RestoredFire(); !ok || !got.Equal(firedAt) {
+		t.Errorf("RestoredFire = %v, %v; want %v: the fire happened, the watch list should still say so", got, ok, firedAt)
+	}
+	if ev := g.show(r2, "PRINT COMPLETE", 2); !ev.Fired || g.sent() != 1 {
+		t.Fatalf("after fixing the notify URL: %+v, %d alerts at the new URL; want the alert sent once", ev, g.sent())
+	}
+
+	g.now = g.now.Add(time.Minute)
+	g.show(g.start(fixed), "PRINT COMPLETE", 4)
+	if g.sent() != 1 || bad.tries != 1 {
+		t.Errorf("a restart after the alert went out sent it again: %d at the new URL, %d at the old", g.sent(), bad.tries)
+	}
+}
+
+// A fire that was decided and saved but never sent, because watchglass
+// stopped (or crashed) first, is saved as not delivered: the next start
+// sends it.
+func TestRestartSendsAFireThatStoppedBeforeItsSend(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "numeric", Op: "gt", Threshold: 25, Confirm: 2, Cooldown: tenMin})
+	at := time.Now().Add(-30 * time.Second)
+	if err := g.store.Record(w.Name, at, "25.3", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.store.SaveTriggerState(w.Name, history.TriggerState{
+		Fingerprint: Fingerprint(w), LastFired: at, Stable: "cond:true", HasStable: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := g.show(g.start(w), "25.4", 2); !ev.Fired || g.sent() != 1 {
+		t.Errorf("start after a fire that was never sent: %+v, %d alerts; want it sent now", ev, g.sent())
+	}
+}
+
+// A watch with no notify URLs has nowhere to send an alert, so its fire is
+// done, and a restart doesn't repeat it (Home Assistant would see it twice).
+func TestRestartWithoutNotifyURLsDoesNotRepeat(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 2, Cooldown: tenMin})
+	w.Notify = nil
+	if ev := g.show(g.startWith(w, nil), "PRINT COMPLETE", 2); !ev.Fired {
+		t.Fatalf("first run: %+v, want a fire", ev)
+	}
+	g.now = g.now.Add(time.Minute)
+	for i := 0; i < 2; i++ {
+		r := g.startWith(w, nil)
+		for j := 0; j < 3; j++ {
+			if ev := g.show(r, "PRINT COMPLETE", 1); ev.Fired || ev.Pending != 0 {
+				t.Fatalf("restart %d with no notify URLs, reading %d: %+v, want nothing to report", i+1, j+1, ev)
+			}
+		}
+	}
+}
+
+// A fire time saved while the clock was ahead would hold every alert back
+// until that time plus the cooldown, on every restart. It is dropped.
+func TestRestartDropsAFireTimeInTheFuture(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 2, Cooldown: tenMin})
+	at := time.Now()
+	if err := g.store.Record(w.Name, at, "PRINT COMPLETE", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.store.SaveTriggerState(w.Name, history.TriggerState{Fingerprint: Fingerprint(w),
+		LastFired: at.Add(2 * time.Hour), Stable: "cond:true", HasStable: true, Delivered: true}); err != nil {
+		t.Fatal(err)
+	}
+	r := g.start(w)
+	if !g.logs.has("in the future") {
+		t.Errorf("no log line about the future fire time: %q", g.logs.lines)
+	}
+	if ev := g.show(r, "PRINT COMPLETE", 2); ev.Fired {
+		t.Fatalf("the settled state should still carry on: %+v", ev)
+	}
+	g.show(r, "PRINTING 5%", 2)
+	if ev := g.show(r, "PRINT COMPLETE", 2); !ev.Fired {
+		t.Errorf("next job: %+v, want a fire, not one held until the wrong clock's time", ev)
 	}
 }
 
@@ -461,6 +607,12 @@ func TestFingerprint(t *testing.T) {
 			w.Engine = "tesseract" // "" means tesseract
 		},
 		"camera login": func(w *config.Watch) { w.Source = "http://admin:hunter2@127.0.0.1:8102/snapshot.jpg" },
+		"camera login in the query": func(w *config.Watch) {
+			w.Source = "http://127.0.0.1:8102/snapshot.jpg?user=admin&password=hunter2"
+		},
+		"camera login in the query, other names": func(w *config.Watch) {
+			w.Source = "http://127.0.0.1:8102/snapshot.jpg?usr=admin&PWD=hunter2"
+		},
 		// ocr_match never reads them.
 		"op":        func(w *config.Watch) { w.Trigger.Op = "lt" },
 		"threshold": func(w *config.Watch) { w.Trigger.Threshold = 3 },
@@ -550,6 +702,16 @@ func TestFingerprint(t *testing.T) {
 	if Fingerprint(w) == Fingerprint(other) {
 		t.Error("two cameras with the same login got the same fingerprint")
 	}
+	// So is a login in the query; the rest of the query is not.
+	w.Source = "http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&channel=0&user=admin&password=a"
+	other.Source = "http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&channel=1&user=admin&password=a"
+	if Fingerprint(w) == Fingerprint(other) {
+		t.Error("two channels of a camera with the login in the query got the same fingerprint")
+	}
+	other.Source = "http://10.0.0.5/cgi-bin/api.cgi?cmd=Snap&channel=0&user=admin&password=b"
+	if Fingerprint(w) != Fingerprint(other) {
+		t.Error("a new password in the query changed the fingerprint")
+	}
 
 	// Pinned: this is what the first release with saved trigger state
 	// wrote for this watch. If it changes (a new config.Watch field without
@@ -570,7 +732,7 @@ func TestRestoreWindow(t *testing.T) {
 	}{
 		{d(2 * time.Second), 0, 0, 15 * time.Minute},
 		{d(2 * time.Second), d(time.Minute), d(5 * time.Minute), 15 * time.Minute},
-		{d(2 * time.Second), 0, d(6 * time.Hour), 6 * time.Hour},
+		{d(2 * time.Second), 0, d(6 * time.Hour), 15 * time.Minute}, // the cooldown doesn't count
 		{d(10 * time.Minute), 0, 0, 20 * time.Minute},
 		{d(time.Minute), d(30 * time.Minute), d(20 * time.Minute), time.Hour},
 	} {

@@ -20,6 +20,10 @@ type Reading struct {
 
 type Store struct {
 	db *sql.DB
+	// stateErr is why trigger state can't be kept (the database can be read
+	// but not written, say). The trigger state methods then do nothing, so
+	// watches run as they did before there was any.
+	stateErr error
 }
 
 func Open(path string) (*Store, error) {
@@ -53,23 +57,40 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// One row per watch: what its trigger has to remember across a restart
-	// (see TriggerState). Readings are a log that retention prunes; this is
-	// state, and Prune never touches it.
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS trigger_state (
+	return &Store{db: db, stateErr: openTriggerState(db)}, nil
+}
+
+// openTriggerState makes sure the trigger_state table exists: one row per
+// watch with what its trigger has to remember across a restart (see
+// TriggerState). Readings are a log that retention prunes; this is state,
+// and Prune never touches it. A database that can't take the table (read
+// only) still opens: watchglass then runs without keeping trigger state,
+// as it did before there was any (see TriggerStateErr).
+func openTriggerState(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS trigger_state (
 		watch       TEXT    PRIMARY KEY,
 		fingerprint TEXT    NOT NULL,
 		last_fired  INTEGER NOT NULL,
 		has_stable  INTEGER NOT NULL,
 		stable      TEXT    NOT NULL,
+		delivered   INTEGER NOT NULL DEFAULT 1,
 		updated     INTEGER NOT NULL
-	)`)
-	if err != nil {
-		db.Close()
-		return nil, err
+	)`); err != nil {
+		return err
 	}
-	return &Store{db: db}, nil
+	// The table's first version had no delivered column.
+	if _, err := db.Exec(`SELECT delivered FROM trigger_state LIMIT 0`); err != nil {
+		if _, err := db.Exec(`ALTER TABLE trigger_state ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
+
+// TriggerStateErr says why the database can't keep trigger state, or nil
+// if it can. Without it the trigger state methods do nothing: nothing is
+// loaded, and saving succeeds without writing.
+func (s *Store) TriggerStateErr() error { return s.stateErr }
 
 // TriggerState is what one watch's trigger remembers across a restart.
 type TriggerState struct {
@@ -84,34 +105,65 @@ type TriggerState struct {
 	// trigger.State's.
 	Stable    string
 	HasStable bool
+	// Delivered says the alert of the fire at LastFired went out: every
+	// notify URL took it, or the watch had none to send it to. A fire is
+	// saved before its alert is sent, so it starts out false, and
+	// MarkDelivered sets it once the send succeeds.
+	Delivered bool
 }
 
 // SaveTriggerState stores watch's trigger state, replacing what was there.
+// Delivered is taken as given for a new fire time; for the fire time the row
+// already has, it can only go from false to true, so saving a new settled
+// state never undoes a MarkDelivered that happened in between.
 func (s *Store) SaveTriggerState(watch string, st TriggerState) error {
+	if s.stateErr != nil {
+		return nil
+	}
 	var fired int64
 	if !st.LastFired.IsZero() {
 		fired = st.LastFired.UnixNano()
 	}
-	has := 0
-	if st.HasStable {
-		has = 1
-	}
-	_, err := s.db.Exec(`INSERT INTO trigger_state (watch, fingerprint, last_fired, has_stable, stable, updated)
-		VALUES (?, ?, ?, ?, ?, ?)
+	_, err := s.db.Exec(`INSERT INTO trigger_state (watch, fingerprint, last_fired, has_stable, stable, delivered, updated)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(watch) DO UPDATE SET fingerprint = excluded.fingerprint, last_fired = excluded.last_fired,
-			has_stable = excluded.has_stable, stable = excluded.stable, updated = excluded.updated`,
-		watch, st.Fingerprint, fired, has, st.Stable, time.Now().Unix())
+			has_stable = excluded.has_stable, stable = excluded.stable,
+			delivered = CASE WHEN trigger_state.last_fired = excluded.last_fired
+				THEN max(trigger_state.delivered, excluded.delivered) ELSE excluded.delivered END,
+			updated = excluded.updated`,
+		watch, st.Fingerprint, fired, boolInt(st.HasStable), st.Stable, boolInt(st.Delivered), time.Now().Unix())
 	return err
+}
+
+// MarkDelivered records that the alert of watch's fire at fired went out.
+// It changes nothing if the saved state is about another fire by now.
+func (s *Store) MarkDelivered(watch string, fired time.Time) error {
+	if s.stateErr != nil || fired.IsZero() {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE trigger_state SET delivered = 1, updated = ? WHERE watch = ? AND last_fired = ?`,
+		time.Now().Unix(), watch, fired.UnixNano())
+	return err
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // LoadTriggerState returns watch's saved trigger state, or false if it has
 // none.
 func (s *Store) LoadTriggerState(watch string) (TriggerState, bool, error) {
+	if s.stateErr != nil {
+		return TriggerState{}, false, nil
+	}
 	var st TriggerState
 	var fired int64
-	var has int
-	err := s.db.QueryRow(`SELECT fingerprint, last_fired, has_stable, stable FROM trigger_state WHERE watch = ?`, watch).
-		Scan(&st.Fingerprint, &fired, &has, &st.Stable)
+	var has, delivered int
+	err := s.db.QueryRow(`SELECT fingerprint, last_fired, has_stable, stable, delivered FROM trigger_state WHERE watch = ?`, watch).
+		Scan(&st.Fingerprint, &fired, &has, &st.Stable, &delivered)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TriggerState{}, false, nil
 	}
@@ -122,12 +174,16 @@ func (s *Store) LoadTriggerState(watch string) (TriggerState, bool, error) {
 		st.LastFired = time.Unix(0, fired)
 	}
 	st.HasStable = has == 1
+	st.Delivered = delivered == 1
 	return st, true, nil
 }
 
 // KeepTriggerState deletes the trigger state of every watch not named in
 // watches (a deleted or renamed watch's), returning how many rows went.
 func (s *Store) KeepTriggerState(watches []string) (int64, error) {
+	if s.stateErr != nil {
+		return 0, nil
+	}
 	q := `DELETE FROM trigger_state`
 	args := make([]any, len(watches))
 	if len(watches) > 0 {

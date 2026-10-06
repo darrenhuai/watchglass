@@ -68,6 +68,9 @@ type Runner struct {
 	// notification service never holds up the next poll. nil outside Run
 	// (Tick driven directly, as the tests do): alerts are then sent inline.
 	outbox chan alert
+	// sent is closed when the sender goroutine of the last Run has sent
+	// everything queued to it (see WaitSent). nil if Run started none.
+	sent chan struct{}
 }
 
 // Delivery is one report on an alert's way out (see OnDelivery).
@@ -93,6 +96,7 @@ type alert struct {
 	kind        string
 	title, body string
 	png         []byte
+	fired       time.Time // a fire's time as its trigger state has it (markDelivered)
 }
 
 func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.Notifier,
@@ -130,11 +134,17 @@ func (r *Runner) SeedDown() {
 // watcher that dies on one bad frame is worse than no watcher. Alerts go out
 // from a goroutine of their own (sendLoop), so a webhook that takes its
 // full 10-15 s to time out delays nothing but itself. Stop doesn't wait for
-// that goroutine: it finishes what was queued and exits.
+// that goroutine: it finishes what was queued and exits (WaitSent waits for
+// that).
 func (r *Runner) Run(ctx context.Context) {
 	if r.notifier != nil {
 		r.outbox = make(chan alert, outboxSize)
-		go r.sendLoop(ctx, r.outbox)
+		sent := make(chan struct{})
+		r.sent = sent
+		go func(box <-chan alert) {
+			defer close(sent)
+			r.sendLoop(ctx, box)
+		}(r.outbox)
 		defer func() {
 			close(r.outbox)
 			r.outbox = nil
@@ -220,7 +230,8 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		// ?template=json) gets only the body, and "pattern matched — PRINT
 		// COMPLETE" alone doesn't say which printer.
 		a := alert{ts: at, kind: "fired", title: fmt.Sprintf("watchglass: %s", r.watch.Name),
-			body: fmt.Sprintf("%s: %s — %s", r.watch.Name, ev.Reason, ev.Reading)}
+			body:  fmt.Sprintf("%s: %s — %s", r.watch.Name, ev.Reason, ev.Reading),
+			fired: r.eval.State().LastFired}
 		if _, ok := r.notifier.(notify.ImageSender); ok {
 			var buf bytes.Buffer
 			if err := png.Encode(&buf, crop); err != nil {
@@ -238,6 +249,8 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 // it: the send happens on the sender goroutine (sendLoop).
 func (r *Runner) raise(ctx context.Context, a alert) {
 	if r.notifier == nil {
+		// Nothing to send it to: done, as far as a restart is concerned.
+		r.markDelivered(a.fired)
 		r.report(Delivery{TS: a.ts, Kind: a.kind, Skipped: true})
 		return
 	}
@@ -264,6 +277,23 @@ func (r *Runner) sendLoop(ctx context.Context, box <-chan alert) {
 	}
 }
 
+// WaitSent waits until the sender goroutine of the Run that has returned
+// has sent everything queued to it, or ctx ends, and reports whether it
+// finished. The supervisor calls it when watchglass is shutting down, so an
+// alert decided just before the stop goes out before the process exits.
+// Call it only after Run has returned.
+func (r *Runner) WaitSent(ctx context.Context) bool {
+	if r.sent == nil {
+		return true
+	}
+	select {
+	case <-r.sent:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // deliver sends one alert and reports the outcome. A failure is logged and
 // reported with every URL cut down to scheme://host and every credential
 // masked (notify.Scrub): the report is shown in the web UI.
@@ -275,7 +305,9 @@ func (r *Runner) deliver(ctx context.Context, a alert) {
 		err = r.notifier.Send(ctx, a.title, a.body)
 	}
 	d := Delivery{TS: a.ts, Kind: a.kind, OK: err == nil}
-	if err != nil {
+	if err == nil {
+		r.markDelivered(a.fired)
+	} else {
 		msg := notify.Scrub(err.Error(), r.watch.Notify)
 		r.logf("watch %s: notify (%s): %s", r.watch.Name, a.kind, msg)
 		// Capped per failed line, so a long first error can't push the

@@ -159,6 +159,9 @@ func run(o options) error {
 		return fmt.Errorf("open history db: %w", permissionHint(err))
 	}
 	defer store.Close()
+	if err := store.TriggerStateErr(); err != nil {
+		log.Printf("history: can't keep what each watch knows across restarts, so a restart can repeat an alert: %v", permissionHint(err))
+	}
 
 	var pruneDone chan struct{}
 	// Defer join before closing store: ctx.Done() → pruneDone → store.Close() (LIFO).

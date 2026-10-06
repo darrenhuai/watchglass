@@ -26,7 +26,13 @@ import (
 type handle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	r      *runner.Runner
 }
+
+// sendGrace is how long StopAll waits for alerts that are still being sent.
+// A container runtime usually allows 10 s between asking a process to stop
+// and killing it.
+const sendGrace = 5 * time.Second
 
 type Supervisor struct {
 	// NewSource builds a frame source for a watch. An unsupported source
@@ -46,6 +52,9 @@ type Supervisor struct {
 	reg     *state.Registry
 	engines ocr.Engines
 	logf    func(string, ...any)
+	// sendGrace is StopAll's wait for alerts still being sent; tests
+	// shorten it.
+	sendGrace time.Duration
 }
 
 func New(store *history.Store, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) *Supervisor {
@@ -56,6 +65,7 @@ func New(store *history.Store, reg *state.Registry, engines ocr.Engines, logf fu
 		reg:       reg,
 		engines:   engines,
 		logf:      logf,
+		sendGrace: sendGrace,
 	}
 }
 
@@ -109,7 +119,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// caller's misuse, matching NewSource's semantics.
 	onEvent := s.OnEvent
 	onHealth := s.OnHealth
-	h := &handle{done: make(chan struct{})}
+	h := &handle{done: make(chan struct{}), r: r}
 	r.OnReading = func(ev trigger.Event, crop image.Image, at time.Time) {
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, crop); err != nil {
@@ -248,10 +258,16 @@ func (s *Supervisor) Running() []string {
 	return names
 }
 
-// StopAll cancels every watch and waits for all goroutines to exit. It
-// joins only the handles it snapshots, so a Start that races in during
-// shutdown (landing in the fresh map left behind for it) can never make
-// StopAll block: StopAll depends solely on its own snapshot.
+// StopAll cancels every watch and waits for all goroutines to exit, and then
+// up to sendGrace for alerts that are still being sent: main calls it when
+// watchglass is shutting down, and an alert decided just before that would
+// otherwise die with the process. (Stop doesn't wait for sends: Save &
+// restart watch shouldn't hang on a slow webhook.) An alert that still
+// hasn't gone out by then is not marked sent, so the next start reports a
+// condition that still holds again. It joins only the handles it
+// snapshots, so a Start that races in during shutdown (landing in the
+// fresh map left behind for it) can never make StopAll block: StopAll
+// depends solely on its own snapshot.
 func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	hs := s.running
@@ -265,5 +281,19 @@ func (s *Supervisor) StopAll() {
 	}
 	for _, h := range hs {
 		<-h.done
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.sendGrace)
+	defer cancel()
+	waiting := 0
+	for _, h := range hs {
+		if !h.r.WaitSent(ctx) {
+			waiting++
+		}
+	}
+	switch {
+	case waiting == 1:
+		s.logf("stopping: a watch was still sending an alert after %v, so it may not have gone out", s.sendGrace)
+	case waiting > 1:
+		s.logf("stopping: %d watches were still sending alerts after %v, so they may not have gone out", waiting, s.sendGrace)
 	}
 }

@@ -2,7 +2,12 @@ package supervisor
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -136,5 +141,138 @@ func TestForgetExceptWithoutAStore(t *testing.T) {
 	defer s.StopAll()
 	if _, ok := reg.LastFired("a"); ok {
 		t.Error("a watch with no store and no fire has a last-fired time")
+	}
+}
+
+// shutdownRig is one numeric watch, held above its threshold, that sends
+// its alerts to a webhook the test controls, across watchglass restarts:
+// each newSup is a new process's supervisor on the same history database.
+type shutdownRig struct {
+	t     *testing.T
+	store *history.Store
+	w     config.Watch
+	fires atomic.Int32
+	mu    sync.Mutex
+	logs  []string
+}
+
+func newShutdownRig(t *testing.T, hook string) *shutdownRig {
+	store, err := history.Open(filepath.Join(t.TempDir(), "wg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	w := testWatch("scale")
+	w.Interval = config.Duration(50 * time.Millisecond)
+	w.Engine = "sevenseg" // the fixture shows 23.5
+	w.Notify = []string{"generic+" + hook + "/x"}
+	w.Trigger = config.Trigger{Type: "numeric", Pattern: "([0-9.]+)", Op: "gt", Threshold: 20, Confirm: 1,
+		Cooldown: config.Duration(10 * time.Minute)}
+	return &shutdownRig{t: t, store: store, w: w}
+}
+
+func (g *shutdownRig) logf(format string, args ...any) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.logs = append(g.logs, fmt.Sprintf(format, args...))
+}
+
+func (g *shutdownRig) logged(sub string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, l := range g.logs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// start makes a new supervisor (a new watchglass process) and starts the
+// watch on it.
+func (g *shutdownRig) start() *Supervisor {
+	g.t.Helper()
+	img := fixtureImage(g.t)
+	s := New(g.store, state.New(5), ocr.Engines{}, g.logf)
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: img}, nil }
+	s.OnEvent = func(watch string, ev trigger.Event, png []byte) {
+		if ev.Fired {
+			g.fires.Add(1)
+		}
+	}
+	if err := s.Start(context.Background(), g.w); err != nil {
+		g.t.Fatal(err)
+	}
+	return s
+}
+
+// An alert decided just before watchglass stops (docker stop, a Home
+// Assistant add-on update, a reboot) is sent before StopAll returns, which
+// is before main returns and the process exits. The next start knows it
+// went out and doesn't repeat it.
+func TestStopAllLetsAnAlertFinishSending(t *testing.T) {
+	var started, delivered atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started.Add(1)
+		time.Sleep(time.Second) // a slow webhook
+		delivered.Add(1)
+	}))
+	defer hook.Close()
+	g := newShutdownRig(t, hook.URL)
+
+	s := g.start()
+	waitUntil(t, "the alert's send to start", func() bool { return started.Load() == 1 })
+	s.StopAll()
+	if n := delivered.Load(); n != 1 {
+		t.Fatalf("%d alerts delivered when StopAll returned, want 1: the process exits here", n)
+	}
+
+	s2 := g.start()
+	defer s2.StopAll()
+	time.Sleep(time.Second) // about 20 polls
+	if n := g.fires.Load(); n != 1 {
+		t.Errorf("%d fires across the restart, want 1", n)
+	}
+	if n := started.Load(); n != 1 {
+		t.Errorf("%d sends across the restart, want 1", n)
+	}
+}
+
+// A send still going when the grace runs out is given up on, so a stuck
+// webhook can't hold up the shutdown. It isn't marked sent, so the next
+// start reports the condition, which still holds, again: this time it
+// arrives.
+func TestStopAllGivesUpOnAStuckSendAndTheNextStartSendsIt(t *testing.T) {
+	release := make(chan struct{})
+	var calls, delivered atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			<-release // stuck until the test ends, then refused
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		delivered.Add(1)
+	}))
+	defer hook.Close()
+	defer close(release) // before hook.Close, which waits for the handler
+	g := newShutdownRig(t, hook.URL)
+
+	s := g.start()
+	s.sendGrace = 200 * time.Millisecond
+	waitUntil(t, "the alert's send to start", func() bool { return calls.Load() == 1 })
+	begin := time.Now()
+	s.StopAll()
+	if d := time.Since(begin); d > 5*time.Second {
+		t.Errorf("StopAll took %v with a grace of 200ms", d)
+	}
+	if !g.logged("stopping: a watch was still sending") {
+		t.Errorf("no log line about the alert left behind: %q", g.logs)
+	}
+
+	s2 := g.start()
+	defer s2.StopAll()
+	waitUntil(t, "the alert to arrive after the restart", func() bool { return delivered.Load() == 1 })
+	if n := g.fires.Load(); n != 2 {
+		t.Errorf("%d fires, want 2: the one that never went out, then once more", n)
 	}
 }
