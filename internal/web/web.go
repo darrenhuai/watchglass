@@ -1131,7 +1131,8 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		sourceError(w, err)
 		return
 	}
-	img, err := src.Grab(grabCtx)
+	// A person asking: tried even while a refused login is waiting.
+	img, err := src.Grab(source.Forced(grabCtx))
 	cancelGrab()
 	if err != nil {
 		grabError(w, err)

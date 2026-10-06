@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -88,6 +89,9 @@ func summarizeErr(msg string) string {
 		return by("Connection reset by HOST", "Connection reset")
 	}
 	if loginRefused(msg) {
+		if next, ok := loginRetry(msg); ok {
+			return by("HOST turned down the login. "+next, "The camera turned down the login. "+next)
+		}
 		return by("HOST turned down the login", "The camera turned down the login")
 	}
 	if m := errStatusRe.FindStringSubmatch(msg); m != nil {
@@ -122,12 +126,16 @@ func errHint(msg string) string {
 	}
 	if loginRefused(msg) {
 		// The URL in a grab error keeps the user and masks the password
-		// ("user:xxxxx@"), so userinfo there means credentials were sent.
+		// ("user:xxxxx@", "password=xxxxx"), so a login there means
+		// credentials were sent.
 		scheme := "http"
 		if raw := errURLRe.FindString(msg); raw != "" {
 			if u, err := url.Parse(strings.TrimRight(raw, `.,;:)"`)); err == nil {
 				scheme = strings.ToLower(u.Scheme)
-				if u.User != nil {
+				if source.LoginInURL(u) {
+					if _, waiting := loginRetry(msg); waiting {
+						return "watchglass waits between tries so that repeated wrong tries don't lock the account. Check the user and password in the source URL. Test this region tries again straight away."
+					}
 					return "Check the user and password in the source URL. Some cameras lock the account for a while after a few wrong tries."
 				}
 			}
@@ -156,6 +164,33 @@ func loginRefused(msg string) bool {
 	}
 	m := errStatusRe.FindStringSubmatch(msg)
 	return m != nil && (m[1] == "401" || m[1] == "403")
+}
+
+// loginRetry says when watchglass asks the camera in msg again after it
+// turned the login down (source.LoginRetryIn), as a sentence: "Trying
+// again in 1m 40s". ok is false when no wait is running for that camera
+// and user. It is worked out each time the page asks, so the wait counts
+// down even in a message recorded when the watch went down.
+func loginRetry(msg string) (string, bool) {
+	raw := errURLRe.FindString(msg)
+	if raw == "" {
+		return "", false
+	}
+	wait, ok := source.LoginRetryIn(strings.TrimRight(raw, `.,;:)"`))
+	if !ok {
+		return "", false
+	}
+	secs := int((wait + time.Second - 1) / time.Second)
+	switch m, s := secs/60, secs%60; {
+	case secs <= 0:
+		return "Trying again now", true
+	case m == 0:
+		return fmt.Sprintf("Trying again in %ds", s), true
+	case s == 0:
+		return fmt.Sprintf("Trying again in %dm", m), true
+	default:
+		return fmt.Sprintf("Trying again in %dm %ds", m, s), true
+	}
 }
 
 // loopbackHost reports whether hostport (from errHost) names this machine.

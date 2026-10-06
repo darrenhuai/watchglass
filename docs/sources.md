@@ -25,7 +25,7 @@ Put the user and password in the URL: `http://user:password@192.168.1.42/snapsho
 
 - **Basic auth** works as it is.
 - **Digest auth** works too (Hikvision, Dahua, Amcrest and many others). The very first request to a camera goes out with Basic, because watchglass can't know yet which the camera wants; after the camera answers with a Digest challenge, every request uses Digest and the password isn't sent again. MD5 and SHA-256 are supported.
-- **A wrong password** costs one failed login per poll. Some cameras lock the account after a few, so fix it before leaving the watch running. The watch's page says "HOST turned down the login" when this happens.
+- **A wrong password** isn't tried on every poll. See below.
 - **Tokens and API keys** go in `headers:`, one `Name: value` per line, the way `curl -H` takes them:
 
   ```yaml
@@ -36,7 +36,9 @@ Put the user and password in the URL: `http://user:password@192.168.1.42/snapsho
 
   `headers:` only exists in `config.yaml`, not in the web UI.
 
-The watch's page never shows the password: the source line reads `http://user:xxxxx@…`. It is stored in plain text in `config.yaml`, so keep that file private ([security.md](security.md)).
+When the camera turns the login down (HTTP 401 or 403, or ffmpeg reporting either for an RTSP source), watchglass waits before asking it again: 10 seconds after the first refusal, then 30 seconds, 2 minutes, 5 minutes, 15 minutes, and every 30 minutes from then on. Many cameras lock the account after a few wrong tries, often for half an hour, and asking on every poll would keep it locked. The wait covers everything that uses that camera with that login: every watch, the snapshot on the watch's page and its refresh. The watch still goes down after `health_after` polls and sends its one alert, and its page says "HOST turned down the login. Trying again in 1m 40s". Fix the password in `config.yaml` and restart watchglass, or add the watch again with the new URL: a new login is tried at once. If you fixed the account on the camera instead, press **Test this region**: it always asks the camera, and once the camera takes the login the watch carries on at its next poll. A camera that is off or unreachable is polled as before.
+
+The watch's page never shows the password: the source line reads `http://user:xxxxx@…`, and a camera that takes the login in the query string (Reolink's `?user=admin&password=…`) reads `password=xxxxx` there, in the log and in errors. It is stored in plain text in `config.yaml`, so keep that file private ([security.md](security.md)).
 
 ### Self-signed certificates
 
@@ -54,6 +56,7 @@ For these, watchglass starts ffmpeg once per poll, grabs a single frame and lets
 
 - RTSP always runs over TCP (`-rtsp_transport tcp`), so a busy Wi-Fi link doesn't drop half the frame.
 - `rtsps://` works where the camera offers it (UniFi Protect does).
+- A refused RTSP login waits between tries the same way as a snapshot URL's ([Logins](#logins)).
 - `ffmpeg:` splits its arguments on spaces, so a value can't contain one. `-f gdigrab -i desktop` works; `-i title=My Window` doesn't.
 - ffmpeg isn't bundled with the binaries. The Docker image has it.
 

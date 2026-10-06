@@ -9,6 +9,7 @@ import (
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/source"
 )
 
 // preprocessSet reports whether any preprocess option is on. The detail
@@ -193,9 +194,10 @@ func isFresh(w config.Watch) bool {
 var userinfoPassword = regexp.MustCompile(`(://[^/?#@\s:]*):[^/?#\s]*@`)
 
 // redactSource is a watch's source for the page, with any password masked
-// the way url.Redacted masks it in grab errors ("user:xxxxx@"). The page
-// has no field that edits the source, so the password never needs to be
-// on it; the header line is what people screenshot.
+// the way grab errors mask it ("user:xxxxx@", and "password=xxxxx" for a
+// login in the query string, source.RedactText). The page has no field
+// that edits the source, so the password never needs to be on it; the
+// header line is what people screenshot.
 func redactSource(src string) string {
-	return userinfoPassword.ReplaceAllString(src, "${1}:xxxxx@")
+	return source.RedactText(userinfoPassword.ReplaceAllString(src, "${1}:xxxxx@"))
 }
