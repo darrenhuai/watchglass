@@ -96,7 +96,7 @@ A watch that needs an engine this machine doesn't have doesn't start, and its pa
 
 It's a geometry decoder, not a font model. It works out the polarity itself, so lit LEDs on a dark face and dark LCD digits on a light one both read without any `preprocess`. It finds each digit's bars, checks the seven segment positions, and returns the digits joined: `23.5`, `-8.0`, `1234`, and `1:23` for a clock or timer. A glyph whose bars spell no digit (a letter, a half-lit segment) comes back as `?`, so `E4` on a boiler reads `?4`.
 
-**Test this region** shows one chip per glyph with its confidence; below 60 it's shown in red, and that's the digit to worry about. Crop tightly around the digits (leave out units, labels and the bezel) and keep the camera close to head-on: the decoder expects upright digits and copes with a mild slant, not a strong one. [The lab instrument recipe](recipes/lab-instrument-seven-segment.md) covers what still trips it up.
+**Test this region** shows one chip per glyph with its confidence; below 60 it's shown in red, and that's the digit to worry about. Draw the box around the digits with a little room (leave out units and labels; some of the bezel or housing in the box is fine, and Test shows if it isn't) and keep the camera close to head-on: the decoder expects upright digits and copes with a mild slant, not a strong one, and not a display turned on its side. The digits need to be about 30 pixels tall in the camera's picture. [The lab instrument recipe](recipes/lab-instrument-seven-segment.md) covers what still trips it up.
 
 ### rapidocr
 

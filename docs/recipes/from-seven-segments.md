@@ -77,3 +77,7 @@ In practice you don't type the region: open the watch, drag a box around the dig
 ## Limits
 
 `sevenseg` reads 0-9, a leading minus, the decimal point and a colon (`1:23`). It doesn't read letters, it expects upright digits, and it doesn't read fourteen-segment or dot-matrix displays; use `engine: tesseract` or `rapidocr` for those. [The lab instrument recipe](lab-instrument-seven-segment.md) covers cropping and what still trips it up.
+
+The camera has to be close enough that the digits are about 30 pixels tall in its picture, or 40 if the picture is soft or grainy. Below about 20 pixels most readings come back as `?`, and `preprocess: {upscale: 2}` doesn't change that: it adds pixels, not detail.
+
+A box that takes in some of the housing round the display window still reads, whether the housing runs down one side or all round it, as long as it is a plain band: the decoder cuts it off and reads the window. A band along the top edge alone can still leave a `?` beside the digits; if **Test this region** shows one, pull the box in to the window. A meter that shows a small raised exponent beside the number (`8.72` and `-7`) needs two watches, one box on the number and one on the exponent: the decoder reads one row of digits of one size.
