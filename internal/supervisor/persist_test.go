@@ -276,3 +276,58 @@ func TestStopAllGivesUpOnAStuckSendAndTheNextStartSendsIt(t *testing.T) {
 		t.Errorf("%d fires, want 2: the one that never went out, then once more", n)
 	}
 }
+
+// main starts every watch under the signal context, and that context ends
+// before the deferred StopAll runs, so by then every poll loop has returned
+// and removed itself from the running map. StopAll must still wait for the
+// sends those runs left in flight.
+func TestStopAllDrainsSendsAfterTheParentContextEnded(t *testing.T) {
+	var started, delivered atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started.Add(1)
+		time.Sleep(time.Second) // a slow webhook
+		delivered.Add(1)
+	}))
+	defer hook.Close()
+	g := newShutdownRig(t, hook.URL)
+	img := fixtureImage(t)
+	s := New(g.store, state.New(5), ocr.Engines{}, g.logf)
+	s.NewSource = func(w config.Watch) (source.Source, error) { return &fakeSource{img: img}, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Start(ctx, g.w); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the alert's send to start", func() bool { return started.Load() == 1 })
+	cancel() // the signal: the poll loop returns on its own
+	waitUntil(t, "the poll loop to remove itself", func() bool { return len(s.Running()) == 0 })
+	s.StopAll()
+	if n := delivered.Load(); n != 1 {
+		t.Fatalf("%d alerts delivered when StopAll returned, want 1: main exits here", n)
+	}
+	st, ok, err := g.store.LoadTriggerState(g.w.Name)
+	if err != nil || !ok || !st.Delivered {
+		t.Errorf("row after StopAll: %+v ok=%v err=%v, want the fire marked delivered", st, ok, err)
+	}
+}
+
+// With nothing left to send, StopAll returns at once: the sender
+// goroutine closes its channel when it is done, so a quiet shutdown
+// doesn't sit out the whole grace.
+func TestStopAllReturnsAtOnceWhenNothingIsSending(t *testing.T) {
+	var delivered atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		delivered.Add(1)
+	}))
+	defer hook.Close()
+	g := newShutdownRig(t, hook.URL)
+	s := g.start()
+	waitUntil(t, "the alert to be delivered", func() bool { return delivered.Load() == 1 })
+	begin := time.Now()
+	s.StopAll()
+	if d := time.Since(begin); d >= s.sendGrace/2 {
+		t.Errorf("StopAll took %v with nothing to send; it should not wait out the %v grace", d, s.sendGrace)
+	}
+	if g.logged("stopping:") {
+		t.Errorf("a quiet shutdown logged a warning: %q", g.logs)
+	}
+}

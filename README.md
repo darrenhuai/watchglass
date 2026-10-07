@@ -21,11 +21,11 @@ Open http://127.0.0.1:8080. Two demo watches fire about 20 seconds in; this clip
 
 <img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server, the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
 
-- **Draw, test, save.** Drag a box over the live frame and see what it reads before you save. No YAML.
+- **Draw, test, save.** Drag a box over the live frame and see what it reads before you save. No YAML. A sideways display turns with one setting.
 - **Reads the screen.** Text (tesseract), seven-segment digits (built-in decoder, no ssocr) or pixel change.
-- **Doesn't flap.** A reading has to hold for a few polls before it counts, and a cooldown stops repeat pings.
+- **Doesn't flap.** A reading has to hold for a few polls before it counts, a cooldown stops repeat pings, and a restart doesn't repeat an alert.
 - **Notifies anywhere.** ntfy (with the crop attached), Discord, Telegram, Slack, Pushover, email and webhooks.
-- **Home Assistant over MQTT.** Each watch shows up as a device; a number becomes a sensor HA can graph.
+- **Home Assistant over MQTT.** Each watch shows up as a device; a number becomes a sensor HA can graph. The add-on opens from the sidebar.
 - **Tells you when the camera dies.** One "down" alert, one "back up" alert, no spam.
 - **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. 55 MB RAM, no GPU.
 

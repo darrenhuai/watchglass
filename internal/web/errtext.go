@@ -134,7 +134,7 @@ func errHint(msg string) string {
 				scheme = strings.ToLower(u.Scheme)
 				if source.LoginInURL(u) {
 					if _, waiting := loginRetry(msg); waiting {
-						return "watchglass waits between tries so that repeated wrong tries don't lock the account. Check the user and password in the source URL. Test this region tries again straight away."
+						return "watchglass waits between tries so that repeated wrong tries don't lock the account. Check the user and password in the source URL. Pressing Test this region asks the camera at once, and a refused try starts the wait again."
 					}
 					return "Check the user and password in the source URL. Some cameras lock the account for a while after a few wrong tries."
 				}

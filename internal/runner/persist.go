@@ -4,13 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/history"
+	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/trigger"
 )
 
@@ -71,24 +71,10 @@ func Fingerprint(w config.Watch) string {
 		w.Engine = "tesseract" // the default, spelled either way
 	}
 	// A new camera password is the same camera, in the user:password@ part
-	// or in the query, as many snapshot URLs take it.
-	if u, err := url.Parse(w.Source); err == nil {
-		changed := u.User != nil
-		u.User = nil
-		if q := u.Query(); len(q) > 0 {
-			for k := range q {
-				if loginParams[strings.ToLower(k)] {
-					q.Del(k)
-					changed = true
-				}
-			}
-			if changed {
-				u.RawQuery = q.Encode()
-			}
-		}
-		if changed {
-			w.Source = u.String()
-		}
+	// or in the query, as many snapshot URLs take it (?user=&password=, or
+	// a ?token=): source.StripLogin's list, the one the login wait goes by.
+	if u, err := url.Parse(w.Source); err == nil && source.StripLogin(u) {
+		w.Source = u.String()
 	}
 	// Preprocess as imgproc.Apply reads it, not as it is spelled: upscale 0
 	// and 1 are both off (the web form writes 1 back as 0), and a binarize
@@ -118,13 +104,6 @@ func Fingerprint(w config.Watch) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// loginParams are the query parameters camera snapshot URLs carry a login
-// in (Reolink's user/password, Foscam's usr/pwd, and the like).
-var loginParams = map[string]bool{
-	"user": true, "username": true, "usr": true, "login": true,
-	"password": true, "pass": true, "passwd": true, "pwd": true,
 }
 
 // clockSlack is how far in the future a saved fire time may be before it

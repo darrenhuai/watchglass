@@ -47,7 +47,7 @@
     {{end}}
   </dl>
   {{if .Reading.Partial}}<p class="test-note"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>
-  {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>{{end}}
+  {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't make a digit of anything here. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{end}}
   {{with .Note}}<p class="test-note test-note-status"><span class="led led-off" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}
   {{with .NoteDetail}}<details class="tech-detail test-note-detail">

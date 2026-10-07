@@ -63,18 +63,20 @@ func testInterval(r *http.Request, saved config.Duration) time.Duration {
 	return time.Duration(saved)
 }
 
-// testPixelChange answers a pixel_change Test. first is the frame testRegion
-// has just grabbed from src; this waits pixelTestGap, grabs a second one
-// and compares the region in both exactly as runner.Tick does (the crop as
-// the camera sends it, no preprocessing or rotate, imgproc.PercentChanged
-// with imgproc.NoiseTolerance). The verdict uses the form's Threshold.
+// testPixelChange answers a pixel_change Test. a is the region cropped
+// from the frame testRegion has just grabbed from src, and firstSize that
+// frame's bounds (the frame itself is gone: a request holds one frame at
+// a time, frameslot.go); this waits pixelTestGap, grabs a second frame and
+// compares the region in both exactly as runner.Tick does (the crop as the
+// camera sends it, no preprocessing or rotate, imgproc.PercentChanged with
+// imgproc.NoiseTolerance). The verdict uses the form's Threshold.
 //
 // Each grab has its own grabTimeout. A device source (a webcam) serves one
 // ffmpeg at a time (source.deviceSlots), so the second grab may queue
 // behind the watch's own poll: that wait counts against its grabTimeout,
 // not against the gap. Worst case the request takes two grab timeouts plus
 // pixelTestMaxGap; app.js says "Still waiting for the camera" after 8 s.
-func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, first image.Image, region config.Region) {
+func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, a *image.RGBA, firstSize image.Rectangle, region config.Region) {
 	firstAt := pixelTestNow()
 	gap := pixelTestGap(testInterval(r, wc.Interval))
 	if err := pixelTestWait(r.Context(), gap); err != nil {
@@ -96,7 +98,7 @@ func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc conf
 	}
 	secondAt := pixelTestNow()
 
-	a, b := imgproc.Crop(first, region), imgproc.Crop(second, region)
+	b, fb := imgproc.Crop(second, region), second.Bounds()
 	pct := imgproc.PercentChanged(a, b, imgproc.NoiseTolerance)
 	aURL, err := pngDataURL(a)
 	if err != nil {
@@ -116,7 +118,7 @@ func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc conf
 		Threshold: strconv.FormatFloat(trig.Threshold, 'f', -1, 64) + "%",
 	}
 	res := testResult{Crop: aURL, At: firstAt, Pixel: px, Verdict: pixelVerdict(pct, trig.Threshold, px, errs)}
-	if fa, fb := first.Bounds(), second.Bounds(); fa.Dx() != fb.Dx() || fa.Dy() != fb.Dy() {
+	if fa := firstSize; fa.Dx() != fb.Dx() || fa.Dy() != fb.Dy() {
 		res.Note = fmt.Sprintf("The camera sent the two frames at different sizes (%d×%d, then %d×%d), so the whole region counts as changed. A watch sees the same when the camera changes resolution.",
 			fa.Dx(), fa.Dy(), fb.Dx(), fb.Dy())
 	}

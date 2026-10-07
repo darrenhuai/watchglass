@@ -1070,7 +1070,7 @@ select.needs-engine option { color: var(--text); }
 .reading-body > .tag { flex: none; }
 /* "fired 12 s ago": a fire that newer readings have since replaced. Amber
    for fired, as the tag, but quieter text and no pill, since it is past. */
-.reading-body > .fired-ago { flex: none; color: var(--amber); font-size: var(--fs-sm); white-space: nowrap; }
+.reading-body > .fired-ago, .reading-wrap > .fired-ago, .reading-error > .fired-ago { flex: none; color: var(--amber); font-size: var(--fs-sm); white-space: nowrap; }
 /* Narrow table widths (721-899px) left "Last reading" ~70px: readings
    broke mid-token and the 3-line clamp cut the value off. The floor fits
    "PRINTING 34%" on one line; the tighter cell padding below 900px pays for

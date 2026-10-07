@@ -303,7 +303,7 @@ func run(o options) error {
 			// can. Every start said WARNING about it, and it isn't one.
 			log.Printf("listening on %s inside the container; the port mapping decides who can reach it (add an auth: block to config.yaml before publishing it beyond localhost)", o.listen)
 		} else {
-			log.Printf("WARNING: web UI is listening on %s with NO authentication — anyone who can reach it "+
+			log.Printf("WARNING: web UI is listening on %s with NO authentication: anyone who can reach it "+
 				"controls your watches and sees your streams; add an auth: block or bind to localhost", o.listen)
 		}
 	}

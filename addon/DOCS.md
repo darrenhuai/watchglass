@@ -1,4 +1,4 @@
-# watchglass — Home Assistant Add-on
+# watchglass Home Assistant add-on
 
 ## Experimental
 
@@ -22,7 +22,7 @@ On first start watchglass creates an empty `config.yaml` in the add-on's config 
 
 The dashboard can also be reached without the sidebar, for a bookmark on a phone or a script that posts to the Test route. Map port 8080 under the add-on's **Network** settings, and it answers at `http://<home-assistant-host>:8080`.
 
-Before you do that, add an `auth:` block to `config.yaml` and restart the add-on. A mapped port is open to everyone on your network, with no login of its own: anyone who reaches it can change watches and make watchglass fetch URLs from inside your network. Without the block, the add-on log says so at every start.
+Before you do that, add an `auth:` block to `config.yaml` and restart the add-on. A mapped port is open to everyone on your network, with no login of its own: anyone who reaches it can change watches and make watchglass fetch URLs from inside your network. Without the block, the add-on log says so at every start. Other add-ons on the Supervisor's internal network can reach the add-on's port directly even when it isn't mapped; add the block if you don't trust every add-on you run.
 
 ```yaml
 auth:

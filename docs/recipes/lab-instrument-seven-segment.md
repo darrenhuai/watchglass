@@ -1,13 +1,13 @@
 # Lab instrument seven-segment readout
 
-Bench scales, multimeters, thermometers, older gauges — a lot of lab and
+Bench scales, multimeters, thermometers, older gauges: a lot of lab and
 shop instruments still show their reading on a seven-segment LED or LCD
 display: digits built from a handful of straight bars rather than a normal
 font's continuous strokes. Tesseract reads those badly (a "0" is six
 disconnected bars with gaps, not a solid loop), which is why watchglass has
 a decoder built for them: set `engine: sevenseg` on the watch and the
-digits are read by geometry — find the bars, check the seven segment
-positions of each cell — with no font model, no external binary, and no
+digits are read by geometry (find the bars, check the seven segment
+positions of each cell) with no font model, no external binary, and no
 preprocessing to tune. This recipe is that setup.
 
 ## What the decoder does
@@ -19,13 +19,13 @@ preprocessing to tune. This recipe is that setup.
   lit LEDs, with the unlit "ghost" segments most LED displays show, and
   with digits from about 30 px tall in the frame up (40 if the picture is
   soft or grainy).
-- Reads `0`-`9`, a leading `-`, and the decimal point, joined into one
-  string: `23.5`, `-8.0`, `1234`. A glyph whose bars spell no digit comes
-  back as `?`.
+- Reads `0`-`9`, a leading `-`, the decimal point and a colon, joined into
+  one string: `23.5`, `-8.0`, `1234`, `1:23`. A glyph whose bars spell no
+  digit comes back as `?`.
 - **Test this region** shows one chip per glyph with its confidence (how
   far every segment sat from the on/off line): a clean read scores near
   100, a glyph with a half-lit or half-hidden bar scores low. Anything
-  below 60 shows red — that's the digit to worry about.
+  below 60 shows red: that's the digit to worry about.
 
 ## Set it up in the web UI
 
@@ -87,7 +87,7 @@ leading `-` and any `?`. That's deliberate: a `numeric` trigger with no
 match simply doesn't fire that poll, so a `?` in the reading (a glyph the
 decoder couldn't make a digit of) is skipped rather than parsed into a
 wrong number. If you need the sign, use `"(-?[0-9.]+)"`. If a stray `?`
-lands in the middle of a reading — `2?.5` — the pattern grabs `5` on its
+lands in the middle of a reading, `2?.5`, the pattern grabs `5` on its
 own; a stricter pattern that pins the digit count you expect, say
 `"^([0-9]{2,3}\\.[0-9])$"`, refuses such a poll outright.
 
@@ -115,14 +115,14 @@ and a dark (or light) empty face, nothing in between.
 - **Slant.** Many seven-segment fonts are italic, and a camera off to the
   side skews the digits further. The decoder expects upright bars; a mild
   slant reads fine, a strong one starts losing the side segments. Mount
-  the camera as close to head-on as you can — for these displays a bar
+  the camera as close to head-on as you can: for these displays a bar
   can go fully invisible off-axis, not just blurry.
-- **Neighbouring marks.** A colon between two digit groups (a clock's
-  `12:34`) is recognised and kept out of the digits, but degree signs,
-  unit annunciators (`kg`, `°C`, `HOLD`) and the small "battery" glyphs
-  many meters show inside the digit row are not, and the decoder returns
-  `?` for some and ignores others. Crop what you can, and for a clock an
-  `ocr_match` on `[0-9:]+` is steadier than a `numeric` watch.
+- **Neighbouring marks.** A colon between two digit groups is read and
+  kept in the reading (a clock reads `12:34`, so a `numeric` watch needs a
+  capture group such as `"([0-9]+):"` for the hours, or use `ocr_changed`),
+  but degree signs, unit annunciators (`kg`, `°C`, `HOLD`) and the small
+  "battery" glyphs many meters show inside the digit row are not: the
+  decoder returns `?` for some and ignores others. Crop what you can.
 - **Blank leading digits** are simply absent: a four-position display
   showing ` 23.5` reads `23.5`, and the unlit ghost segments in the empty
   position are ignored. A display that shows leading zeros reads them
@@ -130,7 +130,7 @@ and a dark (or light) empty face, nothing in between.
 - **Segment fonts vary.** `6`, `7` and `9` come with and without their
   optional bar and both spellings read; a `1` is placed at the right of
   its cell; a `4` with an open top reads as `4`. A font with unusual
-  proportions — very fat bars, or digits wider than they are tall — is
+  proportions (very fat bars, or digits wider than they are tall) is
   outside what the decoder expects and will show up as low confidence or
   `?` in the test panel.
 - **Fired on what the pattern extracted.** As with every `numeric` watch,

@@ -613,6 +613,14 @@ func TestFingerprint(t *testing.T) {
 		"camera login in the query, other names": func(w *config.Watch) {
 			w.Source = "http://127.0.0.1:8102/snapshot.jpg?usr=admin&PWD=hunter2"
 		},
+		// A token is the login too (source.LoginInURL): rotating it is a
+		// new password, not a new camera.
+		"camera token in the query": func(w *config.Watch) {
+			w.Source = "http://127.0.0.1:8102/snapshot.jpg?token=abc123"
+		},
+		"camera api key in the query": func(w *config.Watch) {
+			w.Source = "http://127.0.0.1:8102/snapshot.jpg?apikey=abc123&api_key=def"
+		},
 		// ocr_match never reads them.
 		"op":        func(w *config.Watch) { w.Trigger.Op = "lt" },
 		"threshold": func(w *config.Watch) { w.Trigger.Threshold = 3 },
@@ -634,6 +642,8 @@ func TestFingerprint(t *testing.T) {
 		"preprocess": func(w *config.Watch) { w.Preprocess.Threshold = 128 },
 		"upscale":    func(w *config.Watch) { w.Preprocess.Upscale = 2 },
 		"grayscale":  func(w *config.Watch) { w.Preprocess.Grayscale = true },
+		"rotate":     func(w *config.Watch) { w.Preprocess.Rotate = 90 },
+		"rotate 270": func(w *config.Watch) { w.Preprocess.Rotate = 270 },
 		"type":       func(w *config.Watch) { w.Trigger.Type = "ocr_changed" },
 		"pattern":    func(w *config.Watch) { w.Trigger.Pattern = "(?i)complete" },
 		"numeric op": func(w *config.Watch) {
@@ -672,6 +682,7 @@ func TestFingerprint(t *testing.T) {
 	}{
 		{"pixel_change engine", config.Trigger{Type: "pixel_change", Threshold: 5}, func(w *config.Watch) { w.Engine = "sevenseg" }},
 		{"pixel_change preprocess", config.Trigger{Type: "pixel_change", Threshold: 5}, func(w *config.Watch) { w.Preprocess.Invert = true }},
+		{"pixel_change rotate", config.Trigger{Type: "pixel_change", Threshold: 5}, func(w *config.Watch) { w.Preprocess.Rotate = 90 }},
 		{"pixel_change pattern", config.Trigger{Type: "pixel_change", Threshold: 5}, func(w *config.Watch) { w.Trigger.Pattern = "x" }},
 		{"ocr_changed pattern", config.Trigger{Type: "ocr_changed"}, func(w *config.Watch) { w.Trigger.Pattern = "x" }},
 		{"ocr_changed threshold", config.Trigger{Type: "ocr_changed"}, func(w *config.Watch) { w.Trigger.Threshold = 9 }},
@@ -692,6 +703,23 @@ func TestFingerprint(t *testing.T) {
 	gray.Preprocess.Grayscale = true
 	if Fingerprint(w) != Fingerprint(gray) {
 		t.Error("Grayscale next to a binarize level changed the fingerprint; binarizing already grays the image")
+	}
+
+	// A turned crop is a different question for every type that turns it
+	// (numeric too: the fingerprint is of what the decoder is shown).
+	for _, typ := range []string{"ocr_match", "ocr_changed", "numeric"} {
+		w := base
+		w.Trigger.Type = typ
+		if typ == "numeric" {
+			w.Trigger = config.Trigger{Type: "numeric", Op: "gt", Threshold: 25}
+		}
+		turned := w
+		turned.Preprocess.Rotate = 90
+		other := w
+		other.Preprocess.Rotate = 270
+		if Fingerprint(w) == Fingerprint(turned) || Fingerprint(turned) == Fingerprint(other) {
+			t.Errorf("%s: rotate 0, 90 and 270 must all give different fingerprints", typ)
+		}
 	}
 
 	// The password is dropped, the rest of the address is not.

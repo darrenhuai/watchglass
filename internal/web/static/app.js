@@ -590,12 +590,24 @@
     var p = document.getElementById("status-pill");
     return !!p && p.classList.contains("status-error");
   }
+  // A camera that turned the login down (errtext.go's "HOST turned down
+  // the login. Trying again in 1m 40s") is reachable: it refused the
+  // password, which is a different heading from a dead camera. The header
+  // says so once the watch is down; before that only the diagnosis does.
+  var LOGIN_REFUSED_RE = /turned down the login/;
+  var LOGIN_WAIT_RE = /Trying again in /;
+  function loginRefused() {
+    var sum = document.querySelector("#status-detail .status-summary");
+    return LOGIN_REFUSED_RE.test(snapLast && snapLast.summary || "") ||
+      (pillIsError() && !!sum && LOGIN_REFUSED_RE.test(sum.textContent));
+  }
   function renderSnapResult() {
     if (!snapLast || !snapError || snapError.hidden) return;
     var st = snapLast.status, heading, down;
     if (st === 200) { heading = "Frame failed to load"; down = false; }
     else if (st === 400) { heading = "Source misconfigured"; down = true; }
     else if (st === 0) { heading = "watchglass didn't answer"; down = true; }
+    else if (loginRefused()) { heading = "Login refused by the camera"; down = true; }
     else if (pillIsError()) { heading = "Camera unreachable"; down = true; }
     else { heading = "No frame from camera"; down = false; }
     var key = heading + (down ? "!" : "");
@@ -614,6 +626,17 @@
     snapError.hidden = false;
     renderSnap("is-checking", "led-amber", "No frame yet");
     snapError.appendChild(el("p", "snap-cause", "Checking the camera…"));
+    diagnoseSnap();
+  }
+  // diagnoseSnap asks /snapshot why there is no frame and puts the answer
+  // on the slate (renderSnapResult). Called once per failure by
+  // showSnapError, and again on the frame's own refresh tick while the
+  // cause carries a countdown (refreshSnap), so "Trying again in 1m 40s"
+  // counts down instead of staying as written when it was fetched.
+  var diagnosing = false;
+  function diagnoseSnap() {
+    if (diagnosing) return;
+    diagnosing = true;
     fetch(snapURL)
       .then(function (resp) {
         // Whenever the body isn't read as text below, cancel it: an
@@ -642,15 +665,35 @@
         return resp.text().then(function (t) { return { status: resp.status, text: t }; });
       })
       .then(function (r) {
+        diagnosing = false;
         if (r === null) return;
         var e = splitError(r.text);
-        snapLast = { status: r.status, summary: e.summary, raw: e.raw, key: "" };
-        renderSnapResult();
+        setSnapLast({ status: r.status, summary: e.summary, raw: e.raw, key: "" });
       })
       .catch(function () {
-        snapLast = { status: 0, summary: "The snapshot request failed. Is watchglass still running?", raw: "", key: "" };
-        renderSnapResult();
+        diagnosing = false;
+        setSnapLast({ status: 0, summary: "The snapshot request failed. Is watchglass still running?", raw: "", key: "" });
       });
+  }
+  // setSnapLast records a diagnosis. The first one builds the slate; a
+  // later one with the same heading only rewords the cause (the countdown
+  // ticked), so an opened Technical detail stays open.
+  function setSnapLast(last) {
+    var before = snapLast;
+    snapLast = last;
+    if (before && snapError && !snapError.hidden) {
+      snapLast.key = before.key;
+      renderSnapResult();
+      if (snapLast.key === before.key) {
+        snapCause = { summary: last.summary, raw: last.raw };
+        var p = snapError.querySelector(".snap-cause");
+        if (p) p.textContent = last.summary || "No further detail available.";
+        var raw = snapError.querySelector(".tech-raw");
+        if (raw && last.raw && raw.textContent !== last.raw) raw.textContent = last.raw;
+      }
+      return;
+    }
+    renderSnapResult();
   }
   img.addEventListener("error", showSnapError);
   // A same-host /snapshot request against a dead source can 502 fast enough
@@ -698,6 +741,14 @@
     // tab has nobody looking; a preload still in flight means the camera
     // is slow, and stacking a second request on it only makes that worse.
     if (preload || drag || document.visibilityState !== "visible") return;
+    // The slate is up with a countdown on it: ask for the words again
+    // (the login gate answers without asking the camera while the wait
+    // runs; once it takes the login, the answer is a frame and the slate
+    // comes down on the next tick).
+    if (snapError && !snapError.hidden && snapLast && LOGIN_WAIT_RE.test(snapLast.summary)) {
+      diagnoseSnap();
+      return;
+    }
     var next = new Image();
     next.onload = function () {
       preload = null;

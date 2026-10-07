@@ -89,7 +89,7 @@ preprocess:
   upscale: 2        # 2-4: enlarge small text; 0 or 1 is off
 ```
 
-They run in that order.
+`rotate` runs first, then `upscale`, then `grayscale`, `invert` and `threshold`.
 
 ### A display that is sideways
 

@@ -799,3 +799,33 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// StripLogin takes out what LoginInURL counts as a login and nothing
+// else: the runner's Fingerprint goes by it, so a new password or token
+// is the same camera and a new channel is not.
+func TestStripLogin(t *testing.T) {
+	for raw, want := range map[string]string{
+		"http://cam/snap.jpg":                                "http://cam/snap.jpg",
+		"http://admin:pw@cam/snap.jpg":                       "http://cam/snap.jpg",
+		"http://cam/cgi?cmd=Snap&user=admin&password=x&ch=1": "http://cam/cgi?cmd=Snap&ch=1",
+		"http://cam/cgi?channel=1&Password=x":                "http://cam/cgi?channel=1",
+		"http://cam/snap.jpg?token=abc":                      "http://cam/snap.jpg",
+		"http://cam/snap.jpg?apikey=abc&api_key=d&q=1":       "http://cam/snap.jpg?q=1",
+		"rtsp://admin:pw@cam:554/stream1":                    "rtsp://cam:554/stream1",
+	} {
+		u := mustURL(t, raw)
+		changed := StripLogin(u)
+		if got := u.String(); got != want {
+			t.Errorf("StripLogin(%q) left %q, want %q", raw, got, want)
+		}
+		if changed != (raw != want) {
+			t.Errorf("StripLogin(%q) reported changed=%v", raw, changed)
+		}
+		if LoginInURL(u) {
+			t.Errorf("StripLogin(%q) left a login behind: %q", raw, u.String())
+		}
+	}
+	if StripLogin(nil) {
+		t.Error("StripLogin(nil) reported a change")
+	}
+}

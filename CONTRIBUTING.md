@@ -84,7 +84,7 @@ The same test checks every relative link and `#anchor` in the docs, that no doc 
 
 Roughly in order. If you want to work on one, open an issue first so we can agree on the shape.
 
-- The Home Assistant add-on in the official store (it installs as a custom repository today), with ingress.
+- The Home Assistant add-on in the official store (it installs as a custom repository today).
 - Template matching triggers ("this icon appeared").
 - Several regions in one condition ("A says DONE and B is above 200").
 - An optional vision-model engine, off by default and clearly labelled.

@@ -55,6 +55,13 @@ type Supervisor struct {
 	// sendGrace is StopAll's wait for alerts still being sent; tests
 	// shorten it.
 	sendGrace time.Duration
+	// ended holds the runs whose poll loop returned on its own because the
+	// parent context ended. main starts every watch under the signal
+	// context, which ends before the deferred StopAll runs, so by then
+	// every run has removed itself from running; their sender goroutines
+	// may still be sending, and StopAll waits for those too. Stop empties
+	// the slot before the loop returns, so a stopped run is never kept.
+	ended []*handle
 }
 
 func New(store *history.Store, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) *Supervisor {
@@ -195,6 +202,8 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		s.mu.Lock()
 		if cur, ok := s.running[name]; ok && cur == h {
 			delete(s.running, name)
+			// Its sends may still be going: StopAll drains them.
+			s.ended = append(s.ended, h)
 		}
 		s.mu.Unlock()
 		close(h.done)
@@ -264,10 +273,11 @@ func (s *Supervisor) Running() []string {
 // otherwise die with the process. (Stop doesn't wait for sends: Save &
 // restart watch shouldn't hang on a slow webhook.) An alert that still
 // hasn't gone out by then is not marked sent, so the next start reports a
-// condition that still holds again. It joins only the handles it
-// snapshots, so a Start that races in during shutdown (landing in the
-// fresh map left behind for it) can never make StopAll block: StopAll
-// depends solely on its own snapshot.
+// condition that still holds again. It joins the handles it snapshots
+// and the runs that ended on their own before it was called (ended: the
+// parent context was the signal context), so a Start that races in during
+// shutdown (landing in the fresh map left behind for it) can never make
+// StopAll block: StopAll depends solely on its own snapshot.
 func (s *Supervisor) StopAll() {
 	s.mu.Lock()
 	hs := s.running
@@ -275,17 +285,20 @@ func (s *Supervisor) StopAll() {
 	for name := range hs {
 		s.reg.ClearSending(name)
 	}
+	all := s.ended
+	s.ended = nil
 	s.mu.Unlock()
 	for _, h := range hs {
 		h.cancel()
+		all = append(all, h)
 	}
-	for _, h := range hs {
+	for _, h := range all {
 		<-h.done
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.sendGrace)
 	defer cancel()
 	waiting := 0
-	for _, h := range hs {
+	for _, h := range all {
 		if !h.r.WaitSent(ctx) {
 			waiting++
 		}

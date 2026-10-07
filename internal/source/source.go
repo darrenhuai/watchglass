@@ -332,8 +332,9 @@ func (h *HTTPSnapshot) fail(label string, err error) error {
 // instead of user:password@ (Reolink's ?user=&password=, Foscam's
 // usr/pwd), plus the token-style ones. A URL with one carries a login
 // (LoginInURL), and the ones in secretParams hold the password, masked
-// wherever the URL is shown (RedactURL, RedactText). The runner's
-// Fingerprint keeps its own copy of the user/password names.
+// wherever the URL is shown (RedactURL, RedactText). StripLogin takes
+// them all out, so the runner's Fingerprint sees the same camera whatever
+// the login: one list, so a token counts as a login everywhere or nowhere.
 var loginParams = map[string]bool{
 	"user": true, "username": true, "usr": true, "login": true,
 	"password": true, "pass": true, "passwd": true, "pwd": true,
@@ -361,6 +362,36 @@ func LoginInURL(u *url.URL) bool {
 		}
 	}
 	return false
+}
+
+// StripLogin removes the login from u: its userinfo and every login query
+// parameter (the same ones LoginInURL counts). It reports whether anything
+// was removed. The rest of the query keeps its order and spelling.
+func StripLogin(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	changed := u.User != nil
+	u.User = nil
+	if u.RawQuery == "" {
+		return changed
+	}
+	parts := strings.Split(u.RawQuery, "&")
+	kept := parts[:0]
+	for _, p := range parts {
+		k, _, _ := strings.Cut(p, "=")
+		name, err := url.QueryUnescape(k)
+		if err != nil {
+			name = k
+		}
+		if loginParams[strings.ToLower(name)] {
+			changed = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	u.RawQuery = strings.Join(kept, "&")
+	return changed
 }
 
 // RedactURL is raw for an error message or a page, with the password

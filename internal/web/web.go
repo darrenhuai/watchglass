@@ -110,6 +110,9 @@ type Server struct {
 	engines ocr.Engines
 	tmpl    *template.Template
 	logf    func(string, ...any)
+	// frames caps the decoded frames the snapshot and Test routes hold at
+	// once (frameslot.go).
+	frames chan struct{}
 }
 
 func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) (*Server, error) {
@@ -122,6 +125,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		reg:       reg,
 		engines:   engines,
 		logf:      logf,
+		frames:    make(chan struct{}, frameSlots),
 	}
 	// "u" and "watchURL" take the page's Base first: the prefix is per
 	// request (BasePath, or an ingress request's own; see base in
@@ -428,13 +432,18 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), grabTimeout)
-	defer cancel()
 	src, err := s.NewSource(wc)
 	if err != nil {
 		sourceError(w, err)
 		return
 	}
+	release, ok := s.takeFrameSlot(w, r, busySnapshotText)
+	if !ok {
+		return
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), grabTimeout)
+	defer cancel()
 	img, err := src.Grab(ctx)
 	if err != nil {
 		grabError(w, err)
@@ -1210,8 +1219,6 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
-	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
-	defer cancelGrab()
 	// The Certificate box as the form has it: ticking it and pressing Test
 	// tries the camera that way before anything is saved.
 	testWatch := wc
@@ -1221,6 +1228,15 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		sourceError(w, err)
 		return
 	}
+	// The slot is held to the end: the crop (the whole frame, for a
+	// full-frame region) lives until the answer is written.
+	release, ok := s.takeFrameSlot(w, r, busyTestText)
+	if !ok {
+		return
+	}
+	defer release()
+	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
+	defer cancelGrab()
 	// A person asking: tried even while a refused login is waiting.
 	img, err := src.Grab(source.Forced(grabCtx))
 	cancelGrab()
@@ -1231,9 +1247,10 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	// pixel_change reads no text: its Test grabs a second frame and
 	// measures what the watch would. (Only when the form says so: a request
 	// without ttype, from curl or an older client, is read by the engine as
-	// before.)
+	// before.) It gets the crop and the frame's size, not the frame: the
+	// frame is dropped here, before the wait between the two grabs.
 	if r.FormValue("ttype") == "pixel_change" {
-		s.testPixelChange(w, r, wc, src, img, region)
+		s.testPixelChange(w, r, wc, src, imgproc.Crop(img, region), img.Bounds(), region)
 		return
 	}
 	// pixel_change compares the crop as the camera sends it, so its Test

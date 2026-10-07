@@ -2143,3 +2143,31 @@ func TestChromeHasNoStaticStatusLEDAndSaveIsAButton(t *testing.T) {
 		t.Errorf("Save should be a <button> so it shares every button state; body:\n%s", detail)
 	}
 }
+
+// After a restart the registry is seeded with the watch's last fire from
+// the history database before the watch has read again (supervisor.Start),
+// so the list says "fired 3 min ago" next to "No readings yet", and next
+// to the error when the camera is down, not only after the first reading.
+func TestFiredAgoShowsBeforeTheFirstReadingAfterARestart(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.sup.NewSource = func(w config.Watch) (source.Source, error) { return blockingSource{}, nil }
+	wc, _ := s.findWatch("printer")
+	if err := s.sup.Start(context.Background(), wc); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.sup.Stop("printer") })
+	s.reg.SeedFired("printer", time.Now().Add(-3*time.Minute))
+
+	_, body := get(t, s.Handler(), "/")
+	row := body[strings.Index(body, `data-label="Last reading"`):]
+	if !strings.Contains(row, `<span class="reading-pending">No readings yet</span><span class="fired-ago">fired 3 min ago</span>`) {
+		t.Errorf("a watch with no readings since the restart should still say when it fired; row:\n%s", row)
+	}
+
+	s.reg.SetHealth("printer", state.Health{Down: true, Message: "stream unreachable: refused", Since: time.Now()})
+	_, body = get(t, s.Handler(), "/")
+	row = body[strings.Index(body, `data-label="Last reading"`):]
+	if !strings.Contains(row, `<span class="fired-ago">fired 3 min ago</span>`) || !strings.Contains(row, "tag-error") {
+		t.Errorf("a watch whose camera is down should still say when it fired; row:\n%s", row)
+	}
+}

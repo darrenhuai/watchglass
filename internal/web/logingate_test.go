@@ -42,7 +42,7 @@ func TestRefusedLoginWaitShownAndTestAsksAnyway(t *testing.T) {
 		return source.For(w)
 	}
 	h := s.Handler()
-	waitRe := regexp.MustCompile(`^127\.0\.0\.1:\d+ turned down the login\. Trying again in (\d+)s\. watchglass waits between tries so that repeated wrong tries don't lock the account\. Check the user and password in the source URL\. Test this region tries again straight away\.\n`)
+	waitRe := regexp.MustCompile(`^127\.0\.0\.1:\d+ turned down the login\. Trying again in (\d+)s\. watchglass waits between tries so that repeated wrong tries don't lock the account\. Check the user and password in the source URL\. Pressing Test this region asks the camera at once, and a refused try starts the wait again\.\n`)
 
 	resp, body := get(t, h, "/watch/printer/snapshot")
 	if resp.StatusCode != http.StatusBadGateway || requests.Load() != 1 {

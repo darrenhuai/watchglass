@@ -40,8 +40,9 @@ var rotateOptions = []rotateOption{
 }
 
 // preprocessSummary is the one-line readout beside the folded section's
-// title: "off", or the options that are on, in the order they are applied,
-// e.g. "rotate 90° · grayscale · binarize 128 · 2×". app.js (ppSummary) keeps
+// title: "off", or the options that are on, in the order the form shows
+// them (imgproc.Apply runs rotate, then upscale, then the rest), e.g.
+// "rotate 90° · grayscale · binarize 128 · 2×". app.js (ppSummary) keeps
 // it in step as the controls change; the wording here and there must agree.
 func preprocessSummary(p config.Preprocess) string {
 	var parts []string

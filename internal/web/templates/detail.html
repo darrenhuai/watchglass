@@ -325,9 +325,10 @@
            summary beside the title says "off"); a tuned watch, or a
            rejected save that names one of these fields, opens it so nothing
            configured is hidden. The fieldset keeps the id app.js hides for
-           pixel_change, which reads no pixels through OCR. The rows are in
-           the order the steps run (imgproc.Apply): Rotate first, for a
-           camera or display mounted sideways. The stage is never turned:
+           pixel_change, which reads no pixels through OCR. Rotate comes
+           first, as it runs first (imgproc.Apply: rotate, upscale, then
+           grayscale, invert, binarize), for a camera or display mounted
+           sideways. The stage is never turned:
            the region stays a box on the frame as the camera sends it, and
            Test this region shows the turned crop. */}}
       <fieldset id="fs-preprocess" class="fs-fold" aria-labelledby="pp-label">

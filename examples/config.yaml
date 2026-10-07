@@ -13,7 +13,7 @@ watches:
     # Any URL that returns a JPEG/PNG, or an MJPEG stream (the first frame
     # is read). docs/recipes/camera-urls.md lists the URL by camera brand.
     # A login goes in the URL (http://user:pass@CAMERA-IP/...; Basic and
-    # Digest both work). For RTSP cameras, use an rtsp:// source directly —
+    # Digest both work). For RTSP cameras, use an rtsp:// source directly;
     # see the instrument-readout watch below.
     source: http://192.168.1.50/snapshot.jpg
     # For an https:// camera with a self-signed certificate:
@@ -23,13 +23,13 @@ watches:
     interval: 5s
     # Normalized coordinates (0.0-1.0): this watches the middle strip.
     region: {x: 0.25, y: 0.45, w: 0.5, h: 0.1}
-    # Optional OCR preprocessing — tune these in the web UI's live preview:
+    # Optional OCR preprocessing; tune these in the web UI's live preview:
     # preprocess:
+    #   rotate: 90         # 90, 180 or 270: turn the crop clockwise for a sideways display; 0 = off
     #   grayscale: true
     #   invert: false      # white-on-black LCDs read better inverted
     #   threshold: 128     # 0 = off; 1-255 binarize at this gray level
     #   upscale: 2         # 0/1 = off; 2-4 for small text
-    #   rotate: 90         # 90, 180 or 270: turn the crop clockwise for a sideways display; 0 = off
     trigger:
       type: ocr_match
       pattern: "(?i)print complete"
@@ -52,7 +52,7 @@ watches:
       - ntfy://ntfy.sh/my-printer-topic
 
   # An RTSP camera pointed at a lab instrument. Needs ffmpeg on PATH.
-  # watchglass grabs ONE frame per poll and lets ffmpeg exit — there is no
+  # watchglass grabs ONE frame per poll and lets ffmpeg exit; there is no
   # persistent decoder, so idle cost stays near zero.
   - name: instrument-readout
     source: rtsp://192.168.1.60:554/stream1
@@ -87,7 +87,7 @@ watches:
 
 # How many days of readings to keep (default 30; -1 = forever). Roughly
 # 8 MB/day per watch at a 2s poll interval (scales with interval and watch
-# count) — worth knowing before sizing onto e.g. an SD card.
+# count), worth knowing before sizing onto e.g. an SD card.
 # history_days: 30
 
 # Protect the web UI (recommended before -listen 0.0.0.0):
@@ -97,7 +97,7 @@ watches:
 
 # Optional: publish every watch to Home Assistant via MQTT auto-discovery.
 # Each watch appears as a device with Reading, Health, Motion and Snapshot
-# entities, plus a Value sensor for numeric watches — no HA YAML needed.
+# entities, plus a Value sensor for numeric watches; no HA YAML needed.
 # The top of every page shows whether the broker is connected. Changes to
 # this block need a restart. Omit the block to disable.
 # mqtt:
