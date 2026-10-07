@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -46,6 +48,14 @@ type FFmpeg struct {
 	inputArgs []string // format/transport flags plus -i <input>
 	run       ffmpegRunFunc
 	slot      chan struct{} // nil for network streams; see deviceSlots
+
+	// camera is the network URL ffmpeg reads (an rtsp:// source, or the
+	// first URL among an ffmpeg: source's arguments), whose refused logins
+	// go through the login wait (logingate.go); nil for a device.
+	camera *url.URL
+	// secrets are the URLs among the arguments that carry a password:
+	// ffmpeg prints its input URL in full in its errors.
+	secrets []string
 }
 
 // NewFFmpeg builds a frame source for an rtsp://, rtsps://, v4l2:, dshow:,
@@ -64,6 +74,18 @@ func NewFFmpeg(input string) (*FFmpeg, error) {
 	}
 	if !strings.HasPrefix(input, "rtsp://") && !strings.HasPrefix(input, "rtsps://") {
 		f.slot = deviceSlot(input)
+	}
+	for _, a := range args {
+		u, err := url.Parse(a)
+		if err != nil || u.Scheme == "" || u.Host == "" || !strings.Contains(a, "://") {
+			continue
+		}
+		if f.camera == nil {
+			f.camera = u
+		}
+		if RedactURL(a) != a {
+			f.secrets = append(f.secrets, a)
+		}
 	}
 	return f, nil
 }
@@ -114,10 +136,29 @@ func (f *FFmpeg) Grab(ctx context.Context) (image.Image, error) {
 	args = append(args, f.inputArgs...)
 	args = append(args, "-frames:v", "1", "-f", "image2", "-c:v", "png", "-")
 
+	var tk *ticket
+	if f.camera != nil {
+		// A camera that turned this login down recently isn't asked again
+		// until its wait is over (logingate.go).
+		label := RedactURL(f.camera.String())
+		var err error
+		tk, err = logins.admit(ctx, f.camera, nil, func(status int) string {
+			return fmt.Sprintf("ffmpeg: %s: %d %s", label, status, http.StatusText(status))
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	out, err := f.run(ctx, f.Bin, args...)
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg: %w", err)
+		msg := "ffmpeg: " + RedactText(err.Error(), f.secrets...)
+		if status := refusedStatus(msg); status != 0 && f.camera != nil {
+			return nil, tk.refused(status, msg)
+		}
+		tk.done()
+		return nil, &redactedError{msg: msg, err: err}
 	}
+	tk.accepted()
 	img, err := decodeImage(bytes.NewReader(out))
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg: decode frame: %w", err)
@@ -141,3 +182,14 @@ func runFFmpeg(ctx context.Context, bin string, args ...string) ([]byte, error) 
 	}
 	return out, nil
 }
+
+// redactedError is a grab error (ffmpeg's output, or the http client's)
+// with every password in it masked. It still unwraps to the original, so
+// errors.Is sees a context deadline or ErrCertNotTrusted.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }

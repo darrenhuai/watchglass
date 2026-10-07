@@ -427,9 +427,20 @@ func TestDigestWrongPasswordKeepsToItself(t *testing.T) {
 		if _, err := NewHTTPSnapshot(good).Grab(context.Background()); err != nil {
 			t.Fatalf("good grab %d: %v", i, err)
 		}
-		if _, err := NewHTTPSnapshot(bad).Grab(context.Background()); err == nil || !strings.Contains(err.Error(), "status 401") {
+		// The refusal starts a login wait (logingate.go); the later grabs
+		// are Tests, which ask the camera anyway, so each one shows what a
+		// refused login costs the account when the camera is asked.
+		ctx := context.Background()
+		if i > 0 {
+			ctx = Forced(ctx)
+		}
+		if _, err := NewHTTPSnapshot(bad).Grab(ctx); err == nil || !strings.Contains(err.Error(), "status 401") {
 			t.Fatalf("bad grab %d: err = %v, want status 401", i, err)
 		}
+	}
+	// A poll inside the wait doesn't ask at all.
+	if _, err := NewHTTPSnapshot(bad).Grab(context.Background()); !errors.Is(err, ErrLoginRefused) || !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("grab inside the wait: err = %v, want the refusal", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -438,9 +449,10 @@ func TestDigestWrongPasswordKeepsToItself(t *testing.T) {
 	}
 	// First grab: Basic, then the Digest retry. Each later grab: the
 	// remembered Digest answer only, which the camera refuses with the
-	// same nonce and no stale flag, so there is nothing to retry.
+	// same nonce and no stale flag, so there is nothing to retry. The
+	// last one isn't sent.
 	if badRequests != 2+1+1 {
-		t.Errorf("wrong-password watch made %d requests over 3 grabs, want 4", badRequests)
+		t.Errorf("wrong-password watch made %d requests over 4 grabs, want 4", badRequests)
 	}
 }
 

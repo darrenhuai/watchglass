@@ -78,6 +78,29 @@ func TestLastFiredOutlivesTheRing(t *testing.T) {
 	}
 }
 
+// A fire from before watchglass restarted is carried over as a time only:
+// no sample appears, a newer fire wins, and an older seed never moves the
+// time back.
+func TestSeedFiredCarriesAFireOverARestart(t *testing.T) {
+	r := New(3)
+	r.SeedFired("w", time.Unix(100, 0))
+	if got, ok := r.LastFired("w"); !ok || !got.Equal(time.Unix(100, 0)) {
+		t.Errorf("LastFired after SeedFired = %v, %v; want t=100", got, ok)
+	}
+	if _, ok := r.Latest("w"); ok || len(r.Recent("w")) != 0 {
+		t.Error("SeedFired must not add a sample")
+	}
+	r.Add("w", Sample{TS: time.Unix(200, 0), Reading: "x", Fired: true})
+	r.SeedFired("w", time.Unix(150, 0)) // a Save & restart re-seeds the older, saved time
+	if got, _ := r.LastFired("w"); !got.Equal(time.Unix(200, 0)) {
+		t.Errorf("LastFired = %v, want the newer fire at t=200 to stand", got)
+	}
+	r.Drop("w")
+	if _, ok := r.LastFired("w"); ok {
+		t.Error("Drop should forget a seeded fire too")
+	}
+}
+
 func TestHealthDefaultsToNoEntry(t *testing.T) {
 	r := New(3)
 	if h, ok := r.GetHealth("w"); ok {

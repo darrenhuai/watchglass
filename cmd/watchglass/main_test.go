@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
@@ -159,5 +161,87 @@ func TestCheckEngines(t *testing.T) {
 	}
 	if err := checkEngines([]config.Watch{lcd}, withRapid); err == nil {
 		t.Error("rapidocr present must not stand in for a missing tesseract")
+	}
+}
+
+// After a save, create or delete in the web UI, the trigger state of every
+// watch that is no longer in the list is dropped, and the MQTT publisher
+// (when there is one) is handed the same list.
+func TestConfigChangedForgetsDeletedWatches(t *testing.T) {
+	store, err := history.Open(filepath.Join(t.TempDir(), "wg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, name := range []string{"kept", "deleted"} {
+		if err := store.SaveTriggerState(name, history.TriggerState{Fingerprint: "f", Stable: "cond:true", HasStable: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sup := supervisor.New(store, state.New(5), ocr.Engines{}, func(string, ...any) {})
+	list := []config.Watch{{Name: "kept"}, {Name: "new"}}
+
+	var published []config.Watch
+	configChanged(sup, func(ws []config.Watch) { published = ws })(list)
+	if _, ok, _ := store.LoadTriggerState("deleted"); ok {
+		t.Error("a deleted watch's trigger state is still saved")
+	}
+	if _, ok, _ := store.LoadTriggerState("kept"); !ok {
+		t.Error("a watch still in the list lost its trigger state")
+	}
+	if len(published) != 2 {
+		t.Errorf("the MQTT publisher was handed %d watches, want the 2 in the list", len(published))
+	}
+
+	// Without MQTT there is nobody to hand the list to.
+	configChanged(sup, nil)(nil)
+	if _, ok, _ := store.LoadTriggerState("kept"); ok {
+		t.Error("an empty list should leave no trigger state")
+	}
+}
+
+// At boot, a watch deleted or renamed in config.yaml while watchglass was
+// off loses its saved trigger state, unless config.yaml was only just
+// created empty (a wrong -config path next to the real -db), which must not
+// wipe every watch's state.
+func TestBootWatchesForgetsWatchesNoLongerConfigured(t *testing.T) {
+	store, err := history.Open(filepath.Join(t.TempDir(), "wg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, name := range []string{"kept", "gone"} {
+		if err := store.SaveTriggerState(name, history.TriggerState{Fingerprint: "f", Stable: "cond:true", HasStable: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sup := supervisor.New(store, state.New(5), ocr.Engines{}, func(string, ...any) {})
+	sup.NewSource = func(w config.Watch) (source.Source, error) { return fakeStartSource{}, nil }
+	t.Cleanup(sup.StopAll)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	logs := &logCollector{}
+
+	bootWatches(ctx, sup, nil, true, logs.logf)
+	for _, name := range []string{"kept", "gone"} {
+		if _, ok, _ := store.LoadTriggerState(name); !ok {
+			t.Errorf("booting on a just-created empty config dropped %q's trigger state", name)
+		}
+	}
+
+	kept := config.Watch{
+		Name: "kept", Source: "http://unused.invalid/snap.jpg", Interval: config.Duration(time.Minute),
+		Region:  config.Region{W: 1, H: 1},
+		Trigger: config.Trigger{Type: "pixel_change", Threshold: 10},
+	}
+	bootWatches(ctx, sup, []config.Watch{kept}, false, logs.logf)
+	if _, ok, _ := store.LoadTriggerState("gone"); ok {
+		t.Error("a watch no longer in config.yaml kept its trigger state over a boot")
+	}
+	if _, ok, _ := store.LoadTriggerState("kept"); !ok {
+		t.Error("a configured watch lost its trigger state at boot")
+	}
+	if running := sup.Running(); len(running) != 1 || running[0] != "kept" {
+		t.Errorf("running = %v, want [kept]", running)
 	}
 }

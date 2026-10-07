@@ -105,7 +105,9 @@ const httpTimeout = 10 * time.Second
 // Credentials in the URL (http://user:pass@host/...) go out as Basic auth
 // until the camera answers 401 asking for Digest. From then on every grab
 // answers the remembered challenge up front, so the password never goes
-// out as Basic again and a poll is one request, not two.
+// out as Basic again and a poll is one request, not two. A camera that
+// turns the login down isn't asked again until a wait is over
+// (logingate.go).
 type HTTPSnapshot struct {
 	URL     string
 	Client  *http.Client
@@ -186,21 +188,41 @@ func (h *HTTPSnapshot) Grab(ctx context.Context) (image.Image, error) {
 	// Returning cancels the request, which also closes an MJPEG stream's
 	// connection after its first frame.
 	defer cancel()
-	label := redactURL(h.URL)
+	label := RedactURL(h.URL)
+	// A camera that turned this login down recently isn't asked again
+	// until its wait is over (logingate.go).
+	refusedText := func(status int) string { return fmt.Sprintf("snapshot %s: status %d", label, status) }
+	var tk *ticket
+	if u, err := url.Parse(h.URL); err == nil {
+		if tk, err = logins.admit(ctx, u, h.Headers, refusedText); err != nil {
+			return nil, err
+		}
+	}
 	auth, sentNonce := h.cachedDigest()
 	resp, err := h.get(ctx, auth)
 	if err != nil {
+		tk.done()
 		return nil, h.fail(label, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		if retry, ok := h.digestRetry(ctx, resp, sentNonce); ok {
 			resp.Body.Close()
 			if resp, err = retry(); err != nil {
+				tk.done()
 				return nil, h.fail(label, err)
 			}
 		}
 	}
 	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return nil, tk.refused(resp.StatusCode, refusedText(resp.StatusCode))
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		// The camera took the login, whatever the body turns out to be.
+		tk.accepted()
+	default:
+		tk.done()
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("snapshot %s: status %d", label, resp.StatusCode)
 	}
@@ -288,24 +310,93 @@ func (h *HTTPSnapshot) digestRetry(ctx context.Context, resp *http.Response, sen
 	return func() (*http.Response, error) { return h.get(ctx, auth) }, true
 }
 
+// fail is the error of a request that got no usable answer: the camera is
+// off, timed out, or its certificate didn't verify. The http client's
+// error quotes the request URL with only a user:password@ masked, so a
+// login in the query string (?user=&password=) would be printed in clear.
+// The text is masked here and the original kept underneath, so errors.Is
+// still sees a context deadline or ErrCertNotTrusted.
 func (h *HTTPSnapshot) fail(label string, err error) error {
+	text := RedactText(err.Error(), h.URL)
 	var cv *tls.CertificateVerificationError
 	var ua x509.UnknownAuthorityError
 	var he x509.HostnameError
 	var ci x509.CertificateInvalidError
 	if errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) {
-		return fmt.Errorf("snapshot %s: %w (%v)", label, ErrCertNotTrusted, err)
+		return &redactedError{msg: fmt.Sprintf("snapshot %s: %v (%s)", label, ErrCertNotTrusted, text), err: ErrCertNotTrusted}
 	}
-	return fmt.Errorf("snapshot %s: %w", label, err)
+	return &redactedError{msg: fmt.Sprintf("snapshot %s: %s", label, text), err: err}
 }
 
-// redactURL is the URL for an error message, with any password masked.
-func redactURL(raw string) string {
+// loginParams are the query parameters some cameras take the login in
+// instead of user:password@ (Reolink's ?user=&password=, Foscam's
+// usr/pwd), plus the token-style ones. A URL with one carries a login
+// (LoginInURL), and the ones in secretParams hold the password, masked
+// wherever the URL is shown (RedactURL, RedactText). The runner's
+// Fingerprint keeps its own copy of the user/password names.
+var loginParams = map[string]bool{
+	"user": true, "username": true, "usr": true, "login": true,
+	"password": true, "pass": true, "passwd": true, "pwd": true,
+	"token": true, "apikey": true, "api_key": true,
+}
+
+var secretParams = map[string]bool{
+	"password": true, "pass": true, "passwd": true, "pwd": true,
+	"token": true, "apikey": true, "api_key": true,
+}
+
+// LoginInURL reports whether u carries a login: a user in its userinfo
+// (http://user:password@camera/) or a login query parameter
+// (http://camera/cgi?user=admin&password=...).
+func LoginInURL(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	if u.User != nil {
+		return true
+	}
+	for k := range u.Query() {
+		if loginParams[strings.ToLower(k)] {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactURL is raw for an error message or a page, with the password
+// masked: "user:xxxxx@" the way url.Redacted writes it, and
+// "password=xxxxx" for one in the query string. The rest is left as
+// written, so the message still names the camera and the user.
+func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return raw
 	}
+	u.RawQuery = redactQuery(u.RawQuery)
 	return u.Redacted()
+}
+
+// redactQuery masks the value of every secretParams parameter in a raw
+// query string, keeping the order and spelling of the rest.
+func redactQuery(q string) string {
+	if q == "" {
+		return q
+	}
+	parts := strings.Split(q, "&")
+	for i, p := range parts {
+		k, _, has := strings.Cut(p, "=")
+		if !has {
+			continue
+		}
+		name, err := url.QueryUnescape(k)
+		if err != nil {
+			name = k
+		}
+		if secretParams[strings.ToLower(name)] {
+			parts[i] = k + "=xxxxx"
+		}
+	}
+	return strings.Join(parts, "&")
 }
 
 // firstPart decodes the first frame of a multipart stream. The declared

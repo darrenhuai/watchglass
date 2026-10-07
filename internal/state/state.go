@@ -88,6 +88,19 @@ func (r *Registry) Add(watch string, s Sample) {
 	}
 }
 
+// SeedFired tells the registry when watch last fired before watchglass
+// started, from the trigger state a restart restores (the supervisor calls
+// it on Start), so the watch list can still say "fired 2 h ago" instead of
+// nothing. LastFired then returns it until the watch fires again. It adds
+// no sample and never moves the time backwards.
+func (r *Registry) SeedFired(watch string, ts time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ts.After(r.fired[watch]) {
+		r.fired[watch] = ts
+	}
+}
+
 // LastFired returns when watch last fired (the TS of its newest fired
 // sample since watchglass started), or false if it hasn't fired. Unlike
 // Recent, it doesn't forget a fire once n newer readings have come in.
