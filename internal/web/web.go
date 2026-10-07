@@ -16,6 +16,7 @@ import (
 	"image/png"
 	"math"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -60,10 +61,23 @@ type Server struct {
 	// watchglass writes back out needs the prefix reapplied. main sets this
 	// once, before Handler is called, after validating it starts with "/"
 	// and trimming any trailing slash; leaving it empty (the default) is
-	// byte-identical to the pre-BasePath behavior. Templates read it via the
-	// "u" FuncMap entry's closure over Server, so it must not change once
-	// serving starts.
+	// byte-identical to the pre-BasePath behavior. Pages get it as their
+	// Base field through base(r), which the "u" and "watchURL" FuncMap
+	// entries take first, so it must not change once serving starts. An
+	// ingress request (ingress.go) gets its own prefix instead.
 	BasePath string
+	// Ingress turns Home Assistant ingress mode on (ingress.go): a request
+	// from IngressFrom carrying a valid X-Ingress-Path gets that prefix on
+	// every link and skips basic auth, since Home Assistant already logged
+	// the user in. Off (the default) the header is ignored. Set once,
+	// before Handler is called, like BasePath.
+	Ingress bool
+	// IngressFrom is the one address ingress requests come from: the
+	// Supervisor's. Set with Ingress.
+	IngressFrom netip.Addr
+	// ingressWarn makes ingressPath's "header isn't the documented shape"
+	// log line a one-off.
+	ingressWarn sync.Once
 	// DemoDir is set when watchglass runs with -demo: the folder its
 	// throwaway config and history live in. Every page then carries a
 	// banner saying so (layout.html, the "demoDir" func). Set once, before
@@ -109,25 +123,28 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		engines:   engines,
 		logf:      logf,
 	}
-	// "u" closes over s rather than capturing BasePath by value: New builds
-	// and parses templates before main has set BasePath (it's assigned on
-	// the returned *Server afterward), so the func must read it fresh on
-	// each call. That's safe because BasePath is set once, before Handler
-	// is ever called, and never mutated while serving.
+	// "u" and "watchURL" take the page's Base first: the prefix is per
+	// request (BasePath, or an ingress request's own; see base in
+	// ingress.go), so templates pass $.Base rather than reading it from
+	// the Server.
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"b64png": func(b []byte) template.URL {
 			return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(b))
 		},
 		"dur": func(d config.Duration) string { return d.String() },
-		"u":   func(p string) string { return s.BasePath + p },
-		// demoDir reads DemoDir fresh for the same reason "u" does.
+		"u":   func(base, p string) string { return base + p },
+		// demoDir reads DemoDir fresh: New builds and parses templates
+		// before main has set it (it's assigned on the returned *Server
+		// afterward). That's safe because DemoDir is set once, before
+		// Handler is ever called, and never mutated while serving.
 		"demoDir": func() string { return s.DemoDir },
-		// haStatus reads MQTTStatus fresh, like demoDir.
+		// haStatus reads MQTTStatus fresh, like demoDir; it takes the
+		// page's Base for the line's data-src.
 		"haStatus": s.haStatus,
 		// watchURL is the only way a watch name enters a URL: names may hold
 		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
 		// to be decoded (or path-normalized) into a different name.
-		"watchURL":        s.watchURL,
+		"watchURL":        watchURL,
 		"pageTitle":       pageTitle,
 		"shortErr":        summarizeErr,
 		"errHint":         errHint,
@@ -137,6 +154,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"isoTime":         isoTime,
 		"ppSet":           preprocessSet,
 		"ppSummary":       preprocessSummary,
+		"rotateOptions":   func() []rotateOption { return rotateOptions },
 		"trigLabel":       triggerLabel,
 		"confirmHelp":     confirmHelp,
 		"patternHelp":     patternHelp,
@@ -156,11 +174,12 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 	return s, nil
 }
 
-// watchURL is BasePath + "/watch/" + the path-escaped name + suffix (e.g.
-// "/save"). ServeMux matches {name} against the escaped path and PathValue
-// hands the handler the unescaped name back.
-func (s *Server) watchURL(name, suffix string) string {
-	return s.BasePath + "/watch/" + url.PathEscape(name) + suffix
+// watchURL is base + "/watch/" + the path-escaped name + suffix (e.g.
+// "/save"), base being the request's prefix (s.base(r)). ServeMux matches
+// {name} against the escaped path and PathValue hands the handler the
+// unescaped name back.
+func watchURL(base, name, suffix string) string {
+	return base + "/watch/" + url.PathEscape(name) + suffix
 }
 
 func (s *Server) Handler() http.Handler {
@@ -169,7 +188,7 @@ func (s *Server) Handler() http.Handler {
 	// Browsers still probe /favicon.ico whatever the page links; send them
 	// to the SVG instead of answering every new tab with a 404.
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, s.BasePath+"/static/favicon.svg", http.StatusMovedPermanently)
+		http.Redirect(w, r, s.base(r)+"/static/favicon.svg", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /watch/new", s.create)
@@ -194,8 +213,18 @@ func (s *Server) Handler() http.Handler {
 	// the cross-origin check, and curl-with-Basic-Auth automation — which
 	// carries no Sec-Fetch-Site/Origin headers either way — keeps working
 	// unchanged on both layers.
+	// Through the Supervisor's ingress proxy the page and its posts share
+	// Home Assistant's origin, so the browser sends Sec-Fetch-Site:
+	// same-origin and cop lets them through; a cross-site page posting to
+	// the ingress URL is still refused. The proxy passes Origin and Host
+	// through as the browser sent them, so the Origin-vs-Host fallback
+	// holds too (TestIngressKeepsCrossOriginProtection).
+	//
+	// withIngress runs first: it decides whether r is an ingress request,
+	// which withAuth (Home Assistant has logged the user in already) and
+	// every link on the page depend on.
 	cop := http.NewCrossOriginProtection()
-	return identify(s.withAuth(cop.Handler(mux)))
+	return identify(s.withIngress(s.withAuth(cop.Handler(mux))))
 }
 
 // IdentityHeader is set on every response, a 401 from withAuth included,
@@ -213,13 +242,17 @@ func identify(next http.Handler) http.Handler {
 
 // withAuth enforces HTTP Basic over the whole UI when an auth block is
 // configured. Credentials are read under the config lock on every request
-// so a future config reload picks them up without a restart.
+// so a future config reload picks them up without a restart. An ingress
+// request is let through: Home Assistant authenticated the user before
+// the Supervisor forwarded it, and a second login prompt inside the
+// sidebar would be wrong (a direct request to the same port still gets
+// the prompt).
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		auth := s.cfg.Auth
 		s.mu.Unlock()
-		if auth == nil {
+		if auth == nil || isIngress(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -345,6 +378,9 @@ type indexData struct {
 	// ConfigFile is the config file's base name, for the delete
 	// confirmation's "is removed from …".
 	ConfigFile string
+	// Base is the request's link prefix (s.base), for the "u" and
+	// "watchURL" template funcs and index.js's data-src.
+	Base string
 }
 
 // pollHeader marks index.js's background refresh of the list. Such a
@@ -379,7 +415,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 		}
 		rows = append(rows, row)
 	}
-	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile()}
+	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile(), Base: s.base(r)}
 	if r.Method == http.MethodGet && r.Header.Get(pollHeader) == "" {
 		data.Flash = s.takeFlash(w, r)
 	}
@@ -601,7 +637,9 @@ const flashCookie = "wg_flash"
 // reload or a shared link never repeats it.
 // Each part is escaped on its own before they are joined, so a watch name
 // (or a reason) holding '|' can't spill into the next field.
-func (s *Server) setFlash(w http.ResponseWriter, kind, subject, reason string) {
+// The cookie's Path is the request's prefix, so through an ingress proxy
+// it is scoped to the add-on's own path on Home Assistant's origin.
+func (s *Server) setFlash(w http.ResponseWriter, r *http.Request, kind, subject, reason string) {
 	v := kind + "|" + url.QueryEscape(subject)
 	if reason != "" {
 		if r := []rune(reason); len(r) > flashReasonMax {
@@ -612,7 +650,7 @@ func (s *Server) setFlash(w http.ResponseWriter, kind, subject, reason string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     flashCookie,
 		Value:    url.QueryEscape(v),
-		Path:     s.BasePath + "/",
+		Path:     s.base(r) + "/",
 		MaxAge:   60,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -626,7 +664,7 @@ func (s *Server) takeFlash(w http.ResponseWriter, r *http.Request) *flash {
 	if err != nil {
 		return nil
 	}
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: s.BasePath + "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: s.base(r) + "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	v, err := url.QueryUnescape(c.Value)
 	if err != nil {
 		return nil
@@ -776,6 +814,7 @@ var fieldAnchors = map[string]string{
 	"health_after": "f-health",
 	"pp_threshold": "f-binarize",
 	"pp_upscale":   "f-upscale",
+	"pp_rotate":    "f-rotate",
 	"notify":       "f-notify",
 	"unit":         "f-unit",
 	"device_class": "f-dclass",
@@ -863,8 +902,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.notifyConfigChanged()
-	s.setFlash(w, "created", name, startReason)
-	http.Redirect(w, r, s.watchURL(name, ""), http.StatusSeeOther)
+	s.setFlash(w, r, "created", name, startReason)
+	http.Redirect(w, r, watchURL(s.base(r), name, ""), http.StatusSeeOther)
 }
 
 type detailData struct {
@@ -890,10 +929,10 @@ type detailData struct {
 	// Fresh is set while the watch's trigger is still Create's default
 	// (isFresh): the page offers the "What are you watching?" presets.
 	Fresh bool
-	// Base carries BasePath into the page so app.js can prefix the fetch
-	// URLs it builds client-side (the "u" FuncMap func only covers
-	// server-rendered links) — see the #stage data-base attribute in
-	// detail.html.
+	// Base is the request's link prefix (s.base): what the "u" and
+	// "watchURL" template funcs put in front of server-rendered links, and
+	// what app.js prefixes the fetch URLs it builds client-side with — see
+	// the #stage data-base attribute in detail.html.
 	Base string
 	// ConfigFile is the config file's base name, for copy that names it.
 	ConfigFile string
@@ -906,6 +945,12 @@ type detailData struct {
 	// what was submitted (Watch holds every field that parsed) and the
 	// field errors, and nothing was written.
 	Form formState
+	// SavedInterval is the interval in the config file, which a
+	// pixel_change Test goes by when the Interval field doesn't hold a
+	// usable one (testInterval). On a rejected save Watch.Interval is the
+	// submitted value, so the field carries this one in data-saved for
+	// app.js's "Comparing two frames N s apart…" line.
+	SavedInterval config.Duration
 }
 
 func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
@@ -914,21 +959,26 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data := s.detailFor(wc)
+	data := s.detailFor(r, wc)
 	data.Flash = s.takeFlash(w, r)
 	s.render(w, "detail.html", data)
 }
 
-func (s *Server) detailFor(wc config.Watch) detailData {
+func (s *Server) detailFor(r *http.Request, wc config.Watch) detailData {
+	saved := wc.Interval
+	if sw, ok := s.findWatch(wc.Name); ok {
+		saved = sw.Interval
+	}
 	return detailData{
 		Watch:              wc,
+		SavedInterval:      saved,
 		Status:             s.statusFor(wc.Name, s.isRunning(wc.Name)),
 		TesseractAvailable: s.engines.Tesseract != nil,
 		RapidOCRAvailable:  s.engines.RapidOCR != nil,
 		TesseractInstall:   ocr.TesseractInstall(),
 		Fresh:              isFresh(wc),
 		ShowTLS:            strings.HasPrefix(wc.Source, "https://") || wc.TLSInsecure,
-		Base:               s.BasePath,
+		Base:               s.base(r),
 		ConfigFile:         s.configFile(),
 		MQTT:               s.MQTTStatus != nil,
 	}
@@ -944,16 +994,19 @@ type errorPageData struct {
 	Message string // one or two sentences: what state things are in now
 	Reason  string // the cause in plain words, when there is one
 	Detail  string // the raw error chain, behind a disclosure
-	// BackURL is relative to "/"; renderError prefixes BasePath.
+	// BackURL is relative to "/"; renderError prefixes the request's base.
 	BackURL   string
 	BackLabel string
+	// Base is the request's link prefix (s.base), set by renderError.
+	Base string
 }
 
 // renderError writes a styled, on-brand error page. Falls back to
 // http.Error if the template itself fails to render, matching s.render.
-func (s *Server) renderError(w http.ResponseWriter, status int, data errorPageData) {
+func (s *Server) renderError(w http.ResponseWriter, r *http.Request, status int, data errorPageData) {
 	var buf bytes.Buffer
-	data.BackURL = s.BasePath + data.BackURL
+	data.Base = s.base(r)
+	data.BackURL = data.Base + data.BackURL
 	if err := s.tmpl.ExecuteTemplate(&buf, "error.html", data); err != nil {
 		s.logf("render error.html: %v", err)
 		http.Error(w, data.Title+": "+data.Message, status)
@@ -1005,12 +1058,28 @@ func parseRegion(r *http.Request) (config.Region, error) {
 	return reg, nil
 }
 
-// parsePreprocess reads preprocess options from form fields pp_grayscale,
-// pp_invert, pp_threshold, pp_upscale. All fields are optional.
-func parsePreprocess(r *http.Request) (config.Preprocess, error) {
+// errRotate is parsePreprocess's refusal of a pp_rotate that isn't one of
+// the Rotate select's four values (the caller adds the capital and the
+// full stop).
+var errRotate = errors.New("rotate must be 0, 90, 180 or 270 degrees clockwise")
+
+// parsePreprocess reads preprocess options from form fields pp_rotate,
+// pp_grayscale, pp_invert, pp_threshold, pp_upscale. All fields are
+// optional. A request without pp_rotate (curl, a page loaded before the
+// field existed) keeps savedRotate, the way one without engine keeps the
+// saved engine: dropping the turn would stop a sideways watch reading.
+func parsePreprocess(r *http.Request, savedRotate int) (config.Preprocess, error) {
 	var p config.Preprocess
 	p.Grayscale = r.FormValue("pp_grayscale") == "on"
 	p.Invert = r.FormValue("pp_invert") == "on"
+	p.Rotate = savedRotate
+	if _, ok := r.Form["pp_rotate"]; ok { // r.Form: FormValue above parsed it
+		n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("pp_rotate")))
+		if err != nil || !config.ValidRotate(n) {
+			return p, errRotate
+		}
+		p.Rotate = n
+	}
 	if v := r.FormValue("pp_threshold"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 255 {
@@ -1046,6 +1115,22 @@ type testResult struct {
 	NoteDetail string
 	// Verdict is the trigger's condition checked against this one reading.
 	Verdict *testVerdict
+	// Pixel is set for a pixel_change Test, which compares two frames:
+	// Crop is then the region in the first one.
+	Pixel *pixelTest
+}
+
+// pixelTest is the second half of a pixel_change Test: the region in the
+// second frame and how long after the first it arrived.
+type pixelTest struct {
+	Second template.URL
+	// Gap is the time between the two frames, as the result words it
+	// ("3.0 s").
+	Gap string
+	// Changed is the measured share of the region, as the result words it
+	// ("4.2%"), and Threshold the form's Threshold ("20%").
+	Changed   string
+	Threshold string
 }
 
 // testVerdict answers "would this fire?" for one test. State is "met",
@@ -1065,6 +1150,13 @@ type testVerdict struct {
 // when the display shows 24.5 would be false confidence, so it comes back
 // as info.
 func verdictFor(trig config.Trigger, reading string, view readingView, errs []fieldError) *testVerdict {
+	// Only a request without ttype on a saved pixel_change watch gets here
+	// with that type (curl, an older client): the engine read the crop, and
+	// one frame says nothing about a change, so there is no verdict. The
+	// form's pixel_change Test compares two frames (testPixelChange).
+	if trig.Type == "pixel_change" {
+		return nil
+	}
 	// Only a threshold the numeric check needs can stop it; a bad Confirm
 	// or Cooldown is Save's to report (their base values stand in).
 	for _, e := range errs {
@@ -1077,8 +1169,6 @@ func verdictFor(trig config.Trigger, reading string, view readingView, errs []fi
 		return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
 	}
 	switch {
-	case !cond.Evaluable && trig.Type == "pixel_change":
-		return &testVerdict{State: "info", Title: "Nothing to compare yet", Detail: cond.Detail + "."}
 	case !cond.Evaluable:
 		return &testVerdict{State: "info", Title: "No verdict from one reading", Detail: cond.Detail + "."}
 	case view.Unreadable:
@@ -1115,7 +1205,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
 	}
-	prep, err := parsePreprocess(r)
+	prep, err := parsePreprocess(r, wc.Preprocess.Rotate)
 	if err != nil {
 		http.Error(w, upperFirst(err.Error()), http.StatusBadRequest)
 		return
@@ -1138,6 +1228,28 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		grabError(w, err)
 		return
 	}
+	// pixel_change reads no text: its Test grabs a second frame and
+	// measures what the watch would. (Only when the form says so: a request
+	// without ttype, from curl or an older client, is read by the engine as
+	// before.)
+	if r.FormValue("ttype") == "pixel_change" {
+		s.testPixelChange(w, r, wc, src, img, region)
+		return
+	}
+	// pixel_change compares the crop as the camera sends it, so its Test
+	// shows that crop: Rotate turns it for the engines that read it only
+	// (runner.Tick does the same). The Preprocess controls are hidden for
+	// pixel_change but still submit, hence the check here. The type is the
+	// form's when it sends one and the saved one otherwise (curl, an older
+	// client), as for the verdict below, so a pixel_change watch with a
+	// leftover rotate in its file isn't turned here when the runner doesn't.
+	ttype := wc.Trigger.Type
+	if _, ok := r.Form["ttype"]; ok {
+		ttype = r.FormValue("ttype")
+	}
+	if ttype == "pixel_change" {
+		prep.Rotate = 0
+	}
 	prepped := imgproc.Apply(imgproc.Crop(img, region), prep)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, prepped); err != nil {
@@ -1154,14 +1266,6 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	trig, trigErrs := wc.Trigger, []fieldError(nil)
 	if _, ok := r.Form["ttype"]; ok {
 		trig, trigErrs = triggerFromForm(r, wc.Trigger)
-	}
-	// pixel_change reads no text, so a test of it doesn't run an engine:
-	// its answer is the crop and the note that one frame has nothing to
-	// compare with. (Only when the form says so; see above.)
-	if r.FormValue("ttype") == "pixel_change" {
-		res.Verdict = verdictFor(trig, "", readingView{}, trigErrs)
-		s.render(w, "testresult.html", res)
-		return
 	}
 	// The form's engine wins over the saved one so the decoder can be tried
 	// before saving; a request without the field (curl, an older client)
@@ -1418,10 +1522,13 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 			w.HealthAfter = n
 		}
 	}
-	if prep, err := parsePreprocess(r); err != nil {
+	if prep, err := parsePreprocess(r, base.Preprocess.Rotate); err != nil {
 		field := "pp_threshold"
 		if strings.HasPrefix(err.Error(), "upscale") {
 			field = "pp_upscale"
+		}
+		if errors.Is(err, errRotate) {
+			field = "pp_rotate"
 		}
 		fail(field, upperFirst(err.Error())+".")
 	} else {
@@ -1568,7 +1675,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	// A rejected save re-renders the form with what was submitted and every
 	// problem marked next to its field (status 400); nothing is written.
 	rejected := func(updated config.Watch, errs []fieldError) {
-		data := s.detailFor(updated)
+		data := s.detailFor(r, updated)
 		data.Form = formState{Values: watchFormValues(r), Errors: errs, Notify: checkNotify(updated.Notify)}
 		s.renderStatus(w, http.StatusBadRequest, "detail.html", data)
 	}
@@ -1597,7 +1704,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		// Nothing is wrong with the input, so the form comes back exactly as
 		// submitted with the failure above it (never history.back(), which
 		// can't be trusted to restore typed text).
-		data := s.detailFor(updated)
+		data := s.detailFor(r, updated)
 		kept := "the watch keeps running with its previous settings"
 		if !s.isRunning(name) {
 			kept = "the watch keeps its previous settings"
@@ -1610,7 +1717,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, http.StatusInternalServerError, "detail.html", data)
 		return
 	case errors.Is(err, errWatchVanished):
-		s.renderError(w, http.StatusNotFound, errorPageData{
+		s.renderError(w, r, http.StatusNotFound, errorPageData{
 			Title:     "Couldn't save " + name,
 			Message:   "This watch was deleted while you were editing it, so there was nothing to save.",
 			BackURL:   "/",
@@ -1623,7 +1730,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	}
 	canonical, ok := s.findWatch(name)
 	if !ok {
-		s.renderError(w, http.StatusInternalServerError, errorPageData{
+		s.renderError(w, r, http.StatusInternalServerError, errorPageData{
 			Title:     "Couldn't save " + name,
 			Message:   "The watch disappeared right after it was saved.",
 			BackURL:   "/",
@@ -1649,7 +1756,7 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		// will correctly read false and the dashboard/detail page will show
 		// it stopped, not a stale healthy LED. Say so explicitly here too.
 		s.logf("ERROR: save %s: saved, but restart failed: %v — the watch is now stopped", name, err)
-		s.renderError(w, http.StatusInternalServerError, errorPageData{
+		s.renderError(w, r, http.StatusInternalServerError, errorPageData{
 			Title:     "Saved, but the watch didn't restart",
 			Message:   "The new settings are in " + s.configFile() + ", but " + name + " is stopped until you fix this and save again.",
 			Reason:    friendlyStartError(err),
@@ -1660,8 +1767,8 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyConfigChanged()
-	s.setFlash(w, "saved", time.Now().UTC().Format(time.RFC3339), "")
-	http.Redirect(w, r, s.watchURL(name, ""), http.StatusSeeOther)
+	s.setFlash(w, r, "saved", time.Now().UTC().Format(time.RFC3339), "")
+	http.Redirect(w, r, watchURL(s.base(r), name, ""), http.StatusSeeOther)
 }
 
 // blockedTrigger says why the submitted trigger can't run on this box: a
@@ -1717,7 +1824,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		if !errors.Is(err, errSaveFailed) {
 			msg = "The rest of " + s.configFile() + " didn't validate, so " + name + " wasn't deleted and keeps running."
 		}
-		s.renderError(w, statusFor(err), errorPageData{
+		s.renderError(w, r, statusFor(err), errorPageData{
 			Title:     "Couldn't delete " + name,
 			Message:   msg,
 			Detail:    err.Error(),
@@ -1729,6 +1836,6 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 	s.sup.Stop(name)
 	s.reg.Drop(name)
 	s.notifyConfigChanged()
-	s.setFlash(w, "deleted", name, "")
-	http.Redirect(w, r, s.BasePath+"/", http.StatusSeeOther)
+	s.setFlash(w, r, "deleted", name, "")
+	http.Redirect(w, r, s.base(r)+"/", http.StatusSeeOther)
 }

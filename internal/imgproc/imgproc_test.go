@@ -142,6 +142,129 @@ func TestApplyGrayscaleAveragesColor(t *testing.T) {
 	}
 }
 
+// grid builds an image from rows of single-byte pixel values (R=G=B=v), so
+// a turned image can be compared with the picture drawn out by hand.
+func grid(rows ...[]uint8) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, len(rows[0]), len(rows)))
+	for y, row := range rows {
+		for x, v := range row {
+			img.SetRGBA(x, y, color.RGBA{R: v, G: v, B: v, A: 255})
+		}
+	}
+	return img
+}
+
+// sameGrid compares got with the rows want spells out: size, every pixel,
+// and bounds that start at (0,0) like Crop's.
+func sameGrid(t *testing.T, label string, got *image.RGBA, want ...[]uint8) {
+	t.Helper()
+	b := got.Bounds()
+	if b.Min != (image.Point{}) || b.Dx() != len(want[0]) || b.Dy() != len(want) {
+		t.Fatalf("%s: bounds = %v, want %dx%d at (0,0)", label, b, len(want[0]), len(want))
+	}
+	for y, row := range want {
+		for x, v := range row {
+			if c := got.RGBAAt(x, y); c != (color.RGBA{R: v, G: v, B: v, A: 255}) {
+				t.Errorf("%s: pixel (%d,%d) = %v, want %d", label, x, y, c, v)
+			}
+		}
+	}
+}
+
+// TestRotateExactPixels turns a 3x2 image with six different pixels each
+// way. Clockwise: the left column, read bottom to top, becomes the top row.
+func TestRotateExactPixels(t *testing.T) {
+	src := func() *image.RGBA {
+		return grid(
+			[]uint8{1, 2, 3},
+			[]uint8{4, 5, 6})
+	}
+	sameGrid(t, "90", Rotate(src(), 90),
+		[]uint8{4, 1},
+		[]uint8{5, 2},
+		[]uint8{6, 3})
+	sameGrid(t, "180", Rotate(src(), 180),
+		[]uint8{6, 5, 4},
+		[]uint8{3, 2, 1})
+	sameGrid(t, "270", Rotate(src(), 270),
+		[]uint8{3, 6},
+		[]uint8{2, 5},
+		[]uint8{1, 4})
+}
+
+// A quarter turn of a non-square crop swaps its width and height; a half
+// turn keeps them.
+func TestRotateSwapsSizeOnQuarterTurns(t *testing.T) {
+	for deg, want := range map[int]image.Point{90: {X: 3, Y: 7}, 270: {X: 3, Y: 7}, 180: {X: 7, Y: 3}} {
+		if got := Rotate(gray(7, 3, 9), deg).Bounds(); got.Min != (image.Point{}) || got.Size() != want {
+			t.Errorf("rotate %d of 7x3: bounds = %v, want size %v at (0,0)", deg, got, want)
+		}
+	}
+}
+
+func TestRotateFourQuarterTurnsIsIdentity(t *testing.T) {
+	rows := [][]uint8{{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}}
+	img := grid(rows...)
+	for i := 0; i < 4; i++ {
+		img = Rotate(img, 90)
+	}
+	sameGrid(t, "4x90", img, rows...)
+	sameGrid(t, "90 then 270", Rotate(Rotate(grid(rows...), 90), 270), rows...)
+	sameGrid(t, "180 twice", Rotate(Rotate(grid(rows...), 180), 180), rows...)
+	sameGrid(t, "90 twice is 180", Rotate(Rotate(grid(rows...), 90), 90),
+		[]uint8{12, 11, 10, 9}, []uint8{8, 7, 6, 5}, []uint8{4, 3, 2, 1})
+}
+
+// 0 is off and returns the very image it was given; so does an angle that
+// isn't a quarter turn (config.Validate refuses those before they get here).
+func TestRotateZeroAndOddAnglesReturnInput(t *testing.T) {
+	src := gray(4, 2, 100)
+	for _, deg := range []int{0, 45, -90, 360, 91} {
+		if got := Rotate(src, deg); got != src {
+			t.Errorf("rotate %d: want the input image back unchanged", deg)
+		}
+	}
+}
+
+// A crop that is a view into a larger frame (bounds not at the origin)
+// turns the same as a copy of it.
+func TestRotateSubImage(t *testing.T) {
+	frame := grid(
+		[]uint8{0, 0, 0, 0, 0},
+		[]uint8{0, 1, 2, 3, 0},
+		[]uint8{0, 4, 5, 6, 0},
+		[]uint8{0, 0, 0, 0, 0})
+	sub := frame.SubImage(image.Rect(1, 1, 4, 3)).(*image.RGBA)
+	sameGrid(t, "sub 90", Rotate(sub, 90), []uint8{4, 1}, []uint8{5, 2}, []uint8{6, 3})
+	sameGrid(t, "sub 270", Rotate(sub, 270), []uint8{3, 6}, []uint8{2, 5}, []uint8{1, 4})
+	sameGrid(t, "sub 180", Rotate(sub, 180), []uint8{6, 5, 4}, []uint8{3, 2, 1})
+}
+
+// Apply turns the crop before the rest of the chain: the upscaled result
+// is the turned picture, twice the size, and binarize works on it too.
+func TestApplyRotatesFirst(t *testing.T) {
+	src := func() *image.RGBA {
+		return grid(
+			[]uint8{10, 20, 30},
+			[]uint8{200, 210, 220})
+	}
+	sameGrid(t, "rotate only", Apply(src(), config.Preprocess{Rotate: 90}),
+		[]uint8{200, 10},
+		[]uint8{210, 20},
+		[]uint8{220, 30})
+	sameGrid(t, "rotate + upscale", Apply(src(), config.Preprocess{Rotate: 90, Upscale: 2}),
+		[]uint8{200, 200, 10, 10},
+		[]uint8{200, 200, 10, 10},
+		[]uint8{210, 210, 20, 20},
+		[]uint8{210, 210, 20, 20},
+		[]uint8{220, 220, 30, 30},
+		[]uint8{220, 220, 30, 30})
+	sameGrid(t, "rotate + invert + binarize", Apply(src(), config.Preprocess{Rotate: 270, Invert: true, Threshold: 128}),
+		[]uint8{255, 0},
+		[]uint8{255, 0},
+		[]uint8{255, 0})
+}
+
 func TestPercentChangedFastPathMatchesGeneric(t *testing.T) {
 	mk := func(seed uint8) *image.RGBA {
 		img := image.NewRGBA(image.Rect(0, 0, 63, 41)) // odd sizes on purpose

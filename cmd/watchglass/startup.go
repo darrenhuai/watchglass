@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -31,6 +32,11 @@ var version = "dev"
 // options is everything run needs from the command line and environment.
 type options struct {
 	configPath, dbPath, listen, basePath, python string
+	// ingress is Home Assistant ingress mode (-ingress or
+	// WATCHGLASS_INGRESS=1, see internal/web/ingress.go); ingressFrom is
+	// the address ingress requests may come from (-ingress-from).
+	ingress     bool
+	ingressFrom netip.Addr
 	// tesseract is the -tesseract flag: the binary to read text with, when
 	// it isn't on PATH or in the usual install places (ocr.FindTesseract).
 	tesseract string
@@ -55,6 +61,20 @@ func appVersion() string {
 		return strings.TrimPrefix(bi.Main.Version, "v")
 	}
 	return version
+}
+
+// supervisorAddr is where the Home Assistant Supervisor's ingress proxy
+// connects from, per the add-on docs ("Only connections from 172.30.32.2
+// must be allowed"): the -ingress-from default.
+const supervisorAddr = "172.30.32.2"
+
+// parseIngressFrom validates -ingress-from: one IP address, no port.
+func parseIngressFrom(s string) (netip.Addr, error) {
+	a, err := netip.ParseAddr(strings.TrimSpace(s))
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("-ingress-from %q must be one IP address (the Supervisor's is %s)", s, supervisorAddr)
+	}
+	return a, nil
 }
 
 // envTrue reads an on/off environment variable: 1, true, yes or on.

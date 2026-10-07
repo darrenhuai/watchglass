@@ -17,9 +17,24 @@
     <span class="verdict-text"><strong class="verdict-title">{{.Title}}</strong> <span class="verdict-detail">{{.Detail}}</span></span>
   </p>
   {{end}}
+  {{with .Pixel}}
+  {{/* pixel_change: the region in both frames, as the camera sent them.
+       Side by side when the panel has room for two, stacked otherwise. */}}
+  <div class="crop-pair">
+    <figure class="crop-frame">
+      <img src="{{$.Crop}}" alt="The region in the first frame">
+      <figcaption>First frame</figcaption>
+    </figure>
+    <figure class="crop-frame">
+      <img src="{{.Second}}" alt="The region in the second frame, {{.Gap}} later">
+      <figcaption>Second frame, {{.Gap}} later</figcaption>
+    </figure>
+  </div>
+  {{else}}
   <figure class="crop-frame">
     <img src="{{.Crop}}" alt="The tested region after preprocessing">
   </figure>
+  {{end}}
   {{if .Read}}
   <dl class="test-facts">
     <dt>Read</dt>

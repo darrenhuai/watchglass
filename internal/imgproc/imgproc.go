@@ -1,4 +1,5 @@
-// Package imgproc holds pure image math: cropping and frame diffing.
+// Package imgproc holds pure image math: cropping, turning, preprocessing
+// and frame diffing.
 package imgproc
 
 import (
@@ -23,6 +24,12 @@ func Crop(img image.Image, r config.Region) *image.RGBA {
 	draw.Draw(out, out.Bounds(), img, rect.Min, draw.Src)
 	return out
 }
+
+// NoiseTolerance is the tol a pixel_change watch passes to PercentChanged:
+// a pixel counts as changed when its grayscale value moves by more than
+// this between two frames. The runner and the web UI's Test both use it,
+// so Test measures exactly what the watch will.
+const NoiseTolerance = 32
 
 // PercentChanged reports the percentage (0-100) of pixels whose grayscale
 // value differs by more than tol between a and b. Filmed screens flicker;
@@ -102,11 +109,46 @@ func percentChangedRGBA(a, b *image.RGBA, tol uint8) float64 {
 	return float64(changed) / float64(total) * 100
 }
 
+// Rotate turns img clockwise by deg degrees: 90, 180 or 270. 0 (and any
+// angle that isn't a quarter turn, which config.Validate refuses) returns
+// img unchanged. The result's bounds start at (0,0); a quarter turn swaps
+// width and height.
+func Rotate(img *image.RGBA, deg int) *image.RGBA {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	var out *image.RGBA
+	// at maps a pixel of the result back to the source pixel it shows.
+	var at func(x, y int) (sx, sy int)
+	switch deg {
+	case 90: // the left column, read bottom to top, becomes the top row
+		out = image.NewRGBA(image.Rect(0, 0, h, w))
+		at = func(x, y int) (int, int) { return y, h - 1 - x }
+	case 180:
+		out = image.NewRGBA(image.Rect(0, 0, w, h))
+		at = func(x, y int) (int, int) { return w - 1 - x, h - 1 - y }
+	case 270: // the right column, read top to bottom, becomes the top row
+		out = image.NewRGBA(image.Rect(0, 0, h, w))
+		at = func(x, y int) (int, int) { return w - 1 - y, x }
+	default:
+		return img
+	}
+	ob := out.Bounds()
+	for y := 0; y < ob.Dy(); y++ {
+		row := out.Pix[out.PixOffset(0, y):]
+		for x := 0; x < ob.Dx(); x++ {
+			sx, sy := at(x, y)
+			so := img.PixOffset(b.Min.X+sx, b.Min.Y+sy)
+			copy(row[x*4:x*4+4], img.Pix[so:so+4])
+		}
+	}
+	return out
+}
+
 // Apply runs the watch's preprocessing chain for OCR legibility:
-// upscale -> grayscale -> invert -> binarize. A zero-value Preprocess
-// returns img unchanged. Threshold implies grayscale.
+// rotate -> upscale -> grayscale -> invert -> binarize. A zero-value
+// Preprocess returns img unchanged. Threshold implies grayscale.
 func Apply(img *image.RGBA, p config.Preprocess) *image.RGBA {
-	out := img
+	out := Rotate(img, p.Rotate)
 	if p.Upscale > 1 {
 		out = upscale(out, p.Upscale)
 	}

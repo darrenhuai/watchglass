@@ -296,7 +296,7 @@ func TestTestButtonHasABusyState(t *testing.T) {
 	for _, want := range []string{
 		"function setTesting(on)",
 		`if (testing || manualGate()) return;`,
-		`testBtn.textContent = on ? "Testing…" : testLabel;`,
+		`testBtn.textContent = on ? (testEngine() === "" ? "Comparing…" : "Testing…") : testLabel;`, // pixel_change compares two frames
 		`testBox.setAttribute("aria-busy", on ? "true" : "false");`,
 		"function testPending()",
 		"if (testing) setTesting(false);", // pageshow resync

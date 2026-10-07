@@ -72,17 +72,32 @@ A watch starts fresh, and fires once if its condition already holds, when you ch
 
 A new watch on the UI shows three presets above the trigger fields, which fill them in without saving: **Status text** (`ocr_match` on `(?i)complete|done|error`), **Digit display** (`sevenseg` and `numeric`) and **Any change** (`pixel_change` at 20%).
 
+### Picking a pixel_change threshold
+
+A camera never sends exactly the same picture twice, and a backlight may flicker, so some pixels change even when nothing on the screen does. Draw the box, leave the screen alone and press **Test this region**. For `pixel_change` it grabs two frames, waits the watch's interval in between (kept between 1 and 3 seconds), and says how much of the region changed and whether the Threshold in the form would fire. It compares them the way the running watch compares each frame with the one before (the number the Live panel shows as "4.2% changed"), only with the Test's own two frames 1 to 3 seconds apart rather than one interval apart. With nothing moving, that number is the camera's own noise: the floor. A threshold a few times above it stays quiet; one at or below it fires on its own. Then press Test again while the screen does what you want to hear about (a light comes on, a page changes) and check that the change clears the threshold.
+
 ## Preprocess
 
 These only affect reading text; `pixel_change` always compares the raw crop. Tune them with **Test this region**, which shows the crop after preprocessing next to what was read.
 
 ```yaml
 preprocess:
+  rotate: 90        # 90, 180 or 270: turn the crop this many degrees clockwise; 0 is off
   grayscale: true
   invert: false     # light text on a dark screen often reads better inverted
   threshold: 128    # 1-255: turn every pixel black or white at this level; 0 is off
   upscale: 2        # 2-4: enlarge small text; 0 or 1 is off
 ```
+
+They run in that order.
+
+### A display that is sideways
+
+A phone on its side, an ESP32-CAM screwed in at a right angle, a meter whose LCD faces the wrong way: tesseract and `sevenseg` both need the text upright. `rotate` turns the crop a quarter or half turn before it is read: `90` when the tops of the letters point left in the picture, `270` when they point right, `180` when the display is upside down. In the UI it is **Rotate**, the first control under Preprocess. Try a value and press **Test this region**: the result shows the turned crop.
+
+The region doesn't change. It stays a box on the picture as the camera sends it, and the page keeps showing that picture unturned; only the crop is turned. The crops in the Live panel, the picture attached to an ntfy alert and Home Assistant's snapshot are the turned crop too, so they arrive the right way up.
+
+`rotate` takes those four values and nothing in between. A display that leans a few degrees is a different problem: see the `ffmpeg:` source trick in the [seven_segments recipe](recipes/from-seven-segments.md#setting-by-setting), or straighten the camera.
 
 ## OCR engines
 

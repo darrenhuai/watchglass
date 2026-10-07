@@ -30,6 +30,8 @@ func main() {
 	dbPath := flag.String("db", "watchglass.db", "path to sqlite history database")
 	listen := flag.String("listen", "127.0.0.1:8080", "web UI listen address (localhost-only by default; add an auth: block to config.yaml before exposing it)")
 	basePath := flag.String("base-path", "", "URL path prefix for links/redirects when running behind a reverse proxy that strips it (e.g. /watchglass); empty (default) leaves the UI unprefixed")
+	ingress := flag.Bool("ingress", false, "Home Assistant ingress mode, for the add-on (also WATCHGLASS_INGRESS=1): requests from the Supervisor get its X-Ingress-Path prefix on every link and skip basic auth; off (default) ignores the header")
+	ingressFrom := flag.String("ingress-from", supervisorAddr, "the one address ingress requests come from (the Supervisor's); only change it to test against a stand-in proxy")
 	python := flag.String("python", "", "Python interpreter for engine: rapidocr (default: first of python3, python on PATH that imports rapidocr)")
 	tesseract := flag.String("tesseract", "", "tesseract binary for reading text (default: tesseract on PATH, else where the installers put it, on Windows %ProgramFiles%\\Tesseract-OCR)")
 	demoMode := flag.Bool("demo", false, "try watchglass on two built-in fake cameras, with its own config in the temp dir that is reset on every start; -config and -db are not touched (also WATCHGLASS_DEMO=1)")
@@ -61,11 +63,17 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	from, err := parseIngressFrom(*ingressFrom)
+	if err != nil {
+		fail(err)
+	}
 	o := options{
 		configPath:  *configPath,
 		dbPath:      *dbPath,
 		listen:      *listen,
 		basePath:    bp,
+		ingress:     *ingress || envTrue("WATCHGLASS_INGRESS"),
+		ingressFrom: from,
 		python:      *python,
 		tesseract:   *tesseract,
 		demo:        *demoMode || envTrue("WATCHGLASS_DEMO"),
@@ -267,6 +275,8 @@ func run(o options) error {
 	}
 	ws.RunCtx = ctx
 	ws.BasePath = o.basePath
+	ws.Ingress = o.ingress
+	ws.IngressFrom = o.ingressFrom
 	ws.DemoDir = demoDir
 	var publish func([]config.Watch)
 	if pub != nil {
@@ -280,10 +290,13 @@ func run(o options) error {
 	ws.OnConfigChanged = configChanged(sup, publish)
 
 	if cfg.Auth == nil && !isLoopback(o.listen) {
-		// SUPERVISOR_TOKEN: the Home Assistant add-on runs this same image
-		// but publishes 8080 on every interface of the host, so there the
-		// WARNING is true and stays.
-		if envTrue("WATCHGLASS_IN_CONTAINER") && os.Getenv("SUPERVISOR_TOKEN") == "" {
+		// SUPERVISOR_TOKEN: the Home Assistant add-on runs this same image.
+		// In ingress mode its port isn't published unless the user maps it
+		// in the add-on's Network settings, so the WARNING isn't true by
+		// default there; a plain note says what the mapping would mean.
+		if o.ingress {
+			log.Printf("ingress mode: requests through the Home Assistant sidebar are behind Home Assistant's login; anything that reaches %s directly isn't (add an auth: block to config.yaml before publishing the port in the add-on's Network settings)", o.listen)
+		} else if envTrue("WATCHGLASS_IN_CONTAINER") && os.Getenv("SUPERVISOR_TOKEN") == "" {
 			// The image listens on 0.0.0.0 on purpose: inside a container
 			// that is the only way to be reachable at all, and the port
 			// mapping (127.0.0.1:8080:8080 in the compose file) decides who
@@ -303,9 +316,14 @@ func run(o options) error {
 		srv.Shutdown(shCtx)
 	}()
 	url := readyURL(o.listen, ln.Addr())
-	if o.basePath == "" {
+	switch {
+	case o.ingress:
+		// The Supervisor reaches this address; people open the sidebar
+		// entry, whose links carry the ingress prefix.
+		log.Printf("watchglass %s ready on %s in ingress mode (open it from the Home Assistant sidebar; ingress requests are accepted from %s)", appVersion(), url, o.ingressFrom)
+	case o.basePath == "":
 		log.Printf("watchglass %s ready: open %s", appVersion(), url)
-	} else {
+	default:
 		// Behind a proxy that strips the prefix, every link on the page
 		// starts with basePath, which only resolves through the proxy.
 		log.Printf("watchglass %s ready on %s (links start with %s, so open it through your reverse proxy)", appVersion(), url, o.basePath)

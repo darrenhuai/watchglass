@@ -680,13 +680,14 @@
   // off to showSnapError then, which puts up the placeholder and its
   // diagnosis without a reload. Ticks carry on underneath the placeholder,
   // and the first preload that succeeds clears it again.
-  var DURATION_UNIT = { ms: 1, s: 1000, m: 60000, h: 3600000 };
-  // Go duration syntax as the form shows it ("2s", "500ms", "1m30s");
-  // anything else falls back to 5s.
+  var DURATION_UNIT = { ns: 0.000001, us: 0.001, "µs": 0.001, ms: 1, s: 1000, m: 60000, h: 3600000 };
+  // Go duration syntax, the same units the Interval field's pattern and the
+  // server accept ("2s", "500ms", "1m30s"); anything else falls back to 5s.
+  var DURATION_RE = /^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/;
   function parseDuration(s) {
-    if (!/^(\d+(\.\d+)?(ms|s|m|h))+$/.test(s)) return 5000;
+    if (!DURATION_RE.test(s)) return 5000;
     var ms = 0;
-    s.replace(/(\d+(?:\.\d+)?)(ms|s|m|h)/g, function (_, n, u) { ms += n * DURATION_UNIT[u]; });
+    s.replace(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g, function (_, n, u) { ms += n * DURATION_UNIT[u]; });
     return ms;
   }
   var intervalField = form.elements["interval"];
@@ -856,12 +857,14 @@
     testBtn.focus();
   });
   // Only the fields a test result depends on: the engine, the trigger it
-  // checks and the preprocessing. Interval, notify and the like don't
-  // change what a test shows.
+  // checks and the preprocessing. Notify and the like don't change what a
+  // test shows, and Interval only matters to a pixel_change test: it sets
+  // the time between the two frames it compares (pixelGapMs).
   var TEST_FIELDS = { ttype: 1, engine: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
-    pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
+    pp_rotate: 1, pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
   function testFieldChanged(e) {
-    if (e.target && TEST_FIELDS[e.target.name]) markTestStale();
+    if (!e.target) return;
+    if (TEST_FIELDS[e.target.name] || (e.target.name === "interval" && testEngine() === "")) markTestStale();
   }
   form.addEventListener("input", testFieldChanged);
   form.addEventListener("change", testFieldChanged);
@@ -881,16 +884,35 @@
     return (form.elements["engine"] && form.elements["engine"].value) || "tesseract";
   }
   // The crop's on-screen size, worked out the way .crop-frame img will
-  // lay it out: the region in frame pixels, times Upscale, shrunk to fit
-  // the box and 180px tall. Null when there is no frame to measure.
+  // lay it out: the region in frame pixels, on its side when Rotate is a
+  // quarter turn, times Upscale, shrunk to fit the box and 180px tall.
+  // Null when there is no frame to measure. pixel_change shows the crop
+  // as the camera sends it: no Upscale, no Rotate.
   function cropSize(width) {
     if (img.hidden || !img.naturalWidth) return null;
     var r = region(), up = parseInt((form.elements["pp_upscale"] || {}).value, 10);
+    var turn = (form.elements["pp_rotate"] || {}).value;
     if (!(up > 1) || testEngine() === "") up = 1;
     var w = r.w * img.naturalWidth * up, h = r.h * img.naturalHeight * up;
+    if ((turn === "90" || turn === "270") && testEngine() !== "") { var t = w; w = h; h = t; }
     if (!(w >= 1) || !(h >= 1)) return null;
     var k = Math.min(1, width / w, 180 / h);
     return [Math.max(Math.round(w * k), 24), Math.max(Math.round(h * k), 16)];
+  }
+  // The time a pixel_change test leaves between its two frames, as the
+  // server works it out (pixelTestGap in pixeltest.go): the form's Interval
+  // (the saved one, which the field carries in data-saved, when the field
+  // doesn't hold a usable duration), kept between 1 and 3 seconds. The
+  // field's own value is not the saved one after a refused Save re-rendered
+  // the page with the bad text in it.
+  function pixelGapMs() {
+    var f = form.elements["interval"];
+    var ms = f ? parseDuration(f.value.trim()) : 5000;
+    if (f && (!DURATION_RE.test(f.value.trim()) || ms < 1000)) ms = parseDuration((f.getAttribute("data-saved") || f.defaultValue).trim());
+    return Math.min(Math.max(ms, 1000), 3000);
+  }
+  function pixelGapText() {
+    return String(Math.round(pixelGapMs() / 100) / 10) + " s";
   }
   function testPending() {
     var engine = testEngine();
@@ -901,15 +923,29 @@
     if (engine) text.appendChild(el("p", "test-meta mono", engine));
     head.appendChild(text);
     panel.appendChild(head);
-    var line = el("p", "test-progress", engine ? "Reading the region with " + engine + "…" : "Grabbing a frame…");
+    var line = el("p", "test-progress", engine ? "Reading the region with " + engine + "…" : "Comparing two frames " + pixelGapText() + " apart…");
     panel.appendChild(line);
-    var sk = el("div", "crop-skeleton");
-    sk.setAttribute("aria-hidden", "true");
-    panel.appendChild(sk);
+    // pixel_change shows the region in two frames: two blocks in the box
+    // the result's .crop-pair will use, so nothing jumps when it lands.
+    var sks = [];
+    var holder = panel;
+    if (!engine) {
+      holder = el("div", "crop-pair");
+      panel.appendChild(holder);
+    }
+    for (var i = 0; i < (engine ? 1 : 2); i++) {
+      var sk = el("div", "crop-skeleton");
+      sk.setAttribute("aria-hidden", "true");
+      if (engine) holder.appendChild(sk);
+      else { var fig = el("div", "crop-frame"); fig.appendChild(sk); holder.appendChild(fig); }
+      sks.push(sk);
+    }
     testBox.appendChild(panel);
     // Sized once it is in the box, so the box's width is known.
-    var size = cropSize(Math.max(panel.clientWidth - 34, 60));
-    if (size) { sk.style.width = size[0] + "px"; sk.style.height = size[1] + "px"; }
+    sks.forEach(function (sk) {
+      var size = cropSize(Math.max((engine ? panel.clientWidth - 34 : sk.parentNode.clientWidth), 60));
+      if (size) { sk.style.width = size[0] + "px"; sk.style.height = size[1] + "px"; }
+    });
     testSlowTimer = setTimeout(function () {
       line.textContent = SUBPROCESS_ENGINES[engine]
         ? "Still reading. " + engine + " starts fresh for every read and can take a while when the box is busy."
@@ -918,7 +954,7 @@
   }
   function setTesting(on) {
     testing = on;
-    testBtn.textContent = on ? "Testing…" : testLabel;
+    testBtn.textContent = on ? (testEngine() === "" ? "Comparing…" : "Testing…") : testLabel;
     if (on) testBtn.setAttribute("aria-busy", "true");
     else testBtn.removeAttribute("aria-busy");
     testBox.setAttribute("aria-busy", on ? "true" : "false");
@@ -1484,7 +1520,7 @@
   // the crossing only and takes the number from Pattern's first group.
   var opDefaulted = false; // Compare was set to "gt" by updateTriggerFields, not the user
   var TRIGGER_HELP = {
-    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares pixels, so Engine isn't used.",
+    pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares the pixels as the camera sends them, so Engine and Preprocess (Rotate included) aren't used.",
     ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
     ocr_changed: "Fires each time the text read from the region settles on a new value.",
     numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
@@ -1505,7 +1541,7 @@
   };
   // config.go rejects a pixel_change threshold of 0, hence "above 0".
   var THRESHOLD_HELP = {
-    pixel_change: "Percent of the region that must change, above 0 and up to 100.",
+    pixel_change: "Percent of the region that must change, above 0 and up to 100. Test this region shows how much changes between two frames, so you can see the camera's own noise first.",
     numeric: "The value to compare against. Can be negative."
   };
   // Without tesseract (or rapidocr) the server locks the OCR types
@@ -1755,15 +1791,18 @@
     out.classList.toggle("is-off", off);
   }
   if (range && out) range.addEventListener("input", syncRange);
-  // The folded Preprocess section's readout ("off", "grayscale · binarize
-  // 128 · 2×"): the server renders it (preprocessSummary in web.go) and
-  // this keeps it in step with the controls, so a closed section still
-  // says what it holds. Same wording as the Go side.
+  // The folded Preprocess section's readout ("off", "rotate 90° ·
+  // grayscale · binarize 128 · 2×"): the server renders it
+  // (preprocessSummary in formview.go) and this keeps it in step with the
+  // controls, so a closed section still says what it holds. Same wording
+  // and order as the Go side.
   var ppSummaryEl = document.getElementById("pp-summary");
   function ppSummary() {
     if (!ppSummaryEl) return;
     var p = [];
     var gray = form.elements["pp_grayscale"], inv = form.elements["pp_invert"], up = form.elements["pp_upscale"];
+    var turn = form.elements["pp_rotate"];
+    if (turn && turn.value !== "0") p.push("rotate " + turn.value + "°");
     if (gray && gray.checked) p.push("grayscale");
     if (inv && inv.checked) p.push("invert");
     if (range && range.value !== "0") p.push("binarize " + range.value);

@@ -1507,7 +1507,7 @@ func TestSchemaRefusesUnmergeableFields(t *testing.T) {
 	}
 	// And the real Config passes: schema is built at init, so reaching
 	// here is the proof; the paths it found are the ones Load reads.
-	for _, p := range []string{"history_days", "auth.password", "mqtt.broker", "watches.name", "watches.region.x", "watches.trigger.cooldown", "watches.preprocess.upscale", "watches.engine", "watches.notify"} {
+	for _, p := range []string{"history_days", "auth.password", "mqtt.broker", "watches.name", "watches.region.x", "watches.trigger.cooldown", "watches.preprocess.upscale", "watches.preprocess.rotate", "watches.engine", "watches.notify"} {
 		if schema.types[p] == nil {
 			t.Errorf("schema lacks %s", p)
 		}
@@ -1589,6 +1589,7 @@ func mutate(r *rand.Rand, c *Config, step int) {
 		w.Preprocess = Preprocess{
 			Grayscale: r.Intn(2) == 0, Invert: r.Intn(2) == 0,
 			Threshold: r.Intn(256) * r.Intn(2), Upscale: r.Intn(5),
+			Rotate: 90 * r.Intn(4),
 		}
 	case 5:
 		switch pick("pixel_change", "ocr_match", "ocr_changed", "numeric") {
