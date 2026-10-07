@@ -54,7 +54,7 @@ In a container the start-up line prints the address inside the container (`http:
 
 [![Add the watchglass add-on repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdarrenhuai%2Fwatchglass)
 
-Or add `https://github.com/darrenhuai/watchglass` under **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, then install **watchglass**. The add-on is experimental: it runs the same image on amd64 and aarch64, with no ingress, so the dashboard is at `http://<home-assistant-host>:8080`. Read [addon/DOCS.md](../addon/DOCS.md) before you start it, because that port is open to your whole network.
+Or add `https://github.com/darrenhuai/watchglass` under **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, then install **watchglass**. The add-on is experimental: it runs the same image on amd64 and aarch64 and opens from the Home Assistant sidebar (ingress), behind Home Assistant's login, with no port open on your network. If you want to reach the dashboard directly as well, [addon/DOCS.md](../addon/DOCS.md) says how to map the port and why to add a password first.
 
 ## Binaries
 
@@ -143,6 +143,8 @@ The build needs no C compiler (`CGO_ENABLED=0` works); the SQLite driver is pure
 | `-db` | `watchglass.db` | The SQLite history database. Created if missing. |
 | `-listen` | `127.0.0.1:8080` | Where the web UI listens. See [security.md](security.md) before widening it. |
 | `-base-path` | none | A URL prefix, for a reverse proxy that serves watchglass under a path. See [security.md](security.md#behind-a-reverse-proxy). |
+| `-ingress` | off | Home Assistant ingress mode, which the add-on turns on with `WATCHGLASS_INGRESS=1`. Requests from the Supervisor get its `X-Ingress-Path` prefix on every link and skip the `auth:` login; off, the header is ignored. See [security.md](security.md#home-assistant-ingress). |
+| `-ingress-from` | `172.30.32.2` | The one address ingress requests come from (the Supervisor's). Only change it to test against a stand-in proxy. |
 | `-tesseract` | found automatically | The tesseract binary, when it isn't on PATH or in the usual install folders. |
 | `-python` | `python3`, then `python` | The Python that has rapidocr. |
 | `-demo` | off | Run the built-in demo: two fake cameras and two watches, with their own config in the temp folder, reset on every start. `-config` and `-db` are ignored. The environment variable `WATCHGLASS_DEMO=1` does the same. |

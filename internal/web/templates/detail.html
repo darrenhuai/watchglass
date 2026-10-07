@@ -1,6 +1,6 @@
 {{template "head" .}}
 <div class="detail-head">
-  <a class="back-link" href="{{u "/"}}">&larr; All watches</a>
+  <a class="back-link" href="{{u $.Base "/"}}">&larr; All watches</a>
   <div class="detail-title-row">
     <h1 class="mono">{{.Watch.Name}}</h1>
     <span id="status-pill" class="status-pill status-{{.Status.State}}">
@@ -54,7 +54,7 @@
         {{/* The alt names the watch, not the source: sources carry user:pass
              URLs a screen reader would spell out, and the text also shows as
              the broken-image caption before app.js swaps the placeholder in. */}}
-        <img id="snap" src="{{watchURL .Watch.Name "/snapshot"}}" alt="Latest frame from {{.Watch.Name}}">
+        <img id="snap" src="{{watchURL $.Base .Watch.Name "/snapshot"}}" alt="Latest frame from {{.Watch.Name}}">
         {{/* The region editor (app.js): drag to draw, drag a corner to
              resize, drag inside to move. Focusable, so the keyboard drives
              it too; the sr-only readout below announces the region after
@@ -126,7 +126,7 @@
   </div>
   <div class="col-config">
     <h2 id="config-heading" class="col-heading">Configuration</h2>
-    <form id="watchform" class="panel" method="post" action="{{watchURL .Watch.Name "/save"}}" aria-labelledby="config-heading">
+    <form id="watchform" class="panel" method="post" action="{{watchURL $.Base .Watch.Name "/save"}}" aria-labelledby="config-heading">
       {{/* The region the drag and the manual fields write to. Text inputs
            under the hidden attribute rather than type=hidden: browsers
            restore text inputs on Back (type=hidden never), so a region
@@ -414,5 +414,5 @@
     </form>
   </div>
 </div>
-<script src="{{u "/static/app.js"}}"></script>
+<script src="{{u $.Base "/static/app.js"}}"></script>
 {{template "foot" .}}

@@ -6,11 +6,28 @@ url: https://github.com/darrenhuai/watchglass
 # The Supervisor only permits aarch64 and amd64 add-ons. The image itself
 # is also published for linux/arm/v7, for the plain Docker route.
 arch: [amd64, aarch64]
-webui: http://[HOST]:[PORT:8080]
+# Ingress: the add-on opens from the Home Assistant sidebar, behind Home
+# Assistant's own login. The Supervisor proxies /api/hassio_ingress/<token>/
+# to port 8080 inside the container (the image listens on 0.0.0.0:8080) and
+# names the prefix it stripped in the X-Ingress-Path header.
+ingress: true
+ingress_port: 8080
+panel_icon: mdi:eye-outline
+panel_title: watchglass
+# WATCHGLASS_INGRESS=1 makes watchglass put that prefix on every link and
+# accept ingress requests only from the Supervisor's address (172.30.32.2).
+# Without it the header is ignored, so a plain Docker install can't be
+# steered by it.
+environment:
+  WATCHGLASS_INGRESS: "1"
+# The host port is not published: the dashboard is reached through ingress.
+# A user who wants direct access (a bookmark, a script) can map it under the
+# add-on's Network settings; see DOCS.md, and add an auth: block to
+# config.yaml first, because a mapped port has no login of its own.
 ports:
-  8080/tcp: 8080
+  8080/tcp: null
 ports_description:
-  8080/tcp: Web UI
+  8080/tcp: Web UI, for direct access without the sidebar (not needed for ingress)
 map:
   - addon_config:rw
 # The Supervisor pulls image:<version>, so version above must match a tag

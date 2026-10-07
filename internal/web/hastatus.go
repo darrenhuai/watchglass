@@ -17,13 +17,15 @@ type haView struct {
 	Text string
 	// Title is the tooltip: the broker, and the raw error when down.
 	Title string
+	// Base is the request's link prefix, for the line's data-src.
+	Base string
 }
 
 // haStatus reads MQTTStatus fresh on every call: the topbar is rendered
-// on every page and polled by topbar.js.
-func (s *Server) haStatus() haView {
+// on every page and polled by topbar.js. base is the page's link prefix.
+func (s *Server) haStatus(base string) haView {
 	if s.MQTTStatus == nil {
-		return haView{}
+		return haView{Base: base}
 	}
 	broker := ""
 	s.mu.Lock()
@@ -35,7 +37,7 @@ func (s *Server) haStatus() haView {
 	}
 	s.mu.Unlock()
 	state, err := s.MQTTStatus()
-	v := haView{Show: true, Title: "MQTT broker " + broker}
+	v := haView{Show: true, Title: "MQTT broker " + broker, Base: base}
 	switch {
 	case state == "connected":
 		v.State, v.Text = "connected", "connected"
@@ -59,5 +61,5 @@ func (s *Server) haStatus() haView {
 // the broker going away or coming back shows without a reload.
 func (s *Server) haStatusFragment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, "haStatus", s.haStatus())
+	s.render(w, "haStatus", s.haStatus(s.base(r)))
 }
