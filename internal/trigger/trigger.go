@@ -439,7 +439,7 @@ func Check(cfg config.Trigger, reading string) (Condition, error) {
 	case "ocr_changed":
 		return Condition{Detail: "Fires when the text changes from one stable reading to another"}, nil
 	}
-	return Condition{Detail: "Pixel change compares each frame with the one before, so one test has nothing to compare"}, nil
+	return Condition{Detail: "Pixel change compares each frame with the one before, so a single reading has no verdict"}, nil
 }
 
 // extract finds the number in s: the pattern's first capture group when

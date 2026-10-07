@@ -73,11 +73,13 @@ func TestRefusedLoginWaitShownAndTestAsksAnyway(t *testing.T) {
 		t.Errorf("refused Test says %q", body)
 	}
 
+	// A pixel_change Test compares two frames, so a Test the camera
+	// accepts costs two requests.
 	accept.Store(true)
-	if resp, body = postForm(t, h, "/watch/printer/test", test); resp.StatusCode != http.StatusOK || requests.Load() != 3 {
+	if resp, body = postForm(t, h, "/watch/printer/test", test); resp.StatusCode != http.StatusOK || requests.Load() != 4 {
 		t.Fatalf("Test once the camera takes the login: %d, %d requests: %s", resp.StatusCode, requests.Load(), body)
 	}
-	if resp, _ = get(t, h, "/watch/printer/snapshot"); resp.StatusCode != http.StatusOK || requests.Load() != 4 {
+	if resp, _ = get(t, h, "/watch/printer/snapshot"); resp.StatusCode != http.StatusOK || requests.Load() != 5 {
 		t.Errorf("snapshot after a successful Test: %d, %d requests, want the frame at once", resp.StatusCode, requests.Load())
 	}
 }

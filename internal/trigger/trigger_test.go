@@ -228,7 +228,7 @@ func TestCheckEvaluatesOneReading(t *testing.T) {
 		{"lt met", config.Trigger{Type: "numeric", Op: "lt", Threshold: -2.5}, "temp -3", true, true, "-3 is below -2.5"},
 		{"no number", config.Trigger{Type: "numeric", Op: "gt", Threshold: 1}, "?", true, false, "No number found in the reading"},
 		{"changed", config.Trigger{Type: "ocr_changed"}, "A", false, false, "Fires when the text changes from one stable reading to another"},
-		{"pixel", config.Trigger{Type: "pixel_change", Threshold: 10}, "", false, false, "Pixel change compares each frame with the one before, so one test has nothing to compare"},
+		{"pixel", config.Trigger{Type: "pixel_change", Threshold: 10}, "", false, false, "Pixel change compares each frame with the one before, so a single reading has no verdict"},
 	}
 	for _, c := range cases {
 		got, err := Check(c.cfg, c.reading)

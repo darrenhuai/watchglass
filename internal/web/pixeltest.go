@@ -82,8 +82,11 @@ func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc conf
 		http.Error(w, "The test was cancelled before the second frame.", http.StatusServiceUnavailable)
 		return
 	}
+	// The same person is still asking, so the second grab is forced like
+	// the first: a login the camera turned down between the two frames
+	// is reported, not waited out (source.Forced).
 	grabCtx, cancel := context.WithTimeout(r.Context(), grabTimeout)
-	second, err := src.Grab(grabCtx)
+	second, err := src.Grab(source.Forced(grabCtx))
 	cancel()
 	if err != nil {
 		// text/plain like grabError: a summary for people, then the chain.
