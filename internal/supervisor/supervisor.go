@@ -121,6 +121,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// fired because of this.
 	if t, ok := r.RestoredFire(); ok {
 		s.reg.SeedFired(name, t)
+		s.reg.SeedRestored(name, t, r.RestoredSent())
 	}
 	// Captured under s.mu so a data race with a later field write is the
 	// caller's misuse, matching NewSource's semantics.
@@ -157,8 +158,32 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// Seeded, the first poll that produces a reading emits a real "healthy"
 	// transition to every consumer at once, and Since only moves on genuine
 	// transitions.
-	if h, ok := s.reg.GetHealth(name); ok && h.Down {
-		r.SeedDown()
+	//
+	// The registry is in memory, so the first start after watchglass
+	// itself restarted has no verdict there; the runner found the one the
+	// history database kept (RestoredDown), which is used the same way
+	// and copied into the registry, so the page shows the watch down
+	// before the camera answers again, and no second "down" alert goes out.
+	if h, ok := s.reg.GetHealth(name); ok {
+		if h.Down {
+			r.SeedDown()
+		}
+	} else if d, ok := r.RestoredDown(); ok {
+		s.reg.SetHealth(name, state.Health{Down: true, Message: d.Message, Since: d.Since})
+		// The hook (the MQTT publisher) hears the verdict again: its
+		// retained "offline" may not have outlived the restart, and before
+		// there was a saved verdict the first failed polls told it anew.
+		// It hears it from the runner after health_after failed polls,
+		// when it heard it before there was a saved verdict, not here: at
+		// boot the publisher learns the watch list on its own goroutine
+		// (SyncAsync), and a verdict for a watch it doesn't know yet is
+		// dropped. No alert goes out: that is the runner's, on real
+		// transitions.
+		var reassert func(health.Event)
+		if onHealth != nil {
+			reassert = func(hev health.Event) { onHealth(name, hev) }
+		}
+		r.SeedRestoredDown(reassert)
 	}
 	r.OnHealth = func(hev health.Event) {
 		s.reg.SetHealth(name, state.Health{

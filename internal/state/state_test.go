@@ -206,3 +206,49 @@ func TestDeliveryRecord(t *testing.T) {
 		t.Error("Drop kept the sending mark")
 	}
 }
+
+// E1: the restored record of the last fire before a restart is kept until
+// the watch fires again, and is ignored for a fire this run already saw (a
+// Save & restart restores the fire it just made). Drop forgets it;
+// ClearDelivery (a Save that changes the notify URLs) keeps it, since the
+// Start right after would seed it again anyway; DropSamples forgets the
+// readings only.
+func TestSeedRestoredLastsUntilTheNextFire(t *testing.T) {
+	r := New(5)
+	r.SeedRestored("w", time.Unix(100, 0), true)
+	if got, ok := r.RestoredFire("w"); !ok || !got.TS.Equal(time.Unix(100, 0)) || !got.Sent {
+		t.Fatalf("RestoredFire = %+v, %v", got, ok)
+	}
+	r.Add("w", Sample{TS: time.Unix(110, 0), Reading: "a"})
+	if _, ok := r.RestoredFire("w"); !ok {
+		t.Error("a reading that isn't a fire dropped the record")
+	}
+	r.Add("w", Sample{TS: time.Unix(120, 0), Reading: "b", Fired: true})
+	if _, ok := r.RestoredFire("w"); ok {
+		t.Error("a new fire should replace the restored record")
+	}
+	r.SeedRestored("w", time.Unix(120, 0), false) // a Save & restart restoring that same fire
+	if _, ok := r.RestoredFire("w"); ok {
+		t.Error("a fire this run saw came back as restored")
+	}
+
+	r.SeedRestored("v", time.Unix(100, 0), false)
+	r.ClearDelivery("v")
+	if got, ok := r.RestoredFire("v"); !ok || !got.TS.Equal(time.Unix(100, 0)) {
+		t.Errorf("ClearDelivery dropped the restored record: %+v, %v", got, ok)
+	}
+	r.SeedRestored("v", time.Unix(100, 0), false)
+	r.Drop("v")
+	if _, ok := r.RestoredFire("v"); ok {
+		t.Error("Drop kept the restored record")
+	}
+
+	r.Add("u", Sample{TS: time.Unix(1, 0), Reading: "x", Fired: true})
+	r.DropSamples("u")
+	if len(r.Recent("u")) != 0 {
+		t.Error("DropSamples kept samples")
+	}
+	if _, ok := r.LastFired("u"); !ok {
+		t.Error("DropSamples forgot when the watch fired")
+	}
+}

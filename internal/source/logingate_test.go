@@ -15,32 +15,16 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/demo"
+	"github.com/darrenhuai/watchglass/internal/fakeclock"
 )
 
-// fakeClock stands in for the login gate's clock.
-type fakeClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
-
-func (c *fakeClock) now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *fakeClock) add(d time.Duration) {
-	c.mu.Lock()
-	c.t = c.t.Add(d)
-	c.mu.Unlock()
-}
-
-func gateClock(t *testing.T) *fakeClock {
+// gateClock stands a fake clock in for the login gate's.
+func gateClock(t *testing.T) *fakeclock.Clock {
 	t.Helper()
-	c := &fakeClock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	c := fakeclock.New(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))
 	logins.mu.Lock()
 	old := logins.now
-	logins.now = c.now
+	logins.now = c.Now
 	logins.mu.Unlock()
 	t.Cleanup(func() {
 		logins.mu.Lock()
@@ -140,7 +124,7 @@ func TestRefusedLoginWaitsBeforeAskingAgain(t *testing.T) {
 				// The poll loop, the snapshot and its refresh, from new
 				// sources each time, all inside the wait: nothing is sent.
 				for i := 0; i < 5; i++ {
-					clock.add(wait / 6)
+					clock.Add(wait / 6)
 					_, err := NewHTTPSnapshot(target).Grab(context.Background())
 					if !errors.As(err, &lre) || !lre.Skipped || lre.Status != c.status {
 						t.Fatalf("step %d grab %d inside the wait: err = %v, want the remembered refusal", step, i, err)
@@ -162,7 +146,7 @@ func TestRefusedLoginWaitsBeforeAskingAgain(t *testing.T) {
 				if left, ok := LoginRetryIn(shown); !ok || left != wait-5*(wait/6) {
 					t.Errorf("step %d: LoginRetryIn = %v, %v, want %v", step, left, ok, wait-5*(wait/6))
 				}
-				clock.add(wait - 5*(wait/6))
+				clock.Add(wait - 5*(wait/6))
 				if _, err := NewHTTPSnapshot(target).Grab(context.Background()); !errors.As(err, &lre) || lre.Skipped {
 					t.Fatalf("step %d: the grab after the %v wait: err = %v, want a real refusal", step, wait, err)
 				}
@@ -175,7 +159,7 @@ func TestRefusedLoginWaitsBeforeAskingAgain(t *testing.T) {
 			// The camera takes the login now: the next grab after the wait
 			// gets the frame and the wait is gone.
 			cam.accept.Store(true)
-			clock.add(30 * time.Minute)
+			clock.Add(30 * time.Minute)
 			if _, err := NewHTTPSnapshot(target).Grab(context.Background()); err != nil {
 				t.Fatalf("accepted: %v", err)
 			}
@@ -262,13 +246,13 @@ func TestRetryInFollowsTheLatestPassword(t *testing.T) {
 	first := withCreds(cam.URL, "admin", "typo-1") + "/snap.jpg"
 	for _, step := range []time.Duration{10 * time.Second, 30 * time.Second, 0} {
 		NewHTTPSnapshot(first).Grab(context.Background()) //nolint:errcheck
-		clock.add(step)
+		clock.Add(step)
 	}
 	shown := withCreds(cam.URL, "admin", "xxxxx") + "/snap.jpg"
 	if left, _ := LoginRetryIn(shown); left != 2*time.Minute {
 		t.Fatalf("first password's wait = %v, want 2m", left)
 	}
-	clock.add(time.Second)
+	clock.Add(time.Second)
 	NewHTTPSnapshot(withCreds(cam.URL, "admin", "typo-2") + "/snap.jpg").Grab(context.Background()) //nolint:errcheck
 	if left, ok := LoginRetryIn(shown); !ok || left != 10*time.Second {
 		t.Errorf("after a new wrong password the page would say %v, %v, want its 10s", left, ok)
@@ -318,13 +302,13 @@ func TestForcedGrabAsksInsideTheWait(t *testing.T) {
 	shown := strings.Replace(target, "pw-b2", "xxxxx", 1)
 	for i := 0; i < 2; i++ { // two refusals: a 30 s wait
 		NewHTTPSnapshot(target).Grab(context.Background()) //nolint:errcheck
-		clock.add(10 * time.Second)
+		clock.Add(10 * time.Second)
 	}
-	clock.add(-10 * time.Second)
+	clock.Add(-10 * time.Second)
 	if n := cam.count(); n != 2 {
 		t.Fatalf("setup made %d requests", n)
 	}
-	clock.add(5 * time.Second)
+	clock.Add(5 * time.Second)
 	_, err := NewHTTPSnapshot(target).Grab(Forced(context.Background()))
 	var lre *LoginRefusedError
 	if !errors.As(err, &lre) || lre.Skipped || cam.count() != 3 {
@@ -337,7 +321,10 @@ func TestForcedGrabAsksInsideTheWait(t *testing.T) {
 		t.Errorf("wait after a refused Test = %v, want the 30 s step from now", left)
 	}
 	cam.accept.Store(true)
-	clock.add(time.Second)
+	// The next Test after the account is fixed: a person takes longer
+	// than ForcedTryGap to fix it (TestForcedGrabsAskOncePerGap has a
+	// press inside the gap).
+	clock.Add(ForcedTryGap)
 	if _, err := NewHTTPSnapshot(target).Grab(Forced(context.Background())); err != nil {
 		t.Fatalf("forced grab once the camera takes the login: %v", err)
 	}
@@ -347,6 +334,152 @@ func TestForcedGrabAsksInsideTheWait(t *testing.T) {
 	}
 	if cam.count() != 5 {
 		t.Errorf("requests = %d, want 5", cam.count())
+	}
+}
+
+// E1: Test this region pressed again and again (or a script posting to
+// the Test route) asks a camera that turned the login down at most once
+// every ForcedTryGap. A press inside the gap gets the refusal back with
+// how long ago the last Test asked and when the next one may; the poll
+// loop's wait is left as it was. Another login on the camera is its own
+// key, and a camera that has never refused is asked every time.
+func TestForcedGrabsAskOncePerGap(t *testing.T) {
+	clock := gateClock(t)
+	cam := newRefusingCamera(t, "basic")
+	target := withCreds(cam.URL, "admin", "pw-e1") + "/snap.jpg"
+	shown := strings.Replace(target, "pw-e1", "xxxxx", 1)
+	forced := func() error {
+		_, err := NewHTTPSnapshot(target).Grab(Forced(context.Background()))
+		return err
+	}
+	if err := forced(); err == nil || cam.count() != 1 {
+		t.Fatalf("first Test: err = %v, requests = %d, want a refusal from the camera", err, cam.count())
+	}
+	wait, _ := LoginRetryIn(shown)
+	for i := 1; i <= 9; i++ {
+		clock.Add(time.Second)
+		err := forced()
+		var lre *LoginRefusedError
+		if !errors.As(err, &lre) || !lre.Throttled || !lre.Skipped || lre.Status != 401 {
+			t.Fatalf("Test %ds after the last: err = %v, want a throttled refusal", i, err)
+		}
+		if lre.TriedAgo != time.Duration(i)*time.Second || lre.RetryIn != ForcedTryGap-time.Duration(i)*time.Second {
+			t.Errorf("Test %ds after the last: TriedAgo %v RetryIn %v", i, lre.TriedAgo, lre.RetryIn)
+		}
+		if want := fmt.Sprintf("status 401 (not asked: a Test asked the camera with this login %ds ago)", i); !strings.HasSuffix(err.Error(), want) {
+			t.Errorf("text = %q, want it to end %q", err.Error(), want)
+		}
+		if strings.Contains(err.Error(), "pw-e1") || strings.Contains(strings.ToLower(err.Error()), "refused") {
+			t.Errorf("text = %q: no password, and no \"refused\" (a summary reads that as a connection refused)", err.Error())
+		}
+	}
+	if n := cam.count(); n != 1 {
+		t.Fatalf("nine Tests inside the gap asked the camera %d times", n-1)
+	}
+	// The throttled presses left the poll loop's wait alone: it counts
+	// down from the first Test's refusal.
+	if left, _ := LoginRetryIn(shown); left != wait-9*time.Second {
+		t.Errorf("poll wait after throttled Tests = %v, want %v", left, wait-9*time.Second)
+	}
+	clock.Add(time.Second)
+	if err := forced(); err == nil || cam.count() != 2 {
+		t.Fatalf("Test after the gap: err = %v, requests = %d, want the camera asked", err, cam.count())
+	}
+	// Twenty at once inside the gap: none of them asks.
+	clock.Add(time.Second)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); forced() }() //nolint:errcheck
+	}
+	wg.Wait()
+	if n := cam.count(); n != 2 {
+		t.Errorf("twenty Tests at once asked the camera %d times, want none", n-2)
+	}
+	// A new password is a new login: asked at once, and it ends nothing
+	// of the old one's.
+	other := withCreds(cam.URL, "admin", "pw-e1-new") + "/snap.jpg"
+	if _, err := NewHTTPSnapshot(other).Grab(Forced(context.Background())); err == nil || cam.count() != 3 {
+		t.Fatalf("Test with another password: err = %v, requests = %d", err, cam.count())
+	}
+	// A camera that takes the login is asked by every Test.
+	cam.accept.Store(true)
+	clock.Add(ForcedTryGap)
+	for i := 0; i < 3; i++ {
+		if err := forced(); err != nil {
+			t.Fatalf("Test %d once the camera takes the login: %v", i+1, err)
+		}
+	}
+	if n := cam.count(); n != 6 {
+		t.Errorf("requests = %d, want 6", n)
+	}
+}
+
+// E1: a burst of Tests that all arrive while the first one is still out at
+// the camera asks it once. The admitted Test marks the login as it goes
+// through, not when the camera answers, so the others see the gap at
+// once. Checked twice: just after the gap of an earlier Test, and on a
+// login only the poll loop has had turned down (no Test has asked yet).
+func TestForcedBurstAsksOnce(t *testing.T) {
+	for _, first := range []string{"test", "poll"} {
+		t.Run(first, func(t *testing.T) {
+			clock := gateClock(t)
+			var requests atomic.Int32
+			arrived := make(chan struct{}, 64)
+			release := make(chan struct{})
+			var held atomic.Bool
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if held.Load() {
+					arrived <- struct{}{}
+					<-release
+				}
+				w.Header().Set("WWW-Authenticate", `Basic realm="cam"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			t.Cleanup(ts.Close)
+			target := withCreds(ts.URL, "admin", "pw-burst-"+first) + "/snap.jpg"
+			ctx := context.Background()
+			if first == "test" {
+				ctx = Forced(ctx)
+			}
+			if _, err := NewHTTPSnapshot(target).Grab(ctx); err == nil || requests.Load() != 1 {
+				t.Fatalf("first grab: err = %v, requests = %d, want one refusal", err, requests.Load())
+			}
+			clock.Add(ForcedTryGap)
+
+			// Twenty Tests at once. The camera holds whatever reaches it
+			// until every Test has either got there or come back, so a
+			// Test that is let through can't answer before the others
+			// are admitted.
+			held.Store(true)
+			const n = 20
+			returned := make(chan struct{}, n)
+			var wg sync.WaitGroup
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					NewHTTPSnapshot(target).Grab(Forced(context.Background())) //nolint:errcheck
+					returned <- struct{}{}
+				}()
+			}
+			deadline := time.After(10 * time.Second)
+			for seen := 0; seen < n; seen++ {
+				select {
+				case <-arrived:
+				case <-returned:
+				case <-deadline:
+					close(release)
+					t.Fatalf("only %d of %d Tests reached the camera or came back", seen, n)
+				}
+			}
+			close(release)
+			wg.Wait()
+			if got := requests.Load() - 1; got != 1 {
+				t.Errorf("%d Tests at once asked the camera %d times, want once", n, got)
+			}
+		})
 	}
 }
 
@@ -369,7 +502,7 @@ func TestOnlyOneGrabAsksAfterTheWait(t *testing.T) {
 	defer ts.Close()
 	target := withCreds(ts.URL, "admin", "pw-b2") + "/snap.jpg"
 	NewHTTPSnapshot(target).Grab(context.Background()) //nolint:errcheck
-	clock.add(10 * time.Second)
+	clock.Add(10 * time.Second)
 	holding.Store(true)
 	done := make(chan error, 1)
 	go func() {
@@ -462,7 +595,7 @@ func TestFFmpegRefusedLoginWaits(t *testing.T) {
 		t.Errorf("first grab says %q", err)
 	}
 	for i := 0; i < 5; i++ {
-		clock.add(time.Second)
+		clock.Add(time.Second)
 		err := grab(context.Background(), input, refuse)
 		if !errors.As(err, &lre) || !lre.Skipped || strings.Contains(err.Error(), pw) ||
 			!strings.Contains(err.Error(), "ffmpeg: rtsp://admin:xxxxx@cam-b2.invalid:554/Streaming/101: 401 Unauthorized (not asked") {
@@ -475,7 +608,7 @@ func TestFFmpegRefusedLoginWaits(t *testing.T) {
 	if left, ok := LoginRetryIn("rtsp://admin:xxxxx@cam-b2.invalid:554/Streaming/101"); !ok || left != 5*time.Second {
 		t.Errorf("LoginRetryIn = %v, %v", left, ok)
 	}
-	clock.add(5 * time.Second)
+	clock.Add(5 * time.Second)
 	grab(context.Background(), input, refuse) //nolint:errcheck
 	if runs != 2 {
 		t.Fatalf("after the wait ffmpeg ran %d times, want once", runs-1)
@@ -663,7 +796,7 @@ func TestProbeThatCannotReachTheCameraHandsTheGateBack(t *testing.T) {
 	if _, err := NewHTTPSnapshot(target).Grab(context.Background()); !errors.Is(err, ErrLoginRefused) {
 		t.Fatalf("first grab: %v", err)
 	}
-	clock.add(10 * time.Second)
+	clock.Add(10 * time.Second)
 	drop.Store(true)
 	if _, err := NewHTTPSnapshot(target).Grab(context.Background()); err == nil || errors.Is(err, ErrLoginRefused) {
 		t.Fatalf("the ask with the camera gone: err = %v, want a transport error", err)
@@ -673,7 +806,7 @@ func TestProbeThatCannotReachTheCameraHandsTheGateBack(t *testing.T) {
 	}
 	drop.Store(false)
 	accept.Store(true)
-	clock.add(time.Second)
+	clock.Add(time.Second)
 	before := requests.Load()
 	if _, err := NewHTTPSnapshot(target).Grab(context.Background()); err != nil {
 		t.Fatalf("camera back and taking the login: %v (the ask was never handed back)", err)
@@ -703,13 +836,13 @@ func TestProbeThatCannotReachTheCameraHandsTheGateBack(t *testing.T) {
 	if _, err := f.Grab(context.Background()); !errors.Is(err, ErrLoginRefused) {
 		t.Fatalf("ffmpeg first grab: %v", err)
 	}
-	clock.add(10 * time.Second)
+	clock.Add(10 * time.Second)
 	answer = fmt.Errorf("exit status 1: Connection to tcp://cam-b2-probe.invalid:554 failed: %w", context.DeadlineExceeded)
 	if _, err := f.Grab(context.Background()); err == nil || errors.Is(err, ErrLoginRefused) {
 		t.Fatalf("ffmpeg ask with the camera gone: err = %v, want a transport error", err)
 	}
 	answer = nil
-	clock.add(time.Second)
+	clock.Add(time.Second)
 	if _, err := f.Grab(context.Background()); err != nil {
 		t.Fatalf("ffmpeg once the camera is back: %v (the ask was never handed back)", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
 	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/trigger"
@@ -174,7 +175,7 @@ func (r *Runner) restoreState(now time.Time) {
 	st = r.eval.State()
 	r.saved = rowState
 	if !st.LastFired.IsZero() {
-		r.restoredFire = st.LastFired
+		r.restoredFire, r.restoredSent = st.LastFired, true
 	}
 	if st.HasStable {
 		if st.LastFired.IsZero() {
@@ -233,4 +234,56 @@ func (r *Runner) markDelivered(fired time.Time) {
 // never fired until it fires again.
 func (r *Runner) RestoredFire() (time.Time, bool) {
 	return r.restoredFire, !r.restoredFire.IsZero()
+}
+
+// RestoredSent says whether the alert of the RestoredFire fire went out
+// (every notify URL took it, or there was none to send it to).
+func (r *Runner) RestoredSent() bool { return r.restoredSent }
+
+// A watch's stream health verdict is kept beside its trigger state, so a
+// restart while the camera is down doesn't send the "down" alert again:
+// the supervisor starts the tracker down (SeedDown, as for a Save &
+// restart), it stays quiet while the camera stays down, and the first poll
+// that produces a reading sends the one "recovered" alert. It is kept by
+// watch name, like the in-memory verdict a Save & restart carries over: a
+// camera fixed while watchglass was off is reported recovered at the first
+// reading.
+
+// restoreHealth loads the saved verdict when it is down (RestoredDown).
+func (r *Runner) restoreHealth() {
+	if r.store == nil {
+		return
+	}
+	h, ok, err := r.store.LoadHealth(r.watch.Name)
+	if err != nil {
+		r.logf("watch %s: couldn't read its saved stream health, so it starts as healthy: %v", r.watch.Name, err)
+		return
+	}
+	if !ok || !h.Down {
+		return
+	}
+	r.restoredDown = &h
+}
+
+// saveHealth writes a health transition. A failed write is logged; the
+// next transition writes again.
+func (r *Runner) saveHealth(hev health.Event, at time.Time) {
+	if r.store == nil {
+		return
+	}
+	err := r.store.SaveHealth(r.watch.Name, history.HealthState{Down: hev.State == "down", Since: at, Message: hev.Message})
+	if err != nil {
+		r.logf("watch %s: save stream health: %v", r.watch.Name, err)
+	}
+}
+
+// RestoredDown is the down verdict New found saved (when it began and its
+// message), or false. The supervisor seeds the tracker with it (SeedDown)
+// and tells the registry, which is in memory and would otherwise show the
+// watch as running until the camera answers.
+func (r *Runner) RestoredDown() (history.HealthState, bool) {
+	if r.restoredDown == nil {
+		return history.HealthState{}, false
+	}
+	return *r.restoredDown, true
 }

@@ -2,7 +2,6 @@ package web
 
 import (
 	"html/template"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -208,19 +207,12 @@ func isFresh(w config.Watch) bool {
 		t.Pattern == "" && t.Op == "" && (t.Confirm == 0 || t.Confirm == 3)
 }
 
-// userinfoPassword is the password part of a URL's userinfo, wherever a
-// URL sits in a source: the whole of an http(s) or rtsp source, or one of
-// an ffmpeg: source's input arguments. The password runs to the LAST "@"
-// before the path, query or fragment, as net/url splits it: Go accepts
-// http://admin:p@ss@cam/ with a raw "@" in the password, and stopping at
-// the first "@" would leave "ss@" on the page.
-var userinfoPassword = regexp.MustCompile(`(://[^/?#@\s:]*):[^/?#\s]*@`)
-
 // redactSource is a watch's source for the page, with any password masked
 // the way grab errors mask it ("user:xxxxx@", and "password=xxxxx" for a
-// login in the query string, source.RedactText). The page has no field
-// that edits the source, so the password never needs to be on it; the
-// header line is what people screenshot.
+// login in the query string): source.RedactText, the one pass the grab
+// errors get too. The page has no field that edits the source, so the
+// password never needs to be on it; the header line is what people
+// screenshot.
 func redactSource(src string) string {
-	return source.RedactText(userinfoPassword.ReplaceAllString(src, "${1}:xxxxx@"))
+	return source.RedactText(src)
 }

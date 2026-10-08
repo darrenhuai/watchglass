@@ -1422,7 +1422,7 @@ func TestLiveFragmentStaleSinceUsesLastFrame(t *testing.T) {
 	_, live := get(t, s.Handler(), "/watch/printer/live")
 	// The server's zone is the no-script text; datetime (UTC) is what app.js
 	// shows in the viewer's zone.
-	if !strings.Contains(live, `Stale — last good reading <time class="mono" datetime="`+frameTS.UTC().Format(time.RFC3339)+`">00:53:26</time>`) {
+	if !strings.Contains(live, `Stale: last good reading <time class="mono" datetime="`+frameTS.UTC().Format(time.RFC3339)+`">00:53:26</time>`) {
 		t.Errorf("stale badge should date from the last frame (00:53:26); body:\n%s", live)
 	}
 	if strings.Contains(live, "led-green") || !strings.Contains(live, "led-error") {

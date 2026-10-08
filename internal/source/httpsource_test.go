@@ -395,6 +395,7 @@ func TestDigestSourceRetriesAStaleNonce(t *testing.T) {
 // account one failed login per poll, not two.
 func TestDigestWrongPasswordKeepsToItself(t *testing.T) {
 	const user, pass, realm, nonce = "admin", "s3cret", "cam", "fixednonce"
+	clock := gateClock(t)
 	var mu sync.Mutex
 	goodNC := []string{}
 	badRequests := 0
@@ -428,11 +429,13 @@ func TestDigestWrongPasswordKeepsToItself(t *testing.T) {
 			t.Fatalf("good grab %d: %v", i, err)
 		}
 		// The refusal starts a login wait (logingate.go); the later grabs
-		// are Tests, which ask the camera anyway, so each one shows what a
-		// refused login costs the account when the camera is asked.
+		// are Tests, which ask the camera anyway (one per ForcedTryGap), so
+		// each one shows what a refused login costs the account when the
+		// camera is asked.
 		ctx := context.Background()
 		if i > 0 {
 			ctx = Forced(ctx)
+			clock.Add(ForcedTryGap)
 		}
 		if _, err := NewHTTPSnapshot(bad).Grab(ctx); err == nil || !strings.Contains(err.Error(), "status 401") {
 			t.Fatalf("bad grab %d: err = %v, want status 401", i, err)

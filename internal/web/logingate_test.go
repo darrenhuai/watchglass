@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/demo"
@@ -42,7 +43,7 @@ func TestRefusedLoginWaitShownAndTestAsksAnyway(t *testing.T) {
 		return source.For(w)
 	}
 	h := s.Handler()
-	waitRe := regexp.MustCompile(`^127\.0\.0\.1:\d+ turned down the login\. Trying again in (\d+)s\. watchglass waits between tries so that repeated wrong tries don't lock the account\. Check the user and password in the source URL\. Pressing Test this region asks the camera at once, and a refused try starts the wait again\.\n`)
+	waitRe := regexp.MustCompile(`^127\.0\.0\.1:\d+ turned down the login\. Trying again in (\d+)s\. watchglass waits between tries so that repeated wrong tries don't lock the account\. Check the user and password in the source URL\. Pressing Test this region asks the camera even during the wait, at most once every 10s, and a refused try starts the wait again\.\n`)
 
 	resp, body := get(t, h, "/watch/printer/snapshot")
 	if resp.StatusCode != http.StatusBadGateway || requests.Load() != 1 {
@@ -74,8 +75,14 @@ func TestRefusedLoginWaitShownAndTestAsksAnyway(t *testing.T) {
 	}
 
 	// A pixel_change Test compares two frames, so a Test the camera
-	// accepts costs two requests.
+	// accepts costs two requests. A person takes longer than
+	// source.ForcedTryGap to fix the account; here the gap is shortened
+	// (TestRefusedLoginTestSaysWhatThePressDid presses inside it).
 	accept.Store(true)
+	oldGap := source.ForcedTryGap
+	source.ForcedTryGap = 50 * time.Millisecond
+	t.Cleanup(func() { source.ForcedTryGap = oldGap })
+	time.Sleep(60 * time.Millisecond)
 	if resp, body = postForm(t, h, "/watch/printer/test", test); resp.StatusCode != http.StatusOK || requests.Load() != 4 {
 		t.Fatalf("Test once the camera takes the login: %d, %d requests: %s", resp.StatusCode, requests.Load(), body)
 	}

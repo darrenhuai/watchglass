@@ -93,7 +93,7 @@ func (s *Server) testPixelChange(w http.ResponseWriter, r *http.Request, wc conf
 	if err != nil {
 		// text/plain like grabError: a summary for people, then the chain.
 		http.Error(w, "The first frame arrived but the second didn't: "+
-			lowerFirst(withHint(summarizeErr(err.Error()), err.Error()))+"\n"+err.Error(), http.StatusBadGateway)
+			lowerFirst(testGrabText(err))+"\n"+err.Error(), http.StatusBadGateway)
 		return
 	}
 	secondAt := pixelTestNow()

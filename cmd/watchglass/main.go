@@ -167,8 +167,8 @@ func run(o options) error {
 		return fmt.Errorf("open history db: %w", permissionHint(err))
 	}
 	defer store.Close()
-	if err := store.TriggerStateErr(); err != nil {
-		log.Printf("history: can't keep what each watch knows across restarts, so a restart can repeat an alert: %v", permissionHint(err))
+	if line := historyNote(store); line != "" {
+		log.Print(line)
 	}
 
 	var pruneDone chan struct{}
