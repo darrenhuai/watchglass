@@ -1,12 +1,14 @@
 package web
 
 import (
+	"errors"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/hass"
 )
 
 // connErr stands in for hass.ConnError: the text is the reason, Detail
@@ -64,6 +66,23 @@ func TestTopbarShowsHomeAssistantStatus(t *testing.T) {
 	_, body = get(t, h, "/ha-status")
 	if !strings.Contains(body, `is-connecting`) || !strings.Contains(body, `connecting…`) {
 		t.Errorf("connecting; body:\n%s", body)
+	}
+
+	// The broker is up and Home Assistant said it went offline: the
+	// tooltip must not send the user to the broker or config.yaml.
+	state, err = hass.StateHAOffline, errors.New("it went offline; the MQTT broker is up")
+	_, body = get(t, h, "/ha-status")
+	for _, want := range []string{
+		`class="ha-status is-down"`,
+		`Home Assistant:</span> not connected: it went offline; the MQTT broker is up</span>`,
+		`title="MQTT broker tcp://user:xxxxx@127.0.0.1:18884 is connected, but Home Assistant said it went offline. watchglass sends its devices again when Home Assistant is back."`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Home Assistant offline: missing %s; body:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Retrying every few seconds") || strings.Contains(body, "need a restart") {
+		t.Errorf("Home Assistant offline: the tooltip points at the broker or a restart; body:\n%s", body)
 	}
 }
 

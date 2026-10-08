@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+
+	"github.com/darrenhuai/watchglass/internal/hass"
 )
 
 // haView is the topbar's Home Assistant line: whether watchglass is
@@ -43,6 +45,15 @@ func (s *Server) haStatus(base string) haView {
 		v.State, v.Text = "connected", "connected"
 	case state == "connecting" && err == nil:
 		v.State, v.Text = "connecting", "connecting…"
+	case state == hass.StateHAOffline:
+		// The broker is fine and nothing in config.yaml is wrong: Home
+		// Assistant said it went away (a restart, an update). Retrying the
+		// broker and restarting watchglass both miss the point.
+		v.State, v.Text = "down", "not connected"
+		if err != nil {
+			v.Text += ": " + err.Error()
+		}
+		v.Title += " is connected, but Home Assistant said it went offline. watchglass sends its devices again when Home Assistant is back."
 	default:
 		v.State, v.Text = "down", "not connected"
 		if err != nil {
