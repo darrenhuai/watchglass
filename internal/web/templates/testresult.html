@@ -39,7 +39,10 @@
   <dl class="test-facts">
     <dt>Read</dt>
     <dd>{{with .Reading.Placeholder}}<span class="reading-none">{{.}}</span>{{else}}<span class="mono test-reading">{{template "readingText" .Reading}}</span>{{end}}</dd>
-    {{if .Words}}
+    {{/* No chips beside "No digits read": a glyph the decoder couldn't
+         make a digit of is a "?" chip, and one beside that heading reads
+         as a digit after all. The note under the list says what to do. */}}
+    {{if and .Words (not .Reading.Unreadable)}}
     <dt>Confidence</dt>
     <dd><p class="word-list">{{range .Words}}{{$low := lowConf .Conf}}
       <span class="word-chip {{if $low}}conf-low{{else}}conf-ok{{end}}">{{if $low}}<span class="sr-only">Low confidence: </span>{{end}}{{if and (eq $.Engine "sevenseg") (eq .Text "?")}}<span class="digit-unknown">?</span>{{else}}{{.Text}}{{end}}<span class="conf">{{pct .Conf}}%</span></span>{{end}}

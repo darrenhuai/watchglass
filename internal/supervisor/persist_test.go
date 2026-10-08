@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/health"
 	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/source"
@@ -329,5 +330,168 @@ func TestStopAllReturnsAtOnceWhenNothingIsSending(t *testing.T) {
 	}
 	if g.logged("stopping:") {
 		t.Errorf("a quiet shutdown logged a warning: %q", g.logs)
+	}
+}
+
+// E1: a camera that is down when watchglass restarts stays down without a
+// second "down" alert: the verdict is kept in the history database, the
+// new run starts its tracker down, the page shows the watch down from the
+// start with the original time, and the first reading sends the one
+// "recovered" alert.
+func TestRestartWhileDownSendsNoSecondDownAlert(t *testing.T) {
+	var mu sync.Mutex
+	var alerts []string
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b strings.Builder
+		buf := make([]byte, 512)
+		n, _ := r.Body.Read(buf)
+		b.Write(buf[:n])
+		mu.Lock()
+		alerts = append(alerts, b.String())
+		mu.Unlock()
+	}))
+	defer hook.Close()
+	count := func(sub string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, a := range alerts {
+			if strings.Contains(a, sub) {
+				n++
+			}
+		}
+		return n
+	}
+	store, err := history.Open(filepath.Join(t.TempDir(), "wg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	w := testWatch("cam")
+	w.Interval = config.Duration(20 * time.Millisecond)
+	w.HealthAfter = 2
+	w.Notify = []string{"generic+" + hook.URL + "/x"}
+	src := &switchSource{img: flat()}
+	src.dead.Store(true)
+	var hookDown atomic.Int32
+	start := func() (*Supervisor, *state.Registry) {
+		reg := state.New(5)
+		s := New(store, reg, ocr.Engines{}, func(string, ...any) {})
+		s.NewSource = func(config.Watch) (source.Source, error) { return src, nil }
+		s.OnHealth = func(watch string, hev health.Event) {
+			if hev.State == "down" {
+				hookDown.Add(1)
+			}
+		}
+		if err := s.Start(context.Background(), w); err != nil {
+			t.Fatal(err)
+		}
+		return s, reg
+	}
+
+	s, reg := start()
+	waitUntil(t, "the down alert", func() bool { return count("no reading for") == 1 })
+	h1, _ := reg.GetHealth("cam")
+	s.StopAll()
+
+	for i := 0; i < 2; i++ { // two restarts, the camera still down
+		s, reg = start()
+		h, ok := reg.GetHealth("cam")
+		if !ok || !h.Down || !strings.Contains(h.Message, "connection refused") {
+			t.Errorf("restart %d: registry health %+v ok=%v, want down from the start", i+1, h, ok)
+		}
+		if d := h.Since.Sub(h1.Since); d < -time.Second || d > time.Second {
+			t.Errorf("restart %d: down since %v, want about %v (when it went down)", i+1, h.Since, h1.Since)
+		}
+		time.Sleep(300 * time.Millisecond) // 15 failing polls
+		if n := count("no reading for"); n != 1 {
+			t.Fatalf("restart %d: %d down alerts, want still 1", i+1, n)
+		}
+		// The health hook (MQTT) hears the verdict once per start.
+		if n := hookDown.Load(); n != int32(i+2) {
+			t.Errorf("restart %d: the health hook heard %d down verdicts, want %d", i+1, n, i+2)
+		}
+		s.StopAll()
+	}
+
+	s, reg = start()
+	defer s.StopAll()
+	src.dead.Store(false)
+	waitUntil(t, "the recovered alert", func() bool { return count("stream recovered") == 1 })
+	if h, _ := reg.GetHealth("cam"); h.Down {
+		t.Errorf("registry still down after the camera answered: %+v", h)
+	}
+	if saved, ok, err := store.LoadHealth("cam"); err != nil || !ok || saved.Down {
+		t.Errorf("saved health after recovery: %+v ok=%v err=%v, want up", saved, ok, err)
+	}
+	if n := count("no reading for"); n != 1 {
+		t.Errorf("%d down alerts in all, want 1", n)
+	}
+	// A deleted watch's verdict goes with its trigger state.
+	s.ForgetExcept(nil)
+	if _, ok, _ := store.LoadHealth("cam"); ok {
+		t.Error("ForgetExcept left the deleted watch's health row")
+	}
+}
+
+// E1: after watchglass restarts with a camera still down, the health hook
+// (the MQTT publisher) hears the restored "down" verdict even when it
+// doesn't know the watch yet at Start. At boot the publisher learns the
+// watch list on its own goroutine and drops a verdict for a watch it hasn't
+// learned, so a verdict handed over inside Start was lost and the broker
+// never got "offline" again until the camera recovered. The runner hands
+// it over after health_after failed polls, as a fresh start did before
+// there was a saved verdict, once per start.
+func TestRestoredDownReachesAHookThatLearnsTheWatchLate(t *testing.T) {
+	store, err := history.Open(filepath.Join(t.TempDir(), "wg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	w := testWatch("cam")
+	w.Interval = config.Duration(40 * time.Millisecond)
+	w.HealthAfter = 2
+	src := &switchSource{img: flat()}
+	src.dead.Store(true)
+
+	s := New(store, state.New(5), ocr.Engines{}, func(string, ...any) {})
+	s.NewSource = func(config.Watch) (source.Source, error) { return src, nil }
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the saved down verdict", func() bool {
+		h, ok, _ := store.LoadHealth("cam")
+		return ok && h.Down
+	})
+	s.StopAll()
+
+	// watchglass restarts: a hook that ignores the watch until just after
+	// Start returns, the way the publisher does until its first Sync.
+	var known atomic.Bool
+	var heard atomic.Int32
+	var msg atomic.Value
+	s = New(store, state.New(5), ocr.Engines{}, func(string, ...any) {})
+	s.NewSource = func(config.Watch) (source.Source, error) { return src, nil }
+	s.OnHealth = func(watch string, hev health.Event) {
+		if !known.Load() || watch != "cam" {
+			return
+		}
+		if hev.State == "down" {
+			heard.Add(1)
+			msg.Store(hev.Message)
+		}
+	}
+	if err := s.Start(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	defer s.StopAll()
+	known.Store(true)
+	waitUntil(t, "the hook to hear the restored down verdict", func() bool { return heard.Load() >= 1 })
+	time.Sleep(400 * time.Millisecond) // 10 more failing polls
+	if n := heard.Load(); n != 1 {
+		t.Errorf("the hook heard %d down verdicts in one start, want 1", n)
+	}
+	if m, _ := msg.Load().(string); !strings.Contains(m, "connection refused") {
+		t.Errorf("verdict message %q, want the saved one", m)
 	}
 }

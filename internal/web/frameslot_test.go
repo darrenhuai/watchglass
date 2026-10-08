@@ -5,11 +5,13 @@ import (
 	"image"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/source"
@@ -106,11 +108,52 @@ func TestConcurrentTestsAreCapped(t *testing.T) {
 }
 
 // The pixel_change Test keeps the first frame's crop, not the frame,
-// across its wait: the size note still names both frames' sizes.
+// across its wait: by the time it waits, the first frame can be collected
+// (a weak pointer to it is empty after a GC), and the size note still
+// names both frames' sizes from what was kept. Its source hands out a new
+// frame per grab and keeps none, so only the handler could hold one.
 func TestPixelTestKeepsTheCropNotTheFrame(t *testing.T) {
-	src := &seqSource{frames: []image.Image{flat(40, 20, 100), flat(80, 40, 100)}}
-	_, _, _, body := postPixelTest(t, pixelServer(t, src))
-	if !strings.Contains(body, "different sizes (40×20, then 80×40)") {
+	src := &freshSource{}
+	var waited, alive bool
+	oldNow, oldWait := pixelTestNow, pixelTestWait
+	t.Cleanup(func() { pixelTestNow, pixelTestWait = oldNow, oldWait })
+	pixelTestNow = time.Now
+	pixelTestWait = func(ctx context.Context, d time.Duration) error {
+		runtime.GC()
+		runtime.GC()
+		waited, alive = true, src.first.Value() != nil
+		return nil
+	}
+	s, _ := newTestServer(t)
+	s.NewSource = func(w config.Watch) (source.Source, error) { return src, nil }
+	_, _, _, body := postPixelTest(t, s.Handler())
+	if !waited {
+		t.Fatal("the Test never waited between its frames")
+	}
+	if alive {
+		t.Error("the first frame was still reachable during the wait: the Test kept the frame, not just its crop")
+	}
+	if !strings.Contains(body, "different sizes (400×200, then 800×400)") {
 		t.Errorf("the size note should name the first frame's size from its bounds, got:\n%s", body)
 	}
+}
+
+// freshSource makes a new frame for every grab and keeps only a weak
+// pointer to the first: 400×200, then 800×400.
+type freshSource struct {
+	mu    sync.Mutex
+	grabs int
+	first weak.Pointer[image.RGBA]
+}
+
+func (f *freshSource) Grab(ctx context.Context) (image.Image, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grabs++
+	if f.grabs == 1 {
+		img := flat(400, 200, 100)
+		f.first = weak.Make(img)
+		return img, nil
+	}
+	return flat(800, 400, 100), nil
 }

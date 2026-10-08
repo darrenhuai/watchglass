@@ -41,6 +41,14 @@ type Runner struct {
 	fingerprint  string
 	saved        trigger.State
 	restoredFire time.Time
+	restoredSent bool
+	// restoredDown is the down verdict New found saved, if any
+	// (restoreHealth, RestoredDown).
+	restoredDown *history.HealthState
+	// reassert, set by SeedRestoredDown, hears the restored down verdict
+	// again once reassertIn more polls have failed in a row.
+	reassert   func()
+	reassertIn int
 
 	health  *health.Tracker
 	baseIvl time.Duration
@@ -122,6 +130,7 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		store: store, eval: eval, logf: logf,
 		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}
 	r.restoreState(time.Now())
+	r.restoreHealth()
 	return r, nil
 }
 
@@ -132,6 +141,30 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 // called before Run.
 func (r *Runner) SeedDown() {
 	r.health.SeedDown()
+}
+
+// SeedRestoredDown is SeedDown for the verdict the history database kept
+// (RestoredDown), on the first start after watchglass itself restarted.
+// No transition is made, so no second "down" alert goes out; but the
+// consumers that only hear transitions (the MQTT publisher's retained
+// health state, which a broker may not have kept) would otherwise never
+// hear that the watch is down until it recovers. So once health_after
+// polls have failed in a row in this run, which is when a tracker that
+// started healthy would have gone down, reassert hears the down verdict
+// once, with the restored message. A poll that reads first cancels it:
+// the "healthy" transition says the rest. Must be called before Run.
+func (r *Runner) SeedRestoredDown(reassert func(hev health.Event)) {
+	r.health.SeedDown()
+	if reassert == nil || r.restoredDown == nil {
+		return
+	}
+	n := r.watch.HealthAfter
+	if n < 1 {
+		n = 1
+	}
+	msg := r.restoredDown.Message
+	r.reassertIn = n
+	r.reassert = func() { reassert(health.Event{State: "down", Message: msg}) }
 }
 
 // Run polls until ctx is cancelled. Errors are logged, never fatal: a
@@ -354,11 +387,19 @@ func (r *Runner) pollFailed(ctx context.Context, err error) error {
 	if hev, changed := r.health.Failure(err); changed {
 		r.notifyHealth(ctx, hev)
 	}
+	if r.reassert != nil {
+		if r.reassertIn--; r.reassertIn <= 0 {
+			fn := r.reassert
+			r.reassert = nil
+			fn()
+		}
+	}
 	return err
 }
 
 // pollSucceeded records a poll that produced a reading.
 func (r *Runner) pollSucceeded(ctx context.Context) {
+	r.reassert = nil
 	if hev, changed := r.health.Success(); changed {
 		r.notifyHealth(ctx, hev)
 	}
@@ -369,6 +410,7 @@ func (r *Runner) pollSucceeded(ctx context.Context) {
 // regardless.
 func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
 	r.logf("watch %s: %s", r.watch.Name, hev.Message)
+	r.saveHealth(hev, time.Now())
 	if r.OnHealth != nil {
 		r.OnHealth(hev)
 	}

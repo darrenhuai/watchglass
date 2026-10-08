@@ -37,7 +37,7 @@
         <span class="reading-wrap{{if eq .Status.State "error"}} reading-wrap-error{{end}}">
         {{if eq .Status.State "stopped"}}
           <span class="led led-stopped" aria-hidden="true"></span>
-          <span class="tag">Stopped</span>
+          <span class="tag">Stopped</span>{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
           <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span>{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}}<span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}</span>

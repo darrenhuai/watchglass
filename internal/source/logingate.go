@@ -31,7 +31,15 @@ import (
 // (loginWaits) and the first grab the camera accepts ends it. A different
 // login is a different key, so fixing the password in the URL is tried at
 // once. A grab made with Forced (Test this region: a person asking) asks the
-// camera even inside the wait.
+// camera even inside the wait, but at most once every ForcedTryGap per
+// login, so a Test button pressed again and again (or a script posting to
+// the Test route) can't lock the account the wait is there to protect.
+//
+// The wait lives in memory and a restart starts without it, on purpose:
+// restarting after fixing the password in config.yaml is the documented way
+// to try it at once, and keeping a refusal across a restart would mean
+// writing a fingerprint of the password to disk (the key's HMAC secret
+// never leaves the process).
 
 // ErrLoginRefused matches (errors.Is) every grab the camera turned down for
 // its login: HTTP 401 or 403, or ffmpeg reporting either, and the grabs that
@@ -45,7 +53,13 @@ type LoginRefusedError struct {
 	Status   int  // 401 or 403
 	Skipped  bool // the camera wasn't asked: an earlier refusal's wait is running
 	Refusals int  // refusals in a row so far
-	msg      string
+	// Throttled: a Forced grab that wasn't asked because another Forced
+	// grab asked this login less than ForcedTryGap ago (Skipped is set too).
+	// TriedAgo is how long ago that was, RetryIn how long until a Forced
+	// grab asks again.
+	Throttled         bool
+	TriedAgo, RetryIn time.Duration
+	msg               string
 }
 
 func (e *LoginRefusedError) Error() string { return e.msg }
@@ -68,6 +82,11 @@ func loginWait(refusals int) time.Duration {
 	}
 	return loginWaits[refusals-1]
 }
+
+// ForcedTryGap is the least time between two Forced grabs that ask the
+// camera with a login it has turned down. A var so that tests in other
+// packages can shorten it.
+var ForcedTryGap = 10 * time.Second
 
 // forgetAfter drops a refusal nobody has asked about for this long, so the
 // map doesn't keep every password ever typed wrong.
@@ -95,6 +114,9 @@ type refusal struct {
 	last    time.Time // when the camera last refused
 	until   time.Time // ask again from then
 	probing bool      // a grab is asking the camera after the wait
+	// forced is when a Forced grab last asked the camera with this login
+	// (see ForcedTryGap).
+	forced time.Time
 }
 
 type gate struct {
@@ -157,6 +179,7 @@ type ticket struct {
 	login, path string
 	label       string
 	probing     []*refusal // entries this grab claimed the after-wait ask of
+	forced      bool       // a Forced grab: its refusal starts ForcedTryGap
 }
 
 // admit lets a grab of u's camera through, or returns the remembered
@@ -172,10 +195,32 @@ func (g *gate) admit(ctx context.Context, u *url.URL, headers http.Header, descr
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
-	t := &ticket{g: g, login: login, path: path, label: label}
+	t := &ticket{g: g, login: login, path: path, label: label, forced: forced}
+	if forced {
+		// A person asking goes through the wait, but not more often than
+		// once every ForcedTryGap for a login the camera has turned down:
+		// a press inside that gets the refusal back without a new try.
+		var known []*refusal
+		for _, id := range []string{login, path} {
+			r := g.byID[id]
+			if r == nil {
+				continue
+			}
+			if ago := now.Sub(r.forced); !r.forced.IsZero() && ago >= 0 && ago < ForcedTryGap {
+				return nil, &LoginRefusedError{Status: r.status, Skipped: true, Refusals: r.count,
+					Throttled: true, TriedAgo: ago, RetryIn: ForcedTryGap - ago,
+					msg: describe(r.status) + forcedNote(ago)}
+			}
+			known = append(known, r)
+		}
+		for _, r := range known {
+			r.forced = now
+		}
+		return t, nil
+	}
 	for _, id := range []string{login, path} {
 		r := g.byID[id]
-		if r == nil || forced {
+		if r == nil {
 			continue
 		}
 		// One grab at a time asks after the wait; the others carry on
@@ -198,6 +243,16 @@ func skippedNote(n int) string {
 		return " (not asked: the camera turned this login down a moment ago)"
 	}
 	return fmt.Sprintf(" (not asked: the camera turned this login down %d times in a row)", n)
+}
+
+// forcedNote ends the text of a Forced grab that wasn't asked. It never
+// says "refused": summaries read that as a connection refused.
+func forcedNote(ago time.Duration) string {
+	secs := int(ago / time.Second)
+	if secs < 1 {
+		return " (not asked: a Test asked the camera with this login a moment ago)"
+	}
+	return fmt.Sprintf(" (not asked: a Test asked the camera with this login %ds ago)", secs)
 }
 
 // refused records that the camera turned the login down with status (401
@@ -229,6 +284,9 @@ func (t *ticket) refused(status int, msg string) error {
 	}
 	r.status, r.last = status, now
 	r.until = now.Add(loginWait(r.count))
+	if t.forced {
+		r.forced = now
+	}
 	for id, old := range g.byID {
 		if now.Sub(old.last) > forgetAfter && !old.probing {
 			delete(g.byID, id)

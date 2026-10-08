@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/fakeclock"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/source"
 )
@@ -40,7 +41,7 @@ type seqSource struct {
 	frames   []image.Image
 	failErr  error
 	grabs    int
-	clock    *fakeClock
+	clock    *pixelClock
 	grabTook time.Duration
 }
 
@@ -50,7 +51,7 @@ func (s *seqSource) Grab(ctx context.Context) (image.Image, error) {
 	i := s.grabs
 	s.grabs++
 	if s.clock != nil {
-		s.clock.advance(s.grabTook)
+		s.clock.Add(s.grabTook)
 	}
 	if i >= len(s.frames) {
 		i = len(s.frames) - 1
@@ -61,30 +62,27 @@ func (s *seqSource) Grab(ctx context.Context) (image.Image, error) {
 	return s.frames[i], nil
 }
 
-type fakeClock struct {
+// pixelClock is the pixel_change Test's clock in a test: it moves only
+// when a grab takes time (seqSource.grabTook) or the Test waits, and it
+// records how long each wait asked for.
+type pixelClock struct {
+	*fakeclock.Clock
 	mu    sync.Mutex
-	now   time.Time
 	waits []time.Duration
-}
-
-func (c *fakeClock) advance(d time.Duration) {
-	c.mu.Lock()
-	c.now = c.now.Add(d)
-	c.mu.Unlock()
 }
 
 // useFakeClock makes the pixel_change Test's wait instant: it records how
 // long the Test asked to wait and moves the clock on by that much.
-func useFakeClock(t *testing.T) *fakeClock {
+func useFakeClock(t *testing.T) *pixelClock {
 	t.Helper()
-	c := &fakeClock{now: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	c := &pixelClock{Clock: fakeclock.New(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))}
 	oldNow, oldWait := pixelTestNow, pixelTestWait
-	pixelTestNow = func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+	pixelTestNow = c.Now
 	pixelTestWait = func(ctx context.Context, d time.Duration) error {
 		c.mu.Lock()
 		c.waits = append(c.waits, d)
 		c.mu.Unlock()
-		c.advance(d)
+		c.Add(d)
 		return nil
 	}
 	t.Cleanup(func() { pixelTestNow, pixelTestWait = oldNow, oldWait })

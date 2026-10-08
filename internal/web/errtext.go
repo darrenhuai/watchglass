@@ -134,7 +134,7 @@ func errHint(msg string) string {
 				scheme = strings.ToLower(u.Scheme)
 				if source.LoginInURL(u) {
 					if _, waiting := loginRetry(msg); waiting {
-						return "watchglass waits between tries so that repeated wrong tries don't lock the account. Check the user and password in the source URL. Pressing Test this region asks the camera at once, and a refused try starts the wait again."
+						return "watchglass waits between tries so that repeated wrong tries don't lock the account. Check the user and password in the source URL. Pressing Test this region asks the camera even during the wait, at most once every " + waitText(source.ForcedTryGap) + ", and a refused try starts the wait again."
 					}
 					return "Check the user and password in the source URL. Some cameras lock the account for a while after a few wrong tries."
 				}
@@ -153,6 +153,67 @@ func errHint(msg string) string {
 		return "watchglass runs in a container here, and 127.0.0.1 is the container itself. Use the camera host's LAN IP, or host.docker.internal for a camera on the Docker host."
 	}
 	return "If watchglass runs in Docker or WSL, 127.0.0.1 is that container, not your computer. Use the host's LAN IP or host.docker.internal."
+}
+
+// testGrabText is the summary line /test answers with when its grab
+// failed (grabError's first line). A login the camera turned down gets
+// words about the press that was just made rather than errHint's, which
+// is written for the snapshot and the watch's page and says what pressing
+// Test does: this Test asked the camera just now, or, inside
+// source.ForcedTryGap of the last Test, didn't ask it at all.
+func testGrabText(err error) string {
+	msg := err.Error()
+	var lre *source.LoginRefusedError
+	if errors.As(err, &lre) {
+		sum := strings.TrimSuffix(summarizeErr(msg), ".") + "."
+		switch {
+		case lre.Throttled:
+			// Only the Test's own clock: the poll loop's "Trying again
+			// in" is a different wait that often shows the same number.
+			ago := "a moment ago"
+			if lre.TriedAgo >= time.Second {
+				ago = waitText(lre.TriedAgo-lre.TriedAgo%time.Second) + " ago"
+			}
+			who := "The camera"
+			if host := errHost(msg); host != "" {
+				who = host
+			}
+			return who + " turned down the login. This Test didn't ask the camera: a Test asked it " + ago +
+				", and Test waits " + waitText(source.ForcedTryGap) +
+				" between tries so it can't lock the account. Press it again in " + waitText(lre.RetryIn) + "."
+		case loginInMsgURL(msg):
+			return sum + " This Test asked the camera just now. Check the user and password in the source URL; between its own tries the watch waits, so that wrong tries don't lock the account."
+		}
+	}
+	return withHint(summarizeErr(msg), msg)
+}
+
+// waitText words a short wait the way loginRetry does: "7s", "2m", "1m 40s".
+// A part of a second counts as a whole one.
+func waitText(d time.Duration) string {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	switch m, s := secs/60, secs%60; {
+	case m == 0:
+		return fmt.Sprintf("%ds", s)
+	case s == 0:
+		return fmt.Sprintf("%dm", m)
+	default:
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+}
+
+// loginInMsgURL reports whether the first URL in msg carries a login
+// (masked or not): credentials were sent, so the camera refused them.
+func loginInMsgURL(msg string) bool {
+	raw := errURLRe.FindString(msg)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(strings.TrimRight(raw, `.,;:)"`))
+	return err == nil && source.LoginInURL(u)
 }
 
 // loginRefused reports a camera that answered 401 or 403: an http source's

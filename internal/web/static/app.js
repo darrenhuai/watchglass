@@ -921,14 +921,19 @@
   form.addEventListener("change", testFieldChanged);
   // Test this region. A read takes a few seconds (rapidocr starts cold on
   // every read), so while it runs the button says so and turns a ring,
-  // a second press does nothing, and the result area holds a placeholder
-  // the size of the crop to come (or, when a result is already there,
-  // dims it: nothing jumps). The button stays focusable (aria-busy, not
-  // disabled: disabling the focused button would drop focus on <body>),
-  // and #test-result is aria-busy meanwhile, so a screen reader hears the
+  // is disabled (a click, Enter, Space or a screen reader's activate can't
+  // start a second test, and assistive tech hears it as unavailable and
+  // busy), and the result area holds a placeholder the size of the crop
+  // to come (or, when a result is already there, dims it: nothing jumps).
+  // Disabling the focused button drops focus on <body>, so when the test
+  // ends, whatever the outcome (a result, an error, the 503 of a full
+  // frame cap, no answer, or a page restored from the back/forward cache
+  // mid-test), the button comes back enabled and gets focus back if it had
+  // it and nothing else has taken it since: a second Test is one keypress
+  // away. #test-result is aria-busy meanwhile, so a screen reader hears the
   // result once, when it lands. manualGate runs first: a bad manual
   // region value is pointed at instead of testing the last good one.
-  var testing = false, testLabel = testBtn.textContent, testSlowTimer = 0;
+  var testing = false, testLabel = testBtn.textContent, testSlowTimer = 0, testHadFocus = false;
   var SUBPROCESS_ENGINES = { tesseract: 1, rapidocr: 1 };
   function testEngine() {
     if (form.elements["ttype"] && form.elements["ttype"].value === "pixel_change") return "";
@@ -1006,8 +1011,17 @@
   function setTesting(on) {
     testing = on;
     testBtn.textContent = on ? (testEngine() === "" ? "Comparing…" : "Testing…") : testLabel;
-    if (on) testBtn.setAttribute("aria-busy", "true");
-    else testBtn.removeAttribute("aria-busy");
+    if (on) {
+      testHadFocus = document.activeElement === testBtn;
+      testBtn.setAttribute("aria-busy", "true");
+      testBtn.disabled = true;
+    } else {
+      testBtn.removeAttribute("aria-busy");
+      testBtn.disabled = retired; // a deleted watch keeps Test off (retire)
+      var lost = !document.activeElement || document.activeElement === document.body;
+      if (testHadFocus && lost && !retired) testBtn.focus({ preventScroll: true });
+      testHadFocus = false;
+    }
     testBox.setAttribute("aria-busy", on ? "true" : "false");
     if (on) {
       if (!testBox.firstElementChild) testPending();
@@ -1051,10 +1065,10 @@
 
   // Send test notification. Posts the Notify box as it is now, saved or
   // not, to /test-notify; the answer (notifytest.html: one row per line,
-  // sent or why not) lands in #notify-result. Nothing is saved. As with
-  // Test, the button stays focusable while it works (aria-busy, not
-  // disabled) and a second press does nothing; it is disabled only while
-  // the box is empty, when there is nothing to send to.
+  // sent or why not) lands in #notify-result. Nothing is saved. The
+  // button stays focusable while it works (aria-busy, not disabled) and a
+  // second press does nothing; it is disabled only while the box is
+  // empty, when there is nothing to send to.
   var notifyBox = form.elements["notify"];
   var notifyBtn = document.getElementById("notify-test");
   var notifyResult = document.getElementById("notify-result");

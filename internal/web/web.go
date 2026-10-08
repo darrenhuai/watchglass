@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"image"
 	"image/png"
 	"math"
 	"net/http"
@@ -507,14 +508,17 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 
 // deliveryView is what the page says about a watch's alerts. State is
 // "failed" (the last alert didn't get through; it stays until one does),
-// "sending", "sent", "none" (no notify URLs, so fires only show here) or
-// "" (nothing sent yet).
+// "sending", "sent", "none" (no notify URLs, so fires only show here),
+// "restored" (nothing sent since watchglass started, but the history
+// database knows the last fire from before and whether its alert went
+// out: Sent) or "" (nothing sent yet).
 type deliveryView struct {
 	State string
 	At    time.Time // when the alert it describes was raised
 	Kind  string    // "fired", "down" or "recovered"
 	Text  string    // "failed": what went wrong, in sentences (deliveryText)
 	MQTT  bool      // "none": fires still go out over MQTT
+	Sent  bool      // "restored": the alert went out
 	// firedTag is the suffix for the newest reading's fired tag.
 	firedTag string
 }
@@ -529,6 +533,17 @@ func (d deliveryView) KindNote() string {
 		return " (stream recovered)"
 	}
 	return ""
+}
+
+// AtText is At as the page first shows it, in the server's zone: the
+// time, with the date in front when it isn't today (app.js's localizeTimes
+// says the same in the viewer's zone).
+func (d deliveryView) AtText() string {
+	now := time.Now()
+	if y, m, dd := d.At.Date(); y == now.Year() && m == now.Month() && dd == now.Day() {
+		return d.At.Format("15:04:05")
+	}
+	return d.At.Format("Jan 2, 15:04:05")
 }
 
 // Sentence is the failure as one line for a title attribute, the time in
@@ -557,6 +572,12 @@ func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) del
 		v = deliveryView{State: "sending", At: sendingAt, Kind: "fired"}
 	case done && d.OK:
 		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind}
+	default:
+		// Nothing raised since watchglass started: the fire before the
+		// restart, from the saved trigger state.
+		if rf, ok := s.reg.RestoredFire(wc.Name); ok {
+			v = deliveryView{State: "restored", At: rf.TS, Kind: "fired", Sent: rf.Sent}
+		}
 	}
 	if has && latest.Fired {
 		switch {
@@ -583,6 +604,12 @@ func sourceError(w http.ResponseWriter, err error) {
 
 func grabError(w http.ResponseWriter, err error) {
 	http.Error(w, withHint(summarizeErr(err.Error()), err.Error())+"\n"+err.Error(), http.StatusBadGateway)
+}
+
+// testGrabError is grabError for Test this region: the person has just
+// pressed it, so a refused login is worded for that press (testGrabText).
+func testGrabError(w http.ResponseWriter, err error) {
+	http.Error(w, testGrabText(err)+"\n"+err.Error(), http.StatusBadGateway)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -647,7 +674,9 @@ const flashCookie = "wg_flash"
 // Each part is escaped on its own before they are joined, so a watch name
 // (or a reason) holding '|' can't spill into the next field.
 // The cookie's Path is the request's prefix, so through an ingress proxy
-// it is scoped to the add-on's own path on Home Assistant's origin.
+// it is scoped to the add-on's own path on Home Assistant's origin. It is
+// Secure when the browser came over https (secureRequest): a Secure cookie
+// on a plain-http page would never come back, and the flash would vanish.
 func (s *Server) setFlash(w http.ResponseWriter, r *http.Request, kind, subject, reason string) {
 	v := kind + "|" + url.QueryEscape(subject)
 	if reason != "" {
@@ -662,8 +691,27 @@ func (s *Server) setFlash(w http.ResponseWriter, r *http.Request, kind, subject,
 		Path:     s.base(r) + "/",
 		MaxAge:   60,
 		HttpOnly: true,
+		Secure:   secureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// secureRequest reports whether the browser reached watchglass over https:
+// a TLS connection, or an ingress request whose X-Forwarded-Proto says
+// https. Home Assistant sets that header on every ingress request (the
+// one it was sent, else its own scheme; homeassistant/components/hassio/
+// ingress.py) and the Supervisor passes it on. From any other peer it is a
+// header anyone can send, so it counts for ingress requests only. A list
+// ("https, http") is read by its first entry, the browser's side.
+func secureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !isIngress(r) {
+		return false
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
 // takeFlash reads and clears the confirmation. It must run before the
@@ -673,7 +721,8 @@ func (s *Server) takeFlash(w http.ResponseWriter, r *http.Request) *flash {
 	if err != nil {
 		return nil
 	}
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: s.base(r) + "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: s.base(r) + "/", MaxAge: -1, HttpOnly: true,
+		Secure: secureRequest(r), SameSite: http.SameSiteLaxMode})
 	v, err := url.QueryUnescape(c.Value)
 	if err != nil {
 		return nil
@@ -1067,6 +1116,12 @@ func parseRegion(r *http.Request) (config.Region, error) {
 	return reg, nil
 }
 
+// regionTooSmallText is Test's 400 for a region that covers no whole pixel
+// of frame (only reachable by posting fractions the stage can't draw).
+func regionTooSmallText(frame image.Rectangle) string {
+	return fmt.Sprintf("The region is smaller than one pixel of the %d×%d frame. Drag a bigger box.", frame.Dx(), frame.Dy())
+}
+
 // errRotate is parsePreprocess's refusal of a pp_rotate that isn't one of
 // the Rotate select's four values (the caller adds the capital and the
 // full stop).
@@ -1237,11 +1292,20 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
 	defer cancelGrab()
-	// A person asking: tried even while a refused login is waiting.
+	// A person asking: tried even while a refused login is waiting (at
+	// most once every source.ForcedTryGap).
 	img, err := src.Grab(source.Forced(grabCtx))
 	cancelGrab()
 	if err != nil {
-		grabError(w, err)
+		testGrabError(w, err)
+		return
+	}
+	// The fractions are checked in parseRegion, but only the frame says
+	// how many pixels they cover: a box that rounds to no pixel at all
+	// has nothing to read or show (png.Encode refuses an empty image).
+	crop, frame := imgproc.Crop(img, region), img.Bounds()
+	if crop.Bounds().Empty() {
+		http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
 		return
 	}
 	// pixel_change reads no text: its Test grabs a second frame and
@@ -1250,7 +1314,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	// before.) It gets the crop and the frame's size, not the frame: the
 	// frame is dropped here, before the wait between the two grabs.
 	if r.FormValue("ttype") == "pixel_change" {
-		s.testPixelChange(w, r, wc, src, imgproc.Crop(img, region), img.Bounds(), region)
+		s.testPixelChange(w, r, wc, src, crop, frame, region)
 		return
 	}
 	// pixel_change compares the crop as the camera sends it, so its Test
@@ -1267,7 +1331,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	if ttype == "pixel_change" {
 		prep.Rotate = 0
 	}
-	prepped := imgproc.Apply(imgproc.Crop(img, region), prep)
+	prepped := imgproc.Apply(crop, prep)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, prepped); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1755,7 +1819,17 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	restartErr := s.sup.Restart(s.RunCtx, canonical)
+	// Restart, with the old crops dropped in between when the save changes
+	// what the watch reads: kept, a strip of upright crops would sit beside
+	// the first turned one (or a crop of the old region beside the new)
+	// until enough readings pushed them out. Between Stop and Start, so no
+	// reading of the old run lands after the drop and no reading of the new
+	// one before it.
+	s.sup.Stop(name)
+	if readsDifferently(base, canonical) {
+		s.reg.DropSamples(name)
+	}
+	restartErr := s.sup.Start(s.RunCtx, canonical)
 	// A delivery failure was about the URLs the watch had; new ones haven't
 	// been tried, so "alerts failing" would now be a claim about the wrong
 	// list. (Send test notification tries them without waiting for a fire.)
@@ -1786,6 +1860,44 @@ func (s *Server) save(w http.ResponseWriter, r *http.Request) {
 	s.notifyConfigChanged()
 	s.setFlash(w, r, "saved", time.Now().UTC().Format(time.RFC3339), "")
 	http.Redirect(w, r, watchURL(s.base(r), name, ""), http.StatusSeeOther)
+}
+
+// readsDifferently reports whether b's crops are a different picture from
+// a's, or read another way: another region, another camera (the login
+// aside, as runner.Fingerprint has it), another turn or preparation of the
+// crop (preprocess as imgproc.Apply reads it), another engine or another
+// trigger type. pixel_change compares the crop as the camera sends it and
+// reads neither engine nor preprocess, so between two pixel_change
+// watches only the region and the camera count.
+func readsDifferently(a, b config.Watch) bool {
+	camera := func(w config.Watch) string {
+		if u, err := url.Parse(w.Source); err == nil && source.StripLogin(u) {
+			return u.String()
+		}
+		return w.Source
+	}
+	prep := func(p config.Preprocess) config.Preprocess {
+		if p.Upscale < 2 {
+			p.Upscale = 0
+		}
+		if p.Threshold > 0 {
+			p.Grayscale = false
+		}
+		return p
+	}
+	engine := func(w config.Watch) string {
+		if w.Engine == "" {
+			return "tesseract"
+		}
+		return w.Engine
+	}
+	if a.Region != b.Region || camera(a) != camera(b) || a.Trigger.Type != b.Trigger.Type {
+		return true
+	}
+	if a.Trigger.Type == "pixel_change" {
+		return false
+	}
+	return prep(a.Preprocess) != prep(b.Preprocess) || engine(a) != engine(b)
 }
 
 // blockedTrigger says why the submitted trigger can't run on this box: a

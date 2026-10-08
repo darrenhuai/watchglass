@@ -34,7 +34,7 @@ Alerts sent to ntfy carry the cropped image of the region that fired, so the pus
   - a Slack webhook link becomes `slack://hook:<TOKEN>@webhook`
   - any other `http(s)://` address becomes `generic+http(s)://…?template=json`
   - an email address explains the `smtp://` form, and a malformed Telegram token says what a BotFather token looks like
-- **Delivery status.** After an alert, the watch's Live panel says "Last alert sent at …" or why it couldn't be delivered, and the watch list marks the watch "alerts failing" until a later alert gets through. The error names the line and the service, never the token. The delivery line lasts until watchglass restarts; after that the list still says when the watch last fired.
+- **Delivery status.** After an alert, the watch's Live panel says "Last alert sent at …" or why it couldn't be delivered, and the watch list marks the watch "alerts failing" until a later alert gets through. The error names the line and the service, never the token. After a restart, until the watch alerts again, the line says when it last fired and whether that alert went out, "before watchglass restarted".
 
 ## What an alert looks like
 

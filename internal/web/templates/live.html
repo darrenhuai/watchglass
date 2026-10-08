@@ -13,10 +13,10 @@
      didn't get through. */}}
 <div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}" data-delivery="{{.Delivery.State}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
 {{if eq .Status.State "error"}}
-{{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale — last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
+{{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale: last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
 {{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
 {{else if eq .Status.State "stopped"}}
-<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}} — readings below are from before it stopped{{end}}</p>
+<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}}. The readings below are from before it stopped{{end}}</p>
 {{end}}
 {{if .Recent}}
 {{$latest := index .Recent 0}}{{$r := reading .Engine $latest.Reading}}
@@ -39,10 +39,13 @@
 {{end}}
 {{/* Whether alerts are getting out (deliveryFor in web.go). A failure
      stays until a later alert goes through or the URLs are changed; the
-     error names each URL by scheme://host only. */}}
+     error names each URL by scheme://host only. After a restart, until
+     the watch raises an alert, the line is about the fire before it
+     ("restored", from the history database). */}}
 {{with .Delivery}}{{if eq .State "failed"}}<p class="delivery delivery-failed">Last alert{{.KindNote}} at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time> could not be delivered: {{.Text}} Use <a href="#notify-test">Send test notification</a> to check the URL.</p>
 {{else if eq .State "sending"}}<p class="delivery delivery-sending">Sending the alert from <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>…</p>
 {{else if eq .State "sent"}}<p class="delivery delivery-sent"><span class="delivery-mark" aria-hidden="true">✓</span>Last alert{{.KindNote}} sent at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>.</p>
+{{else if eq .State "restored"}}<p class="delivery delivery-restored">{{if .Sent}}<span class="delivery-mark" aria-hidden="true">✓</span>Last alert sent at <time class="mono" datetime="{{isoTime .At}}">{{.AtText}}</time>, before watchglass restarted.{{else}}Last fired at <time class="mono" datetime="{{isoTime .At}}">{{.AtText}}</time>, before watchglass restarted. That alert may not have gone out, so it goes out again if the condition still holds.{{end}}</p>
 {{else if eq .State "none"}}<p class="delivery delivery-none">No notification URLs: fires are only shown here{{if .MQTT}} and sent to MQTT{{end}}. <a href="#f-notify">Add one under Notify</a>.</p>
 {{end}}{{end}}
 </div>

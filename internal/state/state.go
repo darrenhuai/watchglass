@@ -68,11 +68,25 @@ type Registry struct {
 	// samples, and with confirm/cooldown the fired sample is usually gone
 	// a few readings later; the dashboard still needs to say it happened.
 	fired map[string]time.Time
+	// live is the newest fire seen since watchglass started (Add), and
+	// restored what the history database said about the last fire before
+	// that (SeedRestored), until the watch fires again.
+	live     map[string]time.Time
+	restored map[string]Restored
+}
+
+// Restored is a watch's last fire from before watchglass started, as its
+// saved trigger state has it: when, and whether its alert went out (or
+// there was nowhere to send it).
+type Restored struct {
+	TS   time.Time
+	Sent bool
 }
 
 func New(n int) *Registry {
 	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}, fired: map[string]time.Time{},
-		delivery: map[string]Delivery{}, sending: map[string]time.Time{}}
+		delivery: map[string]Delivery{}, sending: map[string]time.Time{},
+		live: map[string]time.Time{}, restored: map[string]Restored{}}
 }
 
 func (r *Registry) Add(watch string, s Sample) {
@@ -86,6 +100,45 @@ func (r *Registry) Add(watch string, s Sample) {
 	if s.Fired && s.TS.After(r.fired[watch]) {
 		r.fired[watch] = s.TS
 	}
+	if s.Fired {
+		if s.TS.After(r.live[watch]) {
+			r.live[watch] = s.TS
+		}
+		delete(r.restored, watch)
+	}
+}
+
+// SeedRestored records what the saved trigger state says about watch's
+// last fire before watchglass started (the supervisor calls it on Start,
+// beside SeedFired), so the Live panel can still say when the last alert
+// went out after a restart. It is ignored when this run has already seen
+// that fire or a later one (a Save & restart restores the fire it just
+// saw), and forgotten once the watch fires again and on Drop.
+func (r *Registry) SeedRestored(watch string, ts time.Time, sent bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ts.IsZero() || !ts.After(r.live[watch]) {
+		return
+	}
+	r.restored[watch] = Restored{TS: ts, Sent: sent}
+}
+
+// RestoredFire returns what SeedRestored recorded, or false.
+func (r *Registry) RestoredFire(watch string) (Restored, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.restored[watch]
+	return d, ok
+}
+
+// DropSamples forgets a watch's recent readings and nothing else: a Save
+// that changes what the watch reads (its region, how the crop is turned
+// or prepared, its engine or type) makes the old crops a different
+// picture from the new ones.
+func (r *Registry) DropSamples(watch string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.buf, watch)
 }
 
 // SeedFired tells the registry when watch last fired before watchglass
@@ -142,6 +195,8 @@ func (r *Registry) Drop(watch string) {
 	delete(r.fired, watch)
 	delete(r.delivery, watch)
 	delete(r.sending, watch)
+	delete(r.live, watch)
+	delete(r.restored, watch)
 }
 
 // SetSending notes that the alert raised at ts has been handed to the
@@ -192,9 +247,11 @@ func (r *Registry) GetDelivery(watch string) (Delivery, bool) {
 	return d, ok
 }
 
-// ClearDelivery forgets a watch's delivery record. A save that changes the
-// notify URLs calls it: a failure to reach URLs that are no longer in the
-// list says nothing about the new ones.
+// ClearDelivery forgets a watch's delivery record. A save that changes
+// the notify URLs calls it: a failure to reach URLs that are no longer in
+// the list says nothing about the new ones. A restored record
+// (SeedRestored) stays: it is about a fire before the restart, which the
+// new list doesn't change, and the next Start would only seed it again.
 func (r *Registry) ClearDelivery(watch string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

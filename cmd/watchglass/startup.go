@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/demo"
+	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/ocr"
 	"github.com/darrenhuai/watchglass/internal/web"
 )
@@ -132,6 +133,20 @@ func permissionHint(err error) error {
 		return fmt.Errorf("%w (watchglass runs as uid %d, gid %d, which needs write access there)", err, uid, os.Getgid())
 	}
 	return err
+}
+
+// historyNote is the one start-up line about a history database that
+// can't keep everything, or "": one that can't be written at all (readings
+// aren't recorded either; nothing tries to, so there is no error per poll),
+// or one that can be written but can't take the trigger state table.
+func historyNote(store *history.Store) string {
+	if err := store.WriteErr(); err != nil {
+		return "history: the database can't be written, so readings aren't recorded and what each watch knows isn't kept across restarts (a restart can repeat an alert): " + permissionHint(err).Error()
+	}
+	if err := store.TriggerStateErr(); err != nil {
+		return "history: can't keep what each watch knows across restarts, so a restart can repeat an alert: " + permissionHint(err).Error()
+	}
+	return ""
 }
 
 // demoDirName is the folder under the temp dir that -demo keeps its

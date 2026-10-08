@@ -26,7 +26,7 @@ Open http://127.0.0.1:8080. Two demo watches fire about 20 seconds in; this clip
 - **Doesn't flap.** A reading has to hold for a few polls before it counts, a cooldown stops repeat pings, and a restart doesn't repeat an alert.
 - **Notifies anywhere.** ntfy (with the crop attached), Discord, Telegram, Slack, Pushover, email and webhooks.
 - **Home Assistant over MQTT.** Each watch shows up as a device; a number becomes a sensor HA can graph. The add-on opens from the sidebar.
-- **Tells you when the camera dies.** One "down" alert, one "back up" alert, no spam.
+- **Tells you when the camera dies.** One "down" alert, one "back up" alert, no spam, even across a restart. A wrong password backs off, so it won't keep the camera's account locked.
 - **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. 55 MB RAM, no GPU.
 
 No Docker? Unpack the [archive for your system](https://github.com/darrenhuai/watchglass/releases/latest) and run `watchglass -demo`. For the ping on your phone, subscribe to a topic of your own in the [ntfy app](https://ntfy.sh), paste `ntfy://ntfy.sh/<your-topic>` into a watch's Notify box and press **Send test notification**.
