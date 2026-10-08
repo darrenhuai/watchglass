@@ -42,6 +42,10 @@ const (
 	StateConnected  = "connected"
 	StateConnecting = "connecting"
 	StateDown       = "not connected"
+	// StateHAOffline is Publisher.Status's: the broker is connected, but
+	// Home Assistant said it went offline. Its error says so; a UI that
+	// doesn't know this state shows it like StateDown, with that reason.
+	StateHAOffline = "home assistant offline"
 )
 
 // ConnError is why the broker isn't connected: Reason in a few plain words
@@ -67,7 +71,25 @@ func (e *ConnError) Detail() string {
 	return strings.TrimSuffix(msg, ".")
 }
 
-var errPublishTimeout = errors.New("mqtt publish timed out")
+// subscriber is the part of a Client that reads retained messages back
+// from the broker, which is how the publisher finds discovery configs an
+// earlier run left behind (see Publisher.onRetainedConfig). pahoClient
+// has it; a Client without it skips that sweep.
+type subscriber interface {
+	// Subscribe asks the broker for filter and calls fn for every message
+	// it sends: the retained ones straight away (retained true), live ones
+	// as they are published (retained false).
+	Subscribe(filter string, fn func(topic string, payload []byte, retained bool)) error
+}
+
+var (
+	errPublishTimeout   = errors.New("mqtt publish timed out")
+	errSubscribeTimeout = errors.New("mqtt subscribe timed out")
+	errSubscribeRefused = errors.New("the broker refused the subscription (check the user's ACL)")
+)
+
+// subackFailure is the SUBACK return code for a refused subscription.
+const subackFailure = 0x80
 
 // connRetryEvery is the pause between failed attempts before the first
 // connect; maxReconnectEvery caps paho's backoff after a connection that
@@ -282,6 +304,28 @@ func (p *pahoClient) Publish(topic string, qos byte, retain bool, payload []byte
 		return errPublishTimeout
 	}
 	return tok.Error()
+}
+
+// Subscribe waits for the broker's answer like Publish does. A SUBACK of
+// 0x80 is the broker saying no (an ACL that only lets the user publish).
+func (p *pahoClient) Subscribe(filter string, fn func(topic string, payload []byte, retained bool)) error {
+	tok := p.c.Subscribe(filter, 1, func(_ mqtt.Client, m mqtt.Message) {
+		fn(m.Topic(), m.Payload(), m.Retained())
+	})
+	if !tok.WaitTimeout(5 * time.Second) {
+		return errSubscribeTimeout
+	}
+	if err := tok.Error(); err != nil {
+		return err
+	}
+	if st, ok := tok.(*mqtt.SubscribeToken); ok {
+		for _, code := range st.Result() {
+			if code == subackFailure {
+				return errSubscribeRefused
+			}
+		}
+	}
+	return nil
 }
 
 // Connected is paho's IsConnectionOpen: true only once the MQTT handshake

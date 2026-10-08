@@ -1,6 +1,6 @@
 # Home Assistant
 
-watchglass talks to Home Assistant over MQTT, using HA's [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery). Add an `mqtt:` block to `config.yaml` and every watch shows up in HA as a device, with nothing to configure on the HA side:
+watchglass talks to Home Assistant over MQTT, using HA's [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery). Add an `mqtt:` block to `config.yaml` and every watch shows up in HA as a device, with nothing to configure on the HA side. This page was last checked against Home Assistant 2026.10.0 with a Mosquitto broker.
 
 ```yaml
 mqtt:
@@ -13,6 +13,12 @@ With the Mosquitto broker add-on, the broker is `tcp://core-mosquitto:1883` from
 
 Optional keys: `client_id` (default `watchglass`), `base_topic` (default `watchglass`) and `discovery_prefix` (default `homeassistant`).
 
+Running more than one watchglass on one broker? Give each its own `client_id` and `base_topic`. Two with the same `client_id` keep knocking each other off the broker. Two with the same `base_topic` share one availability topic, so when either stops, HA shows both as unavailable, and a watch name used in both becomes one device they fight over. watchglass logs a warning when it sees another one on its `base_topic`, and leaves that one's devices alone.
+
+watchglass publishes its discovery configs under `homeassistant/` (your `discovery_prefix`) and reads there too: its own old discovery messages, so it can remove the devices of watches that are gone, and HA's status on `homeassistant/status`, so it knows when HA starts and stops. It keeps a list of its watches on `<base_topic>/.owners/<client_id>`, so another watchglass on the broker never takes them for leftovers. If your broker limits what each user may do, give the watchglass user read and write access to both `homeassistant/#` and `<base_topic>/#`. Without the read access everything else works, but a device can be left behind in HA after a watch is deleted or renamed.
+
+Changed `client_id`? The list under the old one stays on the broker. watchglass deletes it on start when it names any of the current watches. If every watch was renamed at the same time, it can't tell, and logs a warning about "another watchglass" on every start: delete the retained message on `<base_topic>/.owners/<old client_id>` yourself, for example with `mosquitto_pub -r -n -t <topic>`.
+
 Changes to the `mqtt:` block take effect after a restart. The broker password is stored in plain text, like every password in `config.yaml`; watchglass writes the file readable only by its owner on Linux and macOS.
 
 ## The entities
@@ -21,15 +27,19 @@ Each watch becomes a device named `watchglass <watch name>` with these entities:
 
 | Entity | Type | What it shows |
 |---|---|---|
-| Reading | sensor | The text read, once it has held (below). |
+| Reading | sensor | The text read, once it has held (below). HA keeps 255 characters, so a longer reading is cut and ends in `…`. |
 | Value | sensor | `numeric` watches only: the number, which HA can graph and keep statistics for. |
 | Health | binary sensor (connectivity) | Online while frames are read, offline once the watch counts as down. Online from the first frame read. |
 | Motion | binary sensor (motion) | On for 30 seconds each time the trigger fires. |
-| Snapshot | camera | The cropped region from the last fire. |
+| Snapshot | camera | The cropped region from the last fire, turned upright if the watch uses `rotate`. Empty until the watch first fires. |
 
-HA puts the device name in front, so the Value of a watch called `boiler` is "watchglass boiler Value".
+HA puts the device name in front, so the Value of a watch called `boiler` is "watchglass boiler Value", with the entity ID `sensor.watchglass_boiler_value`.
+
+![A watch's device page in Home Assistant: Health, Motion, Reading, Snapshot and Value](img/ha-device.png)
 
 State is published with the retain flag, so it survives an HA restart. watchglass announces its own availability with an MQTT last-will message, so its entities go unavailable if it stops. It only publishes changes.
+
+Delete a watch and its device goes from HA too. A watch renamed in `config.yaml` is a new device with new entity IDs, so automations that used the old ones need the new ones; the old device goes away when watchglass starts again. If HA is stopped or away from the broker at that moment, the device goes when HA is back, as long as watchglass is still running then. A device left behind anyway can be deleted from its page in HA.
 
 ### Readings that don't flap
 
@@ -73,7 +83,7 @@ When a watch stops being numeric, watchglass sends an empty config for its Value
 
 ## Is it connected?
 
-With an `mqtt:` block, the top of every page says **Home Assistant: connected**, **connecting…**, or **not connected** with the reason: connection refused, wrong username or password, no answer, certificate not trusted and so on. Hover over it for the broker address and the raw error. The log says the same, at most once a minute:
+With an `mqtt:` block, the top of every page says **Home Assistant: connected**, **connecting…**, or **not connected** with the reason: connection refused, wrong username or password, no answer, certificate not trusted and so on. Hover over it for the broker address and the raw error. Connected means watchglass is connected to the broker and HA hasn't said it's offline. When HA stops, it says so over MQTT, and the line reads **not connected: it went offline; the MQTT broker is up** until HA is back. HA doesn't leave that message on the broker, so a watchglass started while HA is down says connected. The log says the same about the broker, at most once a minute:
 
 ```text
 mqtt: can't connect to tcp://homeassistant.local:1883: connection refused (retrying): …

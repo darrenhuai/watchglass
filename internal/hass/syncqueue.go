@@ -20,6 +20,10 @@ func (p *Publisher) syncWorker() {
 			p.Sync(w)
 		case <-p.connCh:
 			p.resync()
+		case <-p.strayCh:
+			p.sweepStrays()
+		case <-p.haCh:
+			p.haChanged()
 		case job := <-p.jobs:
 			job()
 		case <-p.quit:
