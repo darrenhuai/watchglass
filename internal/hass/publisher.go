@@ -10,9 +10,10 @@ import (
 // OnEvent publishes what one tick changed. The reading entity gets the
 // settled reading (trigger.Event.Settled: the same text for Confirm
 // readings in a row), never a raw frame, so OCR noise doesn't flip it
-// every tick; a numeric watch's value sensor gets its filtered number
-// (Event.Value). Both are retained and only published when they change
-// (setState). A fire adds the motion pulse and the retained snapshot crop.
+// every tick, cut to the 255 characters HA keeps (clipState); a numeric
+// watch's value sensor gets its filtered number (Event.Value). Both are
+// retained and only published when they change (setState). A fire adds
+// the motion pulse and the retained snapshot crop.
 // A reading also means the stream is up: the first one seeds the health
 // topic "online", since the stream's health only reports changes (down,
 // and up again) and HA's connectivity sensor would otherwise stay unknown
@@ -45,7 +46,7 @@ func (p *Publisher) OnEvent(watch string, ev trigger.Event, png []byte) {
 			p.setState(slug, "health", []byte("online"))
 		}
 		if ev.HasSettled {
-			p.setState(slug, "reading", []byte(ev.Settled))
+			p.setState(slug, "reading", []byte(clipState(ev.Settled)))
 		}
 		if ev.HasValue {
 			p.setState(slug, "value", []byte(strconv.FormatFloat(ev.Value, 'f', -1, 64)))
@@ -80,4 +81,20 @@ func (p *Publisher) OnHealth(watch string, hev health.Event) {
 		}
 		p.setState(slug, "health", []byte(payload))
 	})
+}
+
+// maxStateLen is the longest state Home Assistant keeps, in characters. A
+// longer one is refused with a warning in HA's log, and the sensor goes
+// to unknown instead of showing anything.
+const maxStateLen = 255
+
+// clipState fits a reading into maxStateLen: a longer one (a whole page
+// read by rapidocr, say) keeps its start and ends in "…" so it is plain
+// that there was more.
+func clipState(s string) string {
+	r := []rune(s)
+	if len(r) <= maxStateLen {
+		return s
+	}
+	return string(r[:maxStateLen-1]) + "…"
 }
