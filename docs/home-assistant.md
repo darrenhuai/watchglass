@@ -93,6 +93,10 @@ If the broker is down, watchglass keeps watching, retries at least every 15 seco
 
 ## The add-on
 
-The watchglass add-on runs the same image inside Home Assistant (amd64 and aarch64) and opens from the Home Assistant sidebar, behind Home Assistant's own login, with no port open on your network unless you map one. It's experimental, and the sidebar part was tested against a simulated Supervisor proxy rather than a live Home Assistant. See [addon/DOCS.md](../addon/DOCS.md) for how to install it, how to reach it directly if you want to, and what to watch out for.
+The watchglass add-on runs the same image inside Home Assistant (amd64 and aarch64) and opens from the Home Assistant sidebar, behind Home Assistant's own login, with no port open on your network unless you map one. With the Mosquitto broker add-on next to it, the `mqtt:` block above with `tcp://core-mosquitto:1883` and an HA user's login is all it needs.
+
+![The watchglass add-on open from the Home Assistant sidebar](img/addon-sidebar.png)
+
+It's experimental. It was checked on Home Assistant 2026.10.0 with Supervisor 2026.09.3 on amd64, in Home Assistant's add-on development container, but not yet on Home Assistant OS or a Raspberry Pi. See [addon/DOCS.md](../addon/DOCS.md) for how to install it, how to reach it directly if you want to, and what to watch out for.
 
 Entity names changed in 0.1.8, from "watchglass printer printer reading" to "watchglass printer Reading". The entity IDs didn't change, so automations keep working.

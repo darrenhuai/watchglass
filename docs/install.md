@@ -54,7 +54,7 @@ In a container the start-up line prints the address inside the container (`http:
 
 [![Add the watchglass add-on repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdarrenhuai%2Fwatchglass)
 
-Or add `https://github.com/darrenhuai/watchglass` under **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, then install **watchglass**. The add-on is experimental: it runs the same image on amd64 and aarch64 and opens from the Home Assistant sidebar (ingress), behind Home Assistant's login, with no port open on your network. If you want to reach the dashboard directly as well, [addon/DOCS.md](../addon/DOCS.md) says how to map the port and why to add a password first.
+Or add `https://github.com/darrenhuai/watchglass` under **Settings → Apps → Install app → ⋮ → Repositories → Add** (**Settings → Add-ons → Add-on Store → ⋮ → Repositories** on Home Assistant versions from before add-ons were renamed apps), then install **watchglass**, start it and turn on **Show in sidebar**. The add-on is experimental: it builds a small layer on the same image on amd64 and aarch64 and opens from the Home Assistant sidebar (ingress), behind Home Assistant's login, with no port open on your network. It was checked on Home Assistant 2026.10.0 with Supervisor 2026.09.3, not yet on Home Assistant OS or a Raspberry Pi. If you want to reach the dashboard directly as well, [addon/DOCS.md](../addon/DOCS.md) says how to map the port and why to add a password first.
 
 ## Binaries
 
