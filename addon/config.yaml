@@ -30,6 +30,9 @@ ports_description:
   8080/tcp: Web UI, for direct access without the sidebar (not needed for ingress)
 map:
   - addon_config:rw
-# The Supervisor pulls image:<version>, so version above must match a tag
-# the publish-image workflow has pushed (it tags each vX.Y.Z release).
-image: ghcr.io/darrenhuai/watchglass
+# No image: key, so the Supervisor builds Dockerfile in this folder on
+# install and update. It starts from ghcr.io/darrenhuai/watchglass:<version>,
+# so version above must match a tag the publish-image workflow has pushed
+# (it tags each vX.Y.Z release), and only adds run.sh: the published image
+# runs as the watchglass user, which can't write the root-owned config
+# folder the Supervisor mounts at /config.

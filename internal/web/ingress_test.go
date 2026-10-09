@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,11 +95,32 @@ func flashPath(resp *http.Response) string {
 	return "(no flash cookie)"
 }
 
+// supervisorToken builds a token shaped like the ones Supervisor
+// 2026.09.3 sends: 32 bytes as unpadded URL-safe base64, 43 characters.
+// The first byte encodes to "-" and the fourth to "_", so both characters
+// outside [A-Za-z0-9] are in it.
+func supervisorToken(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = byte(i*29 + 3)
+	}
+	b[0], b[3] = 0xfb, 0xff
+	tok := base64.RawURLEncoding.EncodeToString(b)
+	if len(tok) != 43 || !strings.Contains(tok, "-") || !strings.Contains(tok, "_") {
+		t.Fatalf("supervisorToken() = %q, want 43 characters with both - and _", tok)
+	}
+	return tok
+}
+
 func TestIngressPathShape(t *testing.T) {
 	valid := []string{
 		ingressPrefix,
 		"/api/hassio_ingress/abc",
 		"/api/hassio_ingress/A-Z_09",
+		// The shape a real Supervisor (2026.09.3) sent: 43 characters of
+		// URL-safe base64, "-" and "_" included.
+		"/api/hassio_ingress/" + supervisorToken(t),
 		"/api/hassio_ingress/" + strings.Repeat("f", ingressTokenMax),
 	}
 	for _, v := range valid {

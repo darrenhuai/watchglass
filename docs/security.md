@@ -57,7 +57,9 @@ The add-on opens inside Home Assistant: the Supervisor proxies `/api/hassio_ingr
 - With ingress mode off (the default everywhere but the add-on), the header does nothing, so a reverse proxy or a client can't steer links on an ordinary install.
 - Cross-site request protection keeps working through the proxy: the page and its forms share Home Assistant's origin, and the Supervisor passes the browser's `Origin`, `Host` and `Sec-Fetch-Site` headers through unchanged.
 
-This was tested against a simulated Supervisor proxy built from Home Assistant's source, not a live one; the add-on is experimental. Ingress is the Supervisor's own protocol, so there's no reason to turn it on anywhere else.
+This was checked on Home Assistant 2026.10.0 with Supervisor 2026.09.3: ingress requests arrived from `172.30.32.2` with an `X-Ingress-Path` of `/api/hassio_ingress/` and a 43-character token, the page's own form posts were accepted, a cross-site post through the same URL was refused, and a forged header from another container on the Supervisor's network was ignored. The add-on is still experimental. Ingress is the Supervisor's own protocol, so there's no reason to turn it on anywhere else.
+
+Inside the add-on, watchglass runs as the same unprivileged user as in the plain image. The add-on's start-up script runs as root only to give the config folder, which the Supervisor creates owned by root, to that user, and then starts watchglass as that user with no way to gain privileges back.
 
 ## Reporting a security problem
 

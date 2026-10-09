@@ -30,7 +30,8 @@ const IngressHeader = "X-Ingress-Path"
 // add-on's token.
 const ingressRoot = "/api/hassio_ingress/"
 
-// ingressTokenMax bounds the token: the Supervisor's is 64 hex characters.
+// ingressTokenMax bounds the token. Supervisor 2026.09.3 sends 43
+// characters of URL-safe base64 (letters, digits, "-" and "_").
 const ingressTokenMax = 128
 
 // ingressKey marks a request's context with its validated prefix.
