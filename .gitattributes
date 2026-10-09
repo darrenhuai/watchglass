@@ -6,3 +6,8 @@ internal/config/testdata/* text eol=lf
 # Windows builds embed the same bytes and those tests see the same text.
 internal/web/static/* text eol=lf
 internal/web/templates/* text eol=lf
+
+# The add-on's start script runs under /bin/sh inside the image: a CRLF checkout
+# (core.autocrlf=true on Windows) would break the build the Supervisor does.
+addon/run.sh text eol=lf
+addon/Dockerfile text eol=lf
