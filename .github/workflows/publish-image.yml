@@ -1,8 +1,8 @@
 name: publish-image
 # Builds and pushes the watchglass container image to GitHub Container
-# Registry (ghcr.io). The Home Assistant add-on (addon/config.yaml) pulls
-# this image at the tag matching its `version`, so cut the add-on version
-# together with the release tag.
+# Registry (ghcr.io). The Home Assistant add-on (addon/Dockerfile) builds
+# FROM this image at the tag matching addon/config.yaml's `version`, so cut
+# the add-on version together with the release tag.
 on:
   push:
     tags: ["v*"]

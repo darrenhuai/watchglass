@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -130,6 +131,13 @@ func TestAddonBuildsItsOwnImage(t *testing.T) {
 // /usr/local/bin/watchglass points at the fake, so a real install on the
 // test machine is never started.
 func TestAddonRunScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The script only ever runs under the image's /bin/sh. Git's sh on
+		// the Windows CI runner resolves the fake commands differently
+		// (the real id answered instead of the fake), so the Linux job is
+		// the one that exercises it.
+		t.Skip("addon/run.sh is exercised on Linux")
+	}
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh to run addon/run.sh with")
