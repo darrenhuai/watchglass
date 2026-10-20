@@ -17,9 +17,9 @@ Think changedetection.io, but for physical screens: self-hosted, one binary, not
 docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
 
-Open http://127.0.0.1:8080. The first run downloads the image (about 240 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds after it starts; this clip is that run:
+Open http://127.0.0.1:8080. The first run downloads the image (about 240 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds after it starts; this clip is that run, and its ntfy alerts go to a local test receiver:
 
-<img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server, the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
+<img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server (a local test receiver), the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
 
 - **Draw, test, save.** Drag a box over the live frame and see what it reads before you save. No YAML. A sideways display turns with one setting.
 - **Reads the screen.** Text (tesseract), seven-segment digits (built-in decoder, no ssocr) or pixel change.
@@ -68,11 +68,13 @@ Other services take the URL forms in [docs/notifications.md](docs/notifications.
 
 ## Screenshots
 
-![The watch list: three watches on the built-in demo cameras with their last readings and when each last fired, and Home Assistant: connected in the top bar](docs/img/dashboard.png)
+![The watch list: three watches on the built-in demo cameras, their last readings and when each fired, and Home Assistant: connected in the top bar](docs/img/dashboard.png)
 
-![A watch's detail page: a box drawn over PRINT COMPLETE on a printer screen, a Test result that reads PRINT COMPLETE at 96% confidence and says the condition is met, and the trigger settings beside it](docs/img/region-editor.png)
+![A watch's detail page: a box over PRINT COMPLETE on a printer screen, a Test result that reads it at 96% confidence and says the condition is met, and the trigger settings](docs/img/region-editor.png)
 
-![The built-in seven-segment reader on an LED scale display: Test reads 25.3, each digit at 100% confidence, and says 25.3 is above the threshold of 25](docs/img/sevenseg.png)
+![The seven-segment reader on an LED scale: Test reads 25.3, each digit at 100% confidence, above the threshold of 25](docs/img/sevenseg.png)
+
+![A pixel_change Test: PRINTING 94%, then PRINT COMPLETE 2 s later, so 84% of the region changed and it would fire](docs/img/pixel-change.png)
 
 ## Recipes
 
