@@ -316,18 +316,7 @@ func run(o options) error {
 		srv.Shutdown(shCtx)
 	}()
 	url := readyURL(o.listen, ln.Addr())
-	switch {
-	case o.ingress:
-		// The Supervisor reaches this address; people open the sidebar
-		// entry, whose links carry the ingress prefix.
-		log.Printf("watchglass %s ready on %s in ingress mode (open it from the Home Assistant sidebar; ingress requests are accepted from %s)", appVersion(), url, o.ingressFrom)
-	case o.basePath == "":
-		log.Printf("watchglass %s ready: open %s", appVersion(), url)
-	default:
-		// Behind a proxy that strips the prefix, every link on the page
-		// starts with basePath, which only resolves through the proxy.
-		log.Printf("watchglass %s ready on %s (links start with %s, so open it through your reverse proxy)", appVersion(), url, o.basePath)
-	}
+	logReady(log.Printf, o, url, cfg.Auth != nil, os.Getenv)
 	if o.openBrowser {
 		if err := openBrowser(url); err != nil {
 			log.Printf("couldn't open a browser (%v); open %s yourself", err, url)

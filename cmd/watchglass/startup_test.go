@@ -319,6 +319,106 @@ func TestReadyURLAndDialAddr(t *testing.T) {
 	}
 }
 
+// The README's Linux one-liner, typed into an SSH session on a Pi: the
+// ready line says http://127.0.0.1:8080/, which only opens on the Pi. The
+// next line says how to open it from the computer the person is at.
+func TestSSHHintOnALoopbackAddressOverSSH(t *testing.T) {
+	const conn = "192.168.1.31 52144 192.168.1.20 22"
+	got := sshHint("127.0.0.1:8080", "http://127.0.0.1:8080/", "config.yaml", false, conn, "pi")
+	for _, want := range []string{
+		"over SSH",
+		"http://127.0.0.1:8080/ only opens in a browser on this machine",
+		"ssh -L 8080:127.0.0.1:8080 pi@192.168.1.20",
+		"auth: block to config.yaml",
+		"-listen 0.0.0.0:8080",
+		// The release archives have no docs folder: a full link.
+		"(see https://github.com/darrenhuai/watchglass/blob/master/docs/security.md#reaching-it-from-other-machines)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sshHint = %q\nwant it to contain %q", got, want)
+		}
+	}
+	// The config already has an auth: block: only -listen is left to do.
+	got = sshHint("127.0.0.1:8080", "http://127.0.0.1:8080/", "config.yaml", true, conn, "pi")
+	if !strings.Contains(got, "ssh -L 8080:127.0.0.1:8080 pi@192.168.1.20") ||
+		!strings.Contains(got, "start watchglass with -listen 0.0.0.0:8080 (the auth: block in config.yaml already asks for a password") ||
+		strings.Contains(got, "add an auth: block") {
+		t.Errorf("sshHint with an auth: block = %q, want the port forward and -listen, not \"add an auth: block\"", got)
+	}
+	// The port actually bound, and no user when $USER is empty.
+	got = sshHint("localhost:0", "http://localhost:51234/", "config.yaml", false, conn, "")
+	if !strings.Contains(got, "ssh -L 51234:localhost:51234 192.168.1.20 ") {
+		t.Errorf("sshHint for a bound port = %q", got)
+	}
+	// The demo's config is rewritten on every start: only the port forward.
+	got = sshHint("127.0.0.1:8080", "http://127.0.0.1:8080/", "", false, conn, "pi")
+	if got == "" || strings.Contains(got, "auth:") || strings.Contains(got, "-listen") {
+		t.Errorf("sshHint in the demo = %q, want the port forward only", got)
+	}
+	// No SSH session, or an address other machines can already reach: no hint.
+	for _, c := range []struct{ listen, url, conn string }{
+		{"127.0.0.1:8080", "http://127.0.0.1:8080/", ""},
+		{"0.0.0.0:8080", "http://127.0.0.1:8080/", conn},
+		{"192.168.1.20:8080", "http://192.168.1.20:8080/", conn},
+	} {
+		if got := sshHint(c.listen, c.url, "config.yaml", false, c.conn, "pi"); got != "" {
+			t.Errorf("sshHint(%q, conn %q) = %q, want none", c.listen, c.conn, got)
+		}
+	}
+}
+
+// What run logs once it listens: the ready line, then the SSH hint built
+// from the environment, with the config file and auth: block the start
+// actually has.
+func TestLogReady(t *testing.T) {
+	env := map[string]string{"SSH_CONNECTION": "192.168.1.31 52144 192.168.1.20 22", "USER": "pi"}
+	noSSH := map[string]string{"USER": "pi"}
+	const url = "http://127.0.0.1:8080/"
+	plain := options{configPath: "/home/pi/config.yaml", listen: "127.0.0.1:8080"}
+	demoRun := plain
+	demoRun.demo = true
+	ingress := options{listen: "0.0.0.0:8080", ingress: true}
+	proxied := plain
+	proxied.basePath = "/watchglass"
+	for _, c := range []struct {
+		name    string
+		o       options
+		hasAuth bool
+		env     map[string]string
+		want    []string // one entry per logged line, each a substring
+		notWant string
+	}{
+		{"ssh, no auth", plain, false, env, []string{
+			"ready: open " + url,
+			"ssh -L 8080:127.0.0.1:8080 pi@192.168.1.20 and open http://127.0.0.1:8080/ there, or add an auth: block to /home/pi/config.yaml and start watchglass with -listen 0.0.0.0:8080"}, ""},
+		{"ssh, auth set", plain, true, env, []string{
+			"ready: open " + url,
+			"or start watchglass with -listen 0.0.0.0:8080 (the auth: block in /home/pi/config.yaml already asks for a password"}, "add an auth: block"},
+		{"ssh, demo", demoRun, false, env, []string{
+			"ready: open " + url,
+			"ssh -L 8080:127.0.0.1:8080 pi@192.168.1.20"}, "auth:"},
+		{"no ssh", plain, false, noSSH, []string{"ready: open " + url}, ""},
+		{"ingress", ingress, false, env, []string{"in ingress mode"}, ""},
+		{"base path", proxied, false, env, []string{"links start with /watchglass"}, ""},
+	} {
+		var lines []string
+		logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+		logReady(logf, c.o, url, c.hasAuth, func(k string) string { return c.env[k] })
+		if len(lines) != len(c.want) {
+			t.Errorf("%s: logged %d lines, want %d: %q", c.name, len(lines), len(c.want), lines)
+			continue
+		}
+		for i, w := range c.want {
+			if !strings.Contains(lines[i], w) {
+				t.Errorf("%s: line %d = %q\nwant it to contain %q", c.name, i, lines[i], w)
+			}
+		}
+		if c.notWant != "" && strings.Contains(strings.Join(lines, "\n"), c.notWant) {
+			t.Errorf("%s: logged %q, which should not say %q", c.name, lines, c.notWant)
+		}
+	}
+}
+
 // -healthcheck: any answer below 500 is healthy (a 401 from a server with
 // auth included); a 5xx or no answer is not.
 func TestHealthcheck(t *testing.T) {

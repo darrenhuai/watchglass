@@ -21,7 +21,9 @@ PUID=$(id -u) PGID=$(id -g) docker compose up -d
 
 Open http://127.0.0.1:8080 and add a watch.
 
-- **The image** is `ghcr.io/darrenhuai/watchglass`, built for linux/amd64, linux/arm64 and linux/arm/v7 (about 230 MB, 207 MB on arm/v7). It includes ffmpeg and tesseract. It doesn't include Python, so `engine: rapidocr` isn't available in it. `:latest` is the newest release, and every release also has its own tag (`:0.1.8`).
+This needs Docker's Compose plugin. If `docker compose version` says `unknown command` (and `docker compose up -d` complains about an unknown flag `-d`), install it: Ubuntu's own `docker.io` package leaves it out, so `sudo apt install docker-compose-v2`; Docker's own packages call it `docker-compose-plugin`.
+
+- **The image** is `ghcr.io/darrenhuai/watchglass`, built for linux/amd64, linux/arm64 and linux/arm/v7 (a 236 MB download on amd64, 230 MB on arm64 and 207 MB on arm/v7; about 610 MB once unpacked). It includes ffmpeg and tesseract. It doesn't include Python, so `engine: rapidocr` isn't available in it. `:latest` is the newest release, and every release also has its own tag (`:0.1.10`).
 - **Your files** live in `./config`: `config.yaml` and the history database `watchglass.db`. A missing `config.yaml` is created on first start, with no watches.
 - **PUID and PGID** make the container run as you, so it can write to `./config`. Without them it runs as uid 1000, which is fine if that's you. On a NAS (Synology, Unraid, TrueNAS) your uid is often something else, and you'd get a "permission denied" naming the uid it runs as.
 - **The port** is bound to `127.0.0.1` only. Before you change the `ports:` line to reach it from other machines, add an [`auth:` block](security.md).
@@ -77,7 +79,7 @@ On Linux, in one line:
 curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass
 ```
 
-On first run watchglass creates an empty `config.yaml` in the current folder, then logs a line like `watchglass 0.1.8 ready: open http://127.0.0.1:8080/`. Add `-demo` to try it on the built-in cameras first; the demo keeps its own config in the temp folder and never touches `config.yaml`.
+On first run watchglass creates an empty `config.yaml` in the current folder, then logs a line like `watchglass 0.1.10 ready: open http://127.0.0.1:8080/`. Add `-demo` to try it on the built-in cameras first; the demo keeps its own config in the temp folder and never touches `config.yaml`.
 
 **Windows.** Double-click `watchglass.exe`. It creates `config.yaml` next to itself and opens the web UI in your browser; closing its window stops it. Double-click it again while it runs and it just opens the browser. If Windows says "Windows protected your PC", that's because the exe isn't code-signed: click **More info → Run anyway**. From a terminal, stop it with Ctrl+C. Task Manager and `taskkill /F` end it without a clean shutdown (the history database and the MQTT "offline" message aren't closed properly).
 
@@ -101,7 +103,7 @@ watchglass looks for tesseract on PATH first. The Windows installer puts it in `
 engines: tesseract=C:\Program Files\Tesseract-OCR\tesseract.exe, sevenseg=built-in, rapidocr=not installed
 ```
 
-For rapidocr, watchglass tries `python3` and then `python`, and keeps the first that can import `rapidocr` and `onnxruntime`. `-python /path/to/venv/bin/python` picks one. Each read starts Python and loads the models (2-4 s on a desktop, more on a Pi), so give rapidocr watches an interval of 10 s or more.
+For rapidocr, watchglass tries `python3` and then `python`, and keeps the first that can import `rapidocr` and `onnxruntime`. `-python /path/to/venv/bin/python` picks one. Each read starts Python and loads the models (about 5 s on a desktop PC, more on a Pi), so give rapidocr watches an interval of 10 s or more.
 
 ## Run it as a service (systemd)
 

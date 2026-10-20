@@ -11,13 +11,13 @@ Think changedetection.io, but for physical screens: self-hosted, one binary, not
 ![Architectures](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)
 [![License](https://img.shields.io/github/license/darrenhuai/watchglass)](LICENSE)
 
-## Try it in 30 seconds (no camera needed)
+## Try it in a minute (no camera needed)
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
 
-Open http://127.0.0.1:8080. Two demo watches fire about 20 seconds in; this clip is that run:
+Open http://127.0.0.1:8080. The first run downloads the image (about 230 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds after it starts; this clip is that run:
 
 <img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server, the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
 
@@ -27,7 +27,7 @@ Open http://127.0.0.1:8080. Two demo watches fire about 20 seconds in; this clip
 - **Notifies anywhere.** ntfy (with the crop attached), Discord, Telegram, Slack, Pushover, email and webhooks.
 - **Home Assistant over MQTT.** Each watch shows up as a device; a number becomes a sensor HA can graph. The add-on opens from the sidebar.
 - **Tells you when the camera dies.** One "down" alert, one "back up" alert, no spam, even across a restart. A wrong password backs off, so it won't keep the camera's account locked.
-- **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. 55 MB RAM, no GPU.
+- **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. Under 40 MB of RAM, no GPU.
 
 No Docker? Unpack the [archive for your system](https://github.com/darrenhuai/watchglass/releases/latest) and run `watchglass -demo`. For the ping on your phone, subscribe to a topic of your own in the [ntfy app](https://ntfy.sh), paste `ntfy://ntfy.sh/<your-topic>` into a watch's Notify box and press **Send test notification**.
 
@@ -37,7 +37,7 @@ Tried Home Assistant's seven_segments/ssocr and gave up? Here you drag a box and
 
 > watchglass is v0.x: the config format may still change between minor versions.
 
-**Docker Compose.** The image includes ffmpeg and tesseract and runs on amd64, arm64 and armv7.
+**Docker Compose.** The image includes ffmpeg and tesseract and runs on amd64, arm64 and armv7. You need Docker's Compose plugin: if `docker compose version` says `unknown command`, install it (on Ubuntu's own `docker.io` package, `sudo apt install docker-compose-v2`).
 
 ```bash
 mkdir -p watchglass/config && cd watchglass
@@ -53,13 +53,13 @@ Open http://127.0.0.1:8080. Your config and history live in `./config`. The port
 curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass
 ```
 
-Or unpack the archive for your system from [Releases](https://github.com/darrenhuai/watchglass/releases/latest) and run `./watchglass`, or double-click `watchglass.exe`. The first run creates an empty `config.yaml` and gives you the address to open. Reading text needs tesseract (`sudo apt install tesseract-ocr`, `brew install tesseract`, `winget install UB-Mannheim.TesseractOCR`), and RTSP and webcams need ffmpeg. Seven-segment displays and snapshot URLs need nothing extra.
+Or unpack the archive for your system from [Releases](https://github.com/darrenhuai/watchglass/releases/latest) and run `./watchglass`, or double-click `watchglass.exe`. The first run creates an empty `config.yaml` in the folder you run it from and gives you the address to open. That address works on the same machine only; to open it from another one, add an [`auth:` block](docs/security.md#reaching-it-from-other-machines) and start it with `-listen 0.0.0.0:8080`. Reading text needs tesseract (`sudo apt install tesseract-ocr`, `brew install tesseract`, `winget install UB-Mannheim.TesseractOCR`), and RTSP and webcams need ffmpeg. Seven-segment displays and snapshot URLs need nothing extra.
 
 The Home Assistant add-on, `docker run`, systemd and building from source: [docs/install.md](docs/install.md).
 
 ## Your first watch
 
-1. Under **Add a watch**, enter a name and your camera's snapshot or RTSP URL. The [camera URL cookbook](docs/recipes/camera-urls.md) has them by brand, and shows how to watch your own screen.
+1. Under **Add your first watch**, enter a name and your camera's snapshot or RTSP URL. The [camera URL cookbook](docs/recipes/camera-urls.md) has them by brand, and shows how to watch your own screen.
 2. On the watch's page, drag a box over the part of the screen you care about and press **Test this region** to see what it reads.
 3. Pick a trigger: the **Status text**, **Digit display** and **Any change** presets cover most screens. For text, set a pattern such as `(?i)print complete`.
 4. Paste `ntfy://ntfy.sh/<pick-a-random-topic>` into Notify, press **Send test notification**, then **Save & restart watch**.
