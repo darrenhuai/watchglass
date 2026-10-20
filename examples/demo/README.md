@@ -65,11 +65,11 @@ real IP cameras that lie about their format.
 Terminal 2, watchglass:
 
 ```bash
-go run ./cmd/watchglass -config examples/demo/config.yaml -db demo.db -listen 127.0.0.1:8123
+go run ./cmd/watchglass -config examples/demo/printer.yaml -db demo.db -listen 127.0.0.1:8123
 ```
 
 Open http://127.0.0.1:8123/watch/demo-printer and watch the live readout
-change as the frames cycle. `config.yaml` uses an `ocr_match` trigger, so it
+change as the frames cycle. `printer.yaml` uses an `ocr_match` trigger, so it
 needs tesseract (`sudo apt install tesseract-ocr`, `brew install tesseract`
 or `winget install UB-Mannheim.TesseractOCR`), or `engine: rapidocr` with a
 Python that has `pip install rapidocr onnxruntime`. Without one of them the

@@ -650,14 +650,14 @@ func roundTrip(t *testing.T, yml string, mut func(*Config)) string {
 }
 
 func TestExampleConfigSavesUntouched(t *testing.T) {
-	raw, err := os.ReadFile("../../examples/config.yaml")
+	raw, err := os.ReadFile("../../examples/watchglass.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := writeTemp(t, string(raw))
 	saveOrFatal(t, p, loadOrFatal(t, p))
 	if after := readFile(t, p); after != string(raw) {
-		t.Errorf("no-op save changed examples/config.yaml:\n%s", after)
+		t.Errorf("no-op save changed examples/watchglass.yaml:\n%s", after)
 	}
 }
 

@@ -133,4 +133,4 @@ For sizing: a reading takes about 70 bytes with its indexes when the watch name 
 
 Save also checks what it writes: a notification URL that can't work, a unit Home Assistant won't take, or an engine that isn't installed is refused with the reason, and nothing is written. Hand edits to `config.yaml` take effect when watchglass restarts.
 
-[examples/config.yaml](../examples/config.yaml) is a commented example with one watch of each kind.
+[examples/watchglass.yaml](../examples/watchglass.yaml) is a commented example with one watch of each kind.

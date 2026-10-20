@@ -159,7 +159,7 @@ func TestDocsYAMLLoads(t *testing.T) {
 		t.Errorf("only %d whole configs found in the docs; the recipes should have more", whole)
 	}
 	// The example configs next to the docs, loaded exactly as -config does.
-	for _, p := range []string{"examples/config.yaml", "examples/demo/config.yaml", "examples/demo/config-sevenseg.yaml"} {
+	for _, p := range []string{"examples/watchglass.yaml", "examples/demo/printer.yaml", "examples/demo/config-sevenseg.yaml"} {
 		if _, err := config.Load(filepath.Join(root, p)); err != nil {
 			t.Errorf("%s: %v", p, err)
 		}

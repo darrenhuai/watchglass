@@ -1,5 +1,5 @@
 # watchglass demo rig config — watches the fake printer camera (fakecam.py).
-# Run: go run ./cmd/watchglass -config examples/demo/config.yaml -db demo.db -listen 127.0.0.1:8123
+# Run: go run ./cmd/watchglass -config examples/demo/printer.yaml -db demo.db -listen 127.0.0.1:8123
 # See examples/demo/README.md for the full two-terminal walkthrough. To try
 # watchglass without any of this, run `watchglass -demo` instead.
 watches:
