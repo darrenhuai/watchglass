@@ -69,6 +69,13 @@ jobs:
             exit 1
           fi
           echo "first start created config.yaml"
+      # The add-on as the Supervisor runs it: built from addon/ on the image
+      # above (tagged as the published image's "ci" version, which the
+      # registry doesn't have, so the build can't pull a stand-in), started
+      # as root with a root-owned /config. v0.1.9 and v0.1.10 failed this.
+      - name: Home Assistant add-on, started the way the Supervisor does
+        timeout-minutes: 5
+        run: bash .github/scripts/addon-supervisor-check.sh addon watchglass:ci
       - name: Demo mode in a container (no volume, no camera)
         run: |
           set -euo pipefail
