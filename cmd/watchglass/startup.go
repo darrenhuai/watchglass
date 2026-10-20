@@ -282,6 +282,75 @@ func readyURL(listen string, bound net.Addr) string {
 	return "http://" + dialAddr(listen, port) + "/"
 }
 
+// logReady logs the line that says where to open watchglass, and after it
+// sshHint's line when that applies. url is the ready URL, hasAuth whether
+// the config has an auth: block, getenv os.Getenv outside tests.
+func logReady(logf func(string, ...any), o options, url string, hasAuth bool, getenv func(string) string) {
+	switch {
+	case o.ingress:
+		// The Supervisor reaches this address; people open the sidebar
+		// entry, whose links carry the ingress prefix.
+		logf("watchglass %s ready on %s in ingress mode (open it from the Home Assistant sidebar; ingress requests are accepted from %s)", appVersion(), url, o.ingressFrom)
+	case o.basePath == "":
+		logf("watchglass %s ready: open %s", appVersion(), url)
+		// The demo's config is rewritten on every start, so an auth:
+		// block added to it would be gone on the next one.
+		configPath := o.configPath
+		if o.demo {
+			configPath = ""
+		}
+		if hint := sshHint(o.listen, url, configPath, hasAuth, getenv("SSH_CONNECTION"), getenv("USER")); hint != "" {
+			logf("%s", hint)
+		}
+	default:
+		// Behind a proxy that strips the prefix, every link on the page
+		// starts with basePath, which only resolves through the proxy.
+		logf("watchglass %s ready on %s (links start with %s, so open it through your reverse proxy)", appVersion(), url, o.basePath)
+	}
+}
+
+// securityDocURL is where the hint below sends people for the auth: block.
+// It is a full link because the release archives carry no docs folder.
+const securityDocURL = "https://github.com/darrenhuai/watchglass/blob/master/docs/security.md#reaching-it-from-other-machines"
+
+// sshHint is the line after "ready: open http://127.0.0.1:8080/" when
+// watchglass was started from an SSH session on a loopback address, the
+// usual first run on a Pi or a home server. That address only opens in a
+// browser on the machine itself, and the person reading it is at another
+// one, so the hint says how to get there: an SSH port forward (nothing to
+// change, no password needed), or -listen with an auth: block. sshConn is
+// $SSH_CONNECTION ("client-ip client-port server-ip server-port"); without
+// it there is no hint. url is the ready URL. configPath is the config file
+// an auth: block would go in, or "" for the demo, which then gets only the
+// port forward. hasAuth means that file already has an auth: block, so
+// -listen is all that is left to do. user ($USER) goes in front of the
+// address in the ssh command when it is known.
+func sshHint(listen, url, configPath string, hasAuth bool, sshConn, user string) string {
+	fields := strings.Fields(sshConn)
+	if len(fields) != 4 || !isLoopback(listen) {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(strings.TrimSuffix(strings.TrimPrefix(url, "http://"), "/"))
+	if err != nil {
+		return ""
+	}
+	server := fields[2]
+	if user != "" {
+		server = user + "@" + server
+	}
+	hint := fmt.Sprintf("you're connected over SSH, so %s only opens in a browser on this machine. "+
+		"To open it from your own computer, forward the port with ssh -L %s:%s %s and open http://127.0.0.1:%s/ there",
+		url, port, net.JoinHostPort(host, port), server, port)
+	switch {
+	case configPath == "":
+	case hasAuth:
+		hint += fmt.Sprintf(", or start watchglass with -listen 0.0.0.0:%s (the auth: block in %s already asks for a password; see %s)", port, configPath, securityDocURL)
+	default:
+		hint += fmt.Sprintf(", or add an auth: block to %s and start watchglass with -listen 0.0.0.0:%s (see %s)", configPath, port, securityDocURL)
+	}
+	return hint
+}
+
 // runHealthcheck is -healthcheck: exit status 0 when watchglass answers
 // on listen (probeWatchglass), 1 when it doesn't.
 func runHealthcheck(listen string) int {

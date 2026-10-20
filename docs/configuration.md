@@ -119,13 +119,13 @@ It's a geometry decoder, not a font model. It works out the polarity itself, so 
 
 ### rapidocr
 
-rapidocr runs the PaddleOCR PP-OCR models through the [RapidOCR](https://github.com/RapidAI/RapidOCR) Python package. watchglass doesn't link it: each read starts Python, hands it the crop and reads the text back, so the binary stays small and static and the engine stays optional. `pip install rapidocr` alone isn't enough; `onnxruntime` is what runs the models. Each read costs 2-4 s on a desktop and more on a Pi, so give these watches an `interval` of 10 s or more.
+rapidocr runs the PaddleOCR PP-OCR models through the [RapidOCR](https://github.com/RapidAI/RapidOCR) Python package. watchglass doesn't link it: each read starts Python, hands it the crop and reads the text back, so the binary stays small and static and the engine stays optional. `pip install rapidocr` alone isn't enough; `onnxruntime` is what runs the models. Each read costs about 5 s on a desktop PC and more on a Pi, so give these watches an `interval` of 10 s or more.
 
 ## History
 
 Every reading goes into a SQLite database (`-db`, default `watchglass.db`). `history_days` sets how long readings are kept: 30 days by default, or `-1` to keep everything. Old readings are pruned at start-up and then once a day. The same file keeps one small row per watch with what its trigger knows ([restarts](#triggers)); pruning leaves those alone, and a watch's row goes when the watch is deleted.
 
-For sizing: a reading takes about 189 bytes with its indexes, so a watch polling every 2 s writes about 8 MB a day, roughly 245 MB over the default 30 days. That scales with the interval (poll half as often, half the size) and with the number of watches, which matters on an SD card.
+For sizing: a reading takes about 70 bytes with its indexes when the watch name and the text read are short (a dozen characters each; longer ones take more), so a watch polling every 2 s writes about 3 MB a day, roughly 90 MB over the default 30 days. That scales with the interval (poll half as often, half the size) and with the number of watches, which matters on an SD card.
 
 ## Saving from the web UI keeps your file
 
