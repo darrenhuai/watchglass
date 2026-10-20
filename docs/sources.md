@@ -52,7 +52,7 @@ The watch's header then shows a "certificate not checked" chip. The setting only
 
 ## RTSP, webcams and other ffmpeg sources
 
-For these, watchglass starts ffmpeg once per poll, grabs a single frame and lets it exit. There is no decoder running between polls, which is why a watch costs almost nothing while it waits: the whole program stays under 40 MB of RAM with a watch polling a 640x360 snapshot every 2 seconds (a 31 MB working set on Windows, 34 to 37 MB in `docker stats`), and needs no GPU. The flip side is that each RTSP poll has to connect and wait for a keyframe, so give RTSP watches an interval of 10 s or more. A grab that takes longer than 20 seconds is stopped.
+For these, watchglass starts ffmpeg once per poll, grabs a single frame and lets it exit. There is no decoder running between polls, which is why a watch costs almost nothing while it waits: the watchglass process uses about 22 MB of RAM on Linux with a watch polling a 640x360 snapshot every 2 seconds (a 31 MB working set on Windows), and needs no GPU. `docker stats` can show 45 MB or more for the same container, because it also counts the files the container has read, tesseract and its language data among them. The flip side is that each RTSP poll has to connect and wait for a keyframe, so give RTSP watches an interval of 10 s or more. A grab that takes longer than 20 seconds is stopped.
 
 - RTSP always runs over TCP (`-rtsp_transport tcp`), so a busy Wi-Fi link doesn't drop half the frame.
 - `rtsps://` works where the camera offers it (UniFi Protect does).

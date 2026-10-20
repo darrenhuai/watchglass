@@ -17,8 +17,9 @@ the address to open:
   (`source: demo:sevenseg`) and fires when it goes above 25.
 
 Each camera plays a 40 second loop: five frames 4 seconds apart, then the
-last frame held for 20 seconds. Both watches fire about 20 seconds after
-the start, and again on every loop after their 30 s cooldown.
+last frame held for 20 seconds. Both watches fire about 25 seconds after
+the start (the held frame arrives at 20 s, then Confirm needs a reading or
+two), and again on every loop after their 30 s cooldown.
 
 The demo writes its own config and history to a `watchglass-demo` folder
 in the temp directory (`watchglass-demo-<uid>` on Linux and macOS, where

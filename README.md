@@ -17,7 +17,7 @@ Think changedetection.io, but for physical screens: self-hosted, one binary, not
 docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
 
-Open http://127.0.0.1:8080. The first run downloads the image (about 230 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds after it starts; this clip is that run:
+Open http://127.0.0.1:8080. The first run downloads the image (about 240 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds after it starts; this clip is that run:
 
 <img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server, the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
 
@@ -27,7 +27,7 @@ Open http://127.0.0.1:8080. The first run downloads the image (about 230 MB); af
 - **Notifies anywhere.** ntfy (with the crop attached), Discord, Telegram, Slack, Pushover, email and webhooks.
 - **Home Assistant over MQTT.** Each watch shows up as a device; a number becomes a sensor HA can graph. The add-on opens from the sidebar.
 - **Tells you when the camera dies.** One "down" alert, one "back up" alert, no spam, even across a restart. A wrong password backs off, so it won't keep the camera's account locked.
-- **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. Under 40 MB of RAM, no GPU.
+- **Runs on what you have.** Snapshot URLs, MJPEG and RTSP, webcams, your own screen. About 25 MB of RAM, no GPU.
 
 No Docker? Unpack the [archive for your system](https://github.com/darrenhuai/watchglass/releases/latest) and run `watchglass -demo`. For the ping on your phone, subscribe to a topic of your own in the [ntfy app](https://ntfy.sh), paste `ntfy://ntfy.sh/<your-topic>` into a watch's Notify box and press **Send test notification**.
 
