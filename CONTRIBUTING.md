@@ -70,15 +70,16 @@ The same test checks every relative link and `#anchor` in the docs, that no doc 
 - **Hide your machine.** The demo banner shows the demo's folder under the temp directory, so point `TMP` and `TEMP` (Windows) or `TMPDIR` at a neutral folder like `C:\Temp` first. For the stills, run a normal config whose watches use `source: demo:printer` and `demo:sevenseg`; without `-demo` there's no banner.
 - **Show a real notification.** Send the test notification and the fire to a local receiver, not a public ntfy topic. A few lines of Python's `http.server` that answer 200 to POST and PUT will do. To show a realistic URL like `ntfy+http://ntfy.lan/printer-done`, start watchglass with `HTTP_PROXY` pointing at the receiver: Go sends any non-loopback host through the proxy without resolving it.
 - **Script the browser.** A headless Edge or Chrome (Playwright works) in the dark colour scheme at 960x640, one screenshot per step: set the pattern, drag a new box (start the drag outside the existing box, or you'll resize it), Test this region, paste the notify URL, Send test notification, Save & restart watch, then wait for FIRED · SENT. Save has to land before the 20-second mark, or the fire happens on the held frame with no change on screen. Headless screenshots have no mouse pointer, so draw one in.
+- **Watch the two clocks.** The camera image and the Live reading refresh on their own timers, so either can show the new screen first. Wait until Live shows the same text as the image before you press Test, or the Test result won't match what's on screen. When you pick the frames for the end, go in time order: if the image flips first, show that, then the frame where both agree. Never show the image on PRINTING under a PRINT COMPLETE reading.
 - **Make the GIF with ffmpeg**, from the numbered frames, at 10 fps with a single palette:
 
   ```bash
-  ffmpeg -framerate 10 -i s%04d.png -vf palettegen=max_colors=256:stats_mode=full palette.png
+  ffmpeg -framerate 10 -i s%04d.png -vf palettegen=max_colors=192:stats_mode=full palette.png
   ffmpeg -framerate 10 -i s%04d.png -i palette.png -lavfi paletteuse=dither=none:diff_mode=rectangle -loop 0 demo.gif
   ```
 
-  Keep it under about 15 seconds and 500 KB. Held frames are duplicates, which the rectangle diff makes nearly free.
-- **Stills**: 1440 px wide in the dark theme, cropped to the content column, quantized to 256 colours. Update the alt text in the README to say what the new picture shows.
+  Keep it under about 15 seconds and 450 KB. Held frames are duplicates, which the rectangle diff makes nearly free. 192 colours look the same as 256 on this UI and save about 10 KB.
+- **Stills**: take them at 1440x900 in the dark theme, then crop to the content column plus 24 px each side (about 1160 px wide, so GitHub shows them at a readable scale) and quantize to 256 colours with no dither. Update the alt text in the README to say what the new picture shows.
 
 ## Roadmap
 
