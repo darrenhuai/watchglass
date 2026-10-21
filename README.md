@@ -74,8 +74,6 @@ Other services take the URL forms in [docs/notifications.md](docs/notifications.
 
 ![The seven-segment reader on an LED scale: Test reads 25.3, each digit at 100% confidence, above the threshold of 25](docs/img/sevenseg.png)
 
-![A pixel_change Test: PRINTING 94%, then PRINT COMPLETE 2 s later, so 84% of the region changed and it would fire](docs/img/pixel-change.png)
-
 ## Recipes
 
 Configs to copy; the newer ones are tested against a [sample frame](docs/recipes/samples/):
