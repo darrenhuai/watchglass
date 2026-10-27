@@ -1,7 +1,7 @@
 name: watchglass
 version: "0.1.11"
 slug: watchglass
-description: Watch a region of any camera or stream and get notified when its text or pixels change
+description: Point a camera at a screen with no API, read its digits or status text, and get an alert when they show what you're waiting for
 url: https://github.com/darrenhuai/watchglass
 # The Supervisor only permits aarch64 and amd64 add-ons. The image itself
 # is also published for linux/arm/v7, for the plain Docker route.

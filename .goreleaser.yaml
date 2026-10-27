@@ -44,23 +44,38 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     wrap_in_directory: true
     formats: [tar.gz]
+    # Every entry is owned by root (0:0), not by whoever ran the build (uid
+    # 1001 on GitHub's runners). Unpacked as root, a file owned by 1001
+    # belongs to whatever account has that uid on the machine, and that
+    # account could swap the binary before `install` copies it.
+    builds_info: &root
+      owner: root
+      group: root
+      mode: 0755
     files:
-      - LICENSE
-      - README.md
+      - src: LICENSE
+        info: &rootfile
+          owner: root
+          group: root
+          mode: 0644
+      - src: README.md
+        info: *rootfile
       # The systemd unit, at the top of the folder next to the binary.
       - src: examples/watchglass.service
         strip_parent: true
-        info:
-          mode: 0644
+        info: *rootfile
   - <<: *archive
     id: other
     ids: [other]
     format_overrides:
       - goos: windows
         formats: [zip]
+    builds_info: *root
     files:
-      - LICENSE
-      - README.md
+      - src: LICENSE
+        info: *rootfile
+      - src: README.md
+        info: *rootfile
 checksum:
   name_template: checksums.txt
 changelog:
@@ -102,7 +117,8 @@ release:
 
     Or download the archive for your system below, unpack it and run `watchglass -demo`.
     On Windows you can also double-click `watchglass.exe`: it creates an empty
-    `config.yaml` next to itself and opens the web UI. On Linux, in one line:
+    `config.yaml` next to itself and opens the web UI. On Linux, in one line
+    (it needs curl: `sudo apt install curl`):
 
     ```
     curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass -demo
