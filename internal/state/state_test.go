@@ -252,3 +252,37 @@ func TestSeedRestoredLastsUntilTheNextFire(t *testing.T) {
 		t.Error("DropSamples forgot when the watch fired")
 	}
 }
+
+// A crash shows, as the runner reports it, until the watch reads again.
+// The runner says when the run of crashes began (CrashError.First), so
+// the newest report is the whole truth, time included: a consumer that
+// crashes after every reading clears the crash with each Add and sets it
+// again, and the time it carries is still the first crash's.
+func TestCrashUntilTheNextReading(t *testing.T) {
+	r := New(5)
+	if _, ok := r.GetCrash("w"); ok {
+		t.Fatal("a new watch has a crash")
+	}
+	r.SetCrash("w", Crash{Message: "first", Since: time.Unix(10, 0)})
+	r.SetCrash("w", Crash{Message: "second", Since: time.Unix(20, 0)})
+	if c, ok := r.GetCrash("w"); !ok || c.Message != "second" || !c.Since.Equal(time.Unix(20, 0)) {
+		t.Errorf("crash = %+v, %v; want the newest report", c, ok)
+	}
+	r.Add("w", Sample{TS: time.Unix(30, 0), Reading: "1"})
+	if _, ok := r.GetCrash("w"); ok {
+		t.Error("a reading didn't clear the crash")
+	}
+	r.SetCrash("w", Crash{Message: "again", Since: time.Unix(40, 0)})
+	if c, _ := r.GetCrash("w"); !c.Since.Equal(time.Unix(40, 0)) || c.Message != "again" {
+		t.Errorf("a crash after a reading isn't the newest report: %+v", c)
+	}
+	r.ClearCrash("w")
+	if _, ok := r.GetCrash("w"); ok {
+		t.Error("ClearCrash kept it")
+	}
+	r.SetCrash("w", Crash{Message: "x", Since: time.Unix(50, 0)})
+	r.Drop("w")
+	if _, ok := r.GetCrash("w"); ok {
+		t.Error("Drop kept it")
+	}
+}

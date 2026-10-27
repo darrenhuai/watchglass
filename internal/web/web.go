@@ -30,6 +30,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/notify"
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/supervisor"
@@ -343,7 +344,7 @@ func agoText(d time.Duration) string {
 // genuinely healthy one in any of the three places.
 type watchStatus struct {
 	State   string // "running" | "stopped" | "error"
-	Message string // set only for "error": health.Event.Message
+	Message string // set only for "error": health.Event.Message, or a crash's (state.Crash)
 	Since   time.Time
 }
 
@@ -361,14 +362,25 @@ func (s *Server) isRunning(name string) bool {
 // all (e.g. config.yaml still lists it, but a "Save & restart" failed to
 // actually restart it — must_fix 1 case 1) always reads as "stopped",
 // regardless of any stale health verdict left over from before. A running
-// watch whose source has been failing reads as "error" (must_fix 1 case 2);
-// everything else reads as "running".
+// watch whose source has been failing reads as "error" (must_fix 1 case 2),
+// and so does one whose last frame crashed the reader (a contained panic,
+// state.Crash) until it reads again; everything else reads as "running".
 func (s *Server) statusFor(name string, running bool) watchStatus {
 	if !running {
 		return watchStatus{State: "stopped"}
 	}
+	c, crashed := s.reg.GetCrash(name)
 	if h, ok := s.reg.GetHealth(name); ok && h.Down {
-		return watchStatus{State: "error", Message: h.Message, Since: h.Since}
+		// A run of crashes that turned into down is one failure: it has
+		// been failing since the first crash, with no reading since.
+		since := h.Since
+		if crashed && c.Since.Before(since) {
+			since = c.Since
+		}
+		return watchStatus{State: "error", Message: h.Message, Since: since}
+	}
+	if crashed {
+		return watchStatus{State: "error", Message: c.Message, Since: c.Since}
 	}
 	return watchStatus{State: "running"}
 }
@@ -1182,6 +1194,10 @@ type testResult struct {
 	// Pixel is set for a pixel_change Test, which compares two frames:
 	// Crop is then the region in the first one.
 	Pixel *pixelTest
+	// Crashed: the Test panicked (testCrashed). Crop is then the region
+	// as the camera sent it, before any preprocessing, or empty when the
+	// panic came before there was a frame; Note says where it crashed.
+	Crashed bool
 }
 
 // pixelTest is the second half of a pixel_change Test: the region in the
@@ -1292,22 +1308,43 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
 	defer cancelGrab()
-	// A person asking: tried even while a refused login is waiting (at
-	// most once every source.ForcedTryGap).
-	img, err := src.Grab(source.Forced(grabCtx))
-	cancelGrab()
-	if err != nil {
-		testGrabError(w, err)
-		return
+	// A panic anywhere from here on (the source fetching the frame, the
+	// crop, the preprocessing, the engine, the trigger check) is a bug in
+	// watchglass. It fails this Test with words, and the crop to report
+	// it with when there is one, where net/http would drop the connection.
+	// step says how far the Test got, for the words.
+	var crop *image.RGBA
+	step := runner.StepGrab
+	if err := runner.Contain(func() error {
+		// A person asking: tried even while a refused login is waiting
+		// (at most once every source.ForcedTryGap).
+		img, err := src.Grab(source.Forced(grabCtx))
+		cancelGrab()
+		if err != nil {
+			testGrabError(w, err)
+			return nil
+		}
+		step = runner.StepRead
+		// The fractions are checked in parseRegion, but only the frame
+		// says how many pixels they cover: a box that rounds to no pixel
+		// at all has nothing to read or show (png.Encode refuses an
+		// empty image).
+		var frame image.Rectangle
+		crop, frame = imgproc.Crop(img, region), img.Bounds()
+		if crop.Bounds().Empty() {
+			http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
+			return nil
+		}
+		s.testCrop(w, r, wc, src, crop, frame, region, prep)
+		return nil
+	}); err != nil {
+		s.testCrashed(w, r, wc, step, crop, err)
 	}
-	// The fractions are checked in parseRegion, but only the frame says
-	// how many pixels they cover: a box that rounds to no pixel at all
-	// has nothing to read or show (png.Encode refuses an empty image).
-	crop, frame := imgproc.Crop(img, region), img.Bounds()
-	if crop.Bounds().Empty() {
-		http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
-		return
-	}
+}
+
+// testCrop is the Test of one region after the grab: crop is the region
+// in the frame (frame is its size) and prep the form's preprocessing.
+func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, crop *image.RGBA, frame image.Rectangle, region config.Region, prep config.Preprocess) {
 	// pixel_change reads no text: its Test grabs a second frame and
 	// measures what the watch would. (Only when the form says so: a request
 	// without ttype, from curl or an older client, is read by the engine as
@@ -1387,6 +1424,42 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		res.Read = true
 		res.Reading = viewReading(engName, res.Text)
 		res.Verdict = verdictFor(trig, res.Text, res.Reading, trigErrs)
+	}
+	s.render(w, "testresult.html", res)
+}
+
+// testCrashed answers a Test that panicked (testRegion) with the plain
+// sentence for the step it got to, the crop as the camera sent it when
+// the panic came after one was made (crop is nil before that: the source
+// crashed, and there is no frame to report), and the panic value under
+// Technical detail; the panic goes to the log with its stack. Nothing has
+// been written to w yet: the reading code writes only once it is done.
+func (s *Server) testCrashed(w http.ResponseWriter, r *http.Request, wc config.Watch, step runner.Step, crop *image.RGBA, err error) {
+	detail := err.Error()
+	var ce *runner.CrashError
+	if errors.As(err, &ce) {
+		ce.Step = step
+		detail = ce.Detail()
+		s.logf("watch %s: Test: %v\n%s", wc.Name, ce, ce.Stack)
+	} else {
+		s.logf("watch %s: Test: %v", wc.Name, err)
+	}
+	res := testResult{At: time.Now(), Crashed: true,
+		Note:       upperFirst(step.Sentence()) + ".",
+		NoteDetail: detail}
+	if r.FormValue("ttype") != "pixel_change" {
+		res.Engine = r.FormValue("engine")
+		if res.Engine == "" {
+			res.Engine = wc.Engine
+		}
+		if res.Engine == "" {
+			res.Engine = "tesseract"
+		}
+	}
+	if crop != nil {
+		if u, perr := pngDataURL(crop); perr == nil {
+			res.Crop = u
+		}
 	}
 	s.render(w, "testresult.html", res)
 }

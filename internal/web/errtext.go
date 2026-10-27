@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
 	"github.com/darrenhuai/watchglass/internal/source"
 )
 
@@ -47,6 +48,14 @@ func summarizeErr(msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return ""
+	}
+	// A panic the runner contained in a poll: a bug in watchglass,
+	// whatever the rest of the message says. The sentence names where it
+	// crashed (the source, the reader, after the reading).
+	for _, st := range runner.Steps {
+		if strings.Contains(msg, st.Sentence()) {
+			return upperFirst(st.Sentence())
+		}
 	}
 	low := strings.ToLower(msg)
 	host := errHost(msg)

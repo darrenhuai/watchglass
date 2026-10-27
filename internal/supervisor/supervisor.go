@@ -88,6 +88,8 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// "sending" mark too; this covers a first Start after a boot or a
 	// Start that failed before the watch ever ran.
 	s.reg.ClearSending(w.Name)
+	// Nor has it crashed on a frame yet (OnCrash below).
+	s.reg.ClearCrash(w.Name)
 	var notifier notify.Notifier
 	if len(w.Notify) > 0 {
 		n, err := notify.NewShoutrrr(w.Notify)
@@ -194,6 +196,12 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		if onHealth != nil {
 			onHealth(name, hev)
 		}
+	}
+	// A panic in the poll was contained (runner Contain); the page shows
+	// the watch in error, with words for where it crashed, until it reads
+	// again. Since is the runner's: the first crash of the current run.
+	r.OnCrash = func(ce *runner.CrashError) {
+		s.reg.SetCrash(name, state.Crash{Message: ce.Error(), Since: ce.First})
 	}
 	// Delivery reports come from the runner's sender goroutine, which may
 	// still be finishing an alert after Stop. Only the watch's current run

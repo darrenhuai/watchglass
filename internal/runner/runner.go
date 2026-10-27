@@ -4,9 +4,11 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"runtime/debug"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,6 +77,16 @@ type Runner struct {
 	// when the watch has no notify URLs. Under Run the finished report comes
 	// from the sender goroutine, not the poll goroutine. Keep it fast.
 	OnDelivery func(d Delivery)
+
+	// OnCrash, when set, hears every panic caught in this watch's poll
+	// (see Contain), with where it was caught (CrashError.Step): in the
+	// source, in the engine, the preprocessing or the trigger code (which
+	// fails that one read), in a consumer of the reading, or, under Run,
+	// anywhere else in a Tick. The web UI shows the watch in error until
+	// it reads again. Keep it fast: it runs on the poll goroutine.
+	OnCrash func(ce *CrashError)
+	// crashes is the current run of crashes (crashed, endTick).
+	crashes crashRun
 
 	// outbox feeds the sender goroutine Run starts, so a slow or dead
 	// notification service never holds up the next poll. nil outside Run
@@ -192,8 +204,25 @@ func (r *Runner) Run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
-		ev, err := r.Tick(ctx)
-		if err != nil && ctx.Err() == nil {
+		var ev trigger.Event
+		err := Contain(func() error {
+			var err error
+			ev, err = r.Tick(ctx)
+			return err
+		})
+		var ce *CrashError
+		switch {
+		case errors.As(err, &ce):
+			// A crash grabbing or reading the frame, or in OnReading,
+			// Tick reports itself; the first two count as a failed poll.
+			// One anywhere else in it (the history store, the saved
+			// state, an alert, a health callback) is caught here, and
+			// the next poll goes ahead all the same.
+			if !ce.reported {
+				r.crashed(ce, StepPoll)
+				r.endTick()
+			}
+		case err != nil && ctx.Err() == nil:
 			r.logf("watch %s: %v", r.watch.Name, err)
 		}
 		changed := tickChanged(r.watch.Trigger.Type, ev, err, lastReading)
@@ -219,44 +248,58 @@ func (r *Runner) Run(ctx context.Context) {
 // (the zero Event when the poll produced no evaluation, e.g. the pixel
 // baseline frame). Exported so tests can drive it deterministically.
 func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
+	ev, err := r.tick(ctx)
+	r.endTick()
+	return ev, err
+}
+
+func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 	at := time.Now()
-	img, err := r.src.Grab(ctx)
+	var img image.Image
+	err := Contain(func() error {
+		var err error
+		img, err = r.src.Grab(ctx)
+		return err
+	})
 	if err != nil {
+		// A panic in the source (a stream or snapshot its parser didn't
+		// expect) is a failed grab too: it counts toward health, so a
+		// camera that trips it on every poll still goes down and alerts.
+		var ce *CrashError
+		if errors.As(err, &ce) {
+			r.crashed(ce, StepGrab)
+		}
 		return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("grab: %w", err))
 	}
-	crop := imgproc.Crop(img, r.watch.Region)
-
-	var ev trigger.Event
-	if r.watch.Trigger.Type == "pixel_change" {
-		r.pollSucceeded(ctx)
-		if r.prev == nil {
-			r.prev = crop
-			return trigger.Event{}, nil // first frame is the baseline
-		}
-		pct := imgproc.PercentChanged(r.prev, crop, diffTolerance)
-		r.prev = crop
-		ev = r.eval.ObservePixel(pct)
-	} else {
-		// A sideways display is turned upright once, here, and the turned
-		// crop is what goes everywhere from now on: to the engine (after the
-		// rest of the preprocessing), to OnReading (the Live panel and Home
-		// Assistant's camera) and into the alert. Someone reading an alert
-		// on a phone wants the picture the right way up.
-		pp := r.watch.Preprocess
-		crop = imgproc.Rotate(crop, pp.Rotate)
-		pp.Rotate = 0 // already turned
-		prepped := imgproc.Apply(crop, pp)
-		text, err := r.engine.Recognize(ctx, prepped)
-		if err != nil {
-			// A frame that arrives but can't be read is still a poll with
-			// no reading: it counts toward the health threshold exactly like
-			// a failed grab, so an engine that fails on every tick (tesseract
-			// crashing, removed after boot, bad tessdata) surfaces as down
-			// instead of as a healthy watch with "no data yet" forever.
-			return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("ocr: %w", err))
-		}
-		r.pollSucceeded(ctx)
-		ev = r.eval.ObserveText(text)
+	var (
+		ev       trigger.Event
+		crop     *image.RGBA
+		baseline bool
+	)
+	err = Contain(func() error {
+		var err error
+		ev, crop, baseline, err = r.read(ctx, img)
+		return err
+	})
+	var ce *CrashError
+	if errors.As(err, &ce) {
+		// A panic reading the frame fails this read and nothing else: it
+		// counts toward the health threshold like any read that produced
+		// nothing, and the next poll goes ahead.
+		r.crashed(ce, StepRead)
+		return trigger.Event{}, r.pollFailed(ctx, ce)
+	}
+	if err != nil {
+		// A frame that arrives but can't be read is still a poll with
+		// no reading: it counts toward the health threshold exactly like
+		// a failed grab, so an engine that fails on every tick (tesseract
+		// crashing, removed after boot, bad tessdata) surfaces as down
+		// instead of as a healthy watch with "no data yet" forever.
+		return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("ocr: %w", err))
+	}
+	r.pollSucceeded(ctx)
+	if baseline {
+		return trigger.Event{}, nil // a pixel_change watch's first frame
 	}
 
 	if r.store != nil {
@@ -268,7 +311,15 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 	// is decided, so a restart right after it can't send it twice.
 	r.saveState()
 	if r.OnReading != nil {
-		r.OnReading(ev, crop, at)
+		// A panic in a consumer (the Live panel, the Home Assistant
+		// publisher) is logged and shown, but the fire it decided still
+		// goes out: the saved state already says it fired.
+		if err := Contain(func() error { r.OnReading(ev, crop, at); return nil }); err != nil {
+			var ce *CrashError
+			if errors.As(err, &ce) {
+				r.crashed(ce, StepAfter)
+			}
+		}
 	}
 	if ev.Fired {
 		// The body names the watch too: a plain webhook (generic without
@@ -288,6 +339,38 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		r.raise(ctx, a)
 	}
 	return ev, nil
+}
+
+// read turns one frame into the trigger's verdict: the crop, the
+// preprocessing, the engine and the trigger evaluation, the code a
+// strange frame can drive somewhere nobody tested (Tick contains a panic
+// in it). baseline is a pixel_change watch's first frame, which has
+// nothing to compare with. err is the engine's.
+func (r *Runner) read(ctx context.Context, img image.Image) (ev trigger.Event, crop *image.RGBA, baseline bool, err error) {
+	crop = imgproc.Crop(img, r.watch.Region)
+	if r.watch.Trigger.Type == "pixel_change" {
+		if r.prev == nil {
+			r.prev = crop
+			return trigger.Event{}, crop, true, nil
+		}
+		pct := imgproc.PercentChanged(r.prev, crop, diffTolerance)
+		r.prev = crop
+		return r.eval.ObservePixel(pct), crop, false, nil
+	}
+	// A sideways display is turned upright once, here, and the turned
+	// crop is what goes everywhere from now on: to the engine (after the
+	// rest of the preprocessing), to OnReading (the Live panel and Home
+	// Assistant's camera) and into the alert. Someone reading an alert
+	// on a phone wants the picture the right way up.
+	pp := r.watch.Preprocess
+	crop = imgproc.Rotate(crop, pp.Rotate)
+	pp.Rotate = 0 // already turned
+	prepped := imgproc.Apply(crop, pp)
+	text, err := r.engine.Recognize(ctx, prepped)
+	if err != nil {
+		return trigger.Event{}, crop, false, err
+	}
+	return r.eval.ObserveText(text), crop, false, nil
 }
 
 // raise sends an alert, or says why it isn't sent. Under Run it only queues
@@ -315,10 +398,22 @@ func (r *Runner) raise(ctx context.Context, a alert) {
 // sendLoop sends queued alerts in order until Run closes box. Sends are
 // cut loose from ctx: an alert raised just before the watch was stopped
 // (a Save & restart) still goes out, bounded by the services' own timeouts.
+// A panic anywhere in a delivery (the notifier has its own recover in
+// send; this covers the store and OnDelivery after it) is logged and
+// fails nothing but that alert's bookkeeping: this goroutine would
+// otherwise take the whole process down.
 func (r *Runner) sendLoop(ctx context.Context, box <-chan alert) {
 	sendCtx := context.WithoutCancel(ctx)
 	for a := range box {
-		r.deliver(sendCtx, a)
+		err := Contain(func() error {
+			r.deliver(sendCtx, a)
+			return nil
+		})
+		var ce *CrashError
+		if errors.As(err, &ce) {
+			r.logf("watch %s: after sending the %s alert, watchglass crashed; this is a bug, please report it with the log: %s\n%s",
+				r.watch.Name, a.kind, notify.Scrub(ce.Detail(), r.watch.Notify), ce.Stack)
+		}
 	}
 }
 
@@ -343,12 +438,7 @@ func (r *Runner) WaitSent(ctx context.Context) bool {
 // reported with every URL cut down to scheme://host and every credential
 // masked (notify.Scrub): the report is shown in the web UI.
 func (r *Runner) deliver(ctx context.Context, a alert) {
-	var err error
-	if is, ok := r.notifier.(notify.ImageSender); ok && a.png != nil {
-		err = is.SendImage(ctx, a.title, a.body, a.png)
-	} else {
-		err = r.notifier.Send(ctx, a.title, a.body)
-	}
+	err := r.send(ctx, a)
 	d := Delivery{TS: a.ts, Kind: a.kind, OK: err == nil}
 	if err == nil {
 		r.markDelivered(a.fired)
@@ -366,6 +456,24 @@ func (r *Runner) deliver(ctx context.Context, a alert) {
 		d.Err = strings.Join(parts, "; ")
 	}
 	r.report(d)
+}
+
+// send hands one alert to the notifier. A panic in it (the notification
+// library meeting an answer it didn't expect) fails this alert only: the
+// sender goroutine would otherwise take the whole process down with it.
+// The panic value is scrubbed before it is logged, like every error from
+// the notifier: shoutrrr's carry the service URL, token and all.
+func (r *Runner) send(ctx context.Context, a alert) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			r.logf("watch %s: sending the %s alert crashed; this is a bug, please report it: %s\n%s", r.watch.Name, a.kind, notify.Scrub(fmt.Sprint(v), r.watch.Notify), debug.Stack())
+			err = fmt.Errorf("sending crashed; this is a bug in watchglass, please report it (%v)", v)
+		}
+	}()
+	if is, ok := r.notifier.(notify.ImageSender); ok && a.png != nil {
+		return is.SendImage(ctx, a.title, a.body, a.png)
+	}
+	return r.notifier.Send(ctx, a.title, a.body)
 }
 
 func (r *Runner) report(d Delivery) {

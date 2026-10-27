@@ -53,6 +53,18 @@ type Delivery struct {
 	Err     string // why it wasn't delivered, when !OK && !Skipped
 }
 
+// Crash is a panic the runner caught in a watch's poll (runner.OnCrash):
+// a bug, which failed that poll's read, or came after the reading was
+// made, and touched no other watch. The web UI shows the watch in error,
+// with Message, until it reads again (Add). Since is when the run of
+// crashes began, as the runner counts it (CrashError.First): a consumer
+// that crashes on every reading clears the crash with each Add and sets
+// it again right after, and the time must not move with that.
+type Crash struct {
+	Message string
+	Since   time.Time
+}
+
 type Registry struct {
 	mu     sync.Mutex
 	n      int
@@ -73,6 +85,8 @@ type Registry struct {
 	// that (SeedRestored), until the watch fires again.
 	live     map[string]time.Time
 	restored map[string]Restored
+	// crash is each watch's crash since its last reading, if any.
+	crash map[string]Crash
 }
 
 // Restored is a watch's last fire from before watchglass started, as its
@@ -86,7 +100,7 @@ type Restored struct {
 func New(n int) *Registry {
 	return &Registry{n: n, buf: map[string][]Sample{}, health: map[string]Health{}, fired: map[string]time.Time{},
 		delivery: map[string]Delivery{}, sending: map[string]time.Time{},
-		live: map[string]time.Time{}, restored: map[string]Restored{}}
+		live: map[string]time.Time{}, restored: map[string]Restored{}, crash: map[string]Crash{}}
 }
 
 func (r *Registry) Add(watch string, s Sample) {
@@ -97,6 +111,7 @@ func (r *Registry) Add(watch string, s Sample) {
 		list = list[:r.n]
 	}
 	r.buf[watch] = list
+	delete(r.crash, watch) // it read again
 	if s.Fired && s.TS.After(r.fired[watch]) {
 		r.fired[watch] = s.TS
 	}
@@ -197,6 +212,30 @@ func (r *Registry) Drop(watch string) {
 	delete(r.sending, watch)
 	delete(r.live, watch)
 	delete(r.restored, watch)
+	delete(r.crash, watch)
+}
+
+// SetCrash records that watch's poll crashed, as the runner reports it.
+func (r *Registry) SetCrash(watch string, c Crash) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.crash[watch] = c
+}
+
+// ClearCrash forgets a watch's crash: a watch that restarts hasn't read
+// a frame yet.
+func (r *Registry) ClearCrash(watch string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.crash, watch)
+}
+
+// GetCrash returns watch's crash since its last reading, if any.
+func (r *Registry) GetCrash(watch string) (Crash, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.crash[watch]
+	return c, ok
 }
 
 // SetSending notes that the alert raised at ts has been handed to the

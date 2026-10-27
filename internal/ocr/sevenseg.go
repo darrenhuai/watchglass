@@ -1133,7 +1133,9 @@ func shearEstimate(m bitmap, wk *work) float64 {
 	sharp := func(s float64, step, ylo, yhi int) float64 {
 		clear(counts)
 		for y := range shifts {
-			shifts[y] = int(math.Round(s*float64(y-yc))) + span
+			// |s| <= shearMax and |y-yc| <= m.h/2 keep the shift inside
+			// ±span; the clamp says so to the indexing below.
+			shifts[y] = min(2*span, max(0, int(math.Round(s*float64(y-yc)))+span))
 		}
 		for i := 0; i < len(lit); i += step {
 			idx := int(lit[i])
@@ -1164,7 +1166,19 @@ func shearEstimate(m bitmap, wk *work) float64 {
 			return 0
 		}
 		base, bestV = sharp(0, 1, ylo, yhi), sharp(bestS, 1, ylo, yhi)
-		for s := bestS - shearStep; s <= bestS+shearStep+1e-9; s += shearStep / 4 {
+		// The refinement walks up from just below the coarse best and goes
+		// on while the lean keeps sharpening, but never past ±shearMax.
+		// The cap is what was missing: on an angled clock photo, binarized,
+		// the walk crept on past shearMax until a row's shift left counts
+		// (index out of range). The upper bound still follows bestS: holding
+		// it where the loop started changed 12 of 16,200 reads on round 6's
+		// photos, one of them a flagged "?:17" into a confident "3:17". The
+		// values tried start where they always did with the same step, so
+		// a search that stays inside ±shearMax tries the same shears.
+		for s := bestS - shearStep; s <= min(shearMax, bestS+shearStep)+1e-9; s += shearStep / 4 {
+			if s < -shearMax-1e-9 {
+				continue // the coarse best was -shearMax
+			}
 			if v := sharp(s, 1, ylo, yhi); v > bestV {
 				bestV, bestS = v, s
 			}
@@ -1194,6 +1208,8 @@ func shearEstimate(m bitmap, wk *work) float64 {
 // deshear shifts every row of m by its share of the lean so the vertical
 // bars stand upright; the result is wider by the total shift.
 func deshear(m bitmap, s float64, wk *work) bitmap {
+	// The buffers are sized for a lean of at most shearMax (getWork).
+	s = math.Max(-shearMax, math.Min(shearMax, s))
 	shifts := wk.shifts[:m.h]
 	yc := m.h / 2
 	minS, maxS := 0, 0

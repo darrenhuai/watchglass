@@ -30,11 +30,12 @@
       <figcaption>Second frame, {{.Gap}} later</figcaption>
     </figure>
   </div>
-  {{else}}
+  {{else}}{{if .Crop}}
+  {{/* No crop when the Test crashed before it had a frame (testCrashed). */}}
   <figure class="crop-frame">
-    <img src="{{.Crop}}" alt="The tested region after preprocessing">
+    <img src="{{.Crop}}" alt="{{if .Crashed}}The tested region as the camera sent it{{else}}The tested region after preprocessing{{end}}">
   </figure>
-  {{end}}
+  {{end}}{{end}}
   {{if .Read}}
   <dl class="test-facts">
     <dt>Read</dt>
@@ -52,7 +53,7 @@
   {{if .Reading.Partial}}<p class="test-note"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>
   {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't make a digit of anything here. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{end}}
-  {{with .Note}}<p class="test-note test-note-status"><span class="led led-off" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}
+  {{with .Note}}<p class="test-note test-note-status"><span class="led {{if $.Crashed}}led-error{{else}}led-off{{end}}" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}
   {{with .NoteDetail}}<details class="tech-detail test-note-detail">
     <summary>Technical detail</summary>
     <p class="tech-raw mono">{{.}}</p>
