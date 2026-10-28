@@ -188,13 +188,13 @@ func TestLiveShowsConfirmProgress(t *testing.T) {
 		t.Errorf("tiles = %d, want 4: steps towards Confirm are separate frames", n)
 	}
 	num := config.Trigger{Type: "numeric", Op: "lt", Threshold: 4.5}
-	if p := confirmProgress(num, state.Sample{Pending: 1, Need: 2}); p == nil || p.Text != "Below 4.5: 1 of 2 readings in a row needed to fire." || len(p.Steps) != 2 {
+	if p := confirmProgress(num, state.Sample{Pending: 1, Need: 2}, false); p == nil || p.Text != "Below 4.5: 1 of 2 readings in a row needed to fire." || len(p.Steps) != 2 {
 		t.Errorf("numeric progress = %+v", p)
 	}
-	if p := confirmProgress(num, state.Sample{Pending: 3, Need: 20}); p == nil || p.Steps != nil {
+	if p := confirmProgress(num, state.Sample{Pending: 3, Need: 20}, false); p == nil || p.Steps != nil {
 		t.Errorf("a long Confirm is told in words only: %+v", p)
 	}
-	if confirmProgress(num, state.Sample{}) != nil {
+	if confirmProgress(num, state.Sample{}, false) != nil {
 		t.Error("no progress on a reading that isn't pending")
 	}
 }
@@ -362,10 +362,10 @@ func TestLiveConfirmProgressDuringCooldown(t *testing.T) {
 		t.Errorf("a tile inside the cooldown says it is needed to fire; body:\n%s", body)
 	}
 	// Confirm 1: nothing to count, but a held reading still says so.
-	if pv := confirmProgress(config.Trigger{Type: "ocr_match"}, state.Sample{Pending: 1, Need: 1, CooldownEnds: ends}); pv == nil || pv.Until != ends || pv.Steps != nil {
+	if pv := confirmProgress(config.Trigger{Type: "ocr_match"}, state.Sample{Pending: 1, Need: 1, CooldownEnds: ends}, false); pv == nil || pv.Until != ends || pv.Steps != nil {
 		t.Errorf("confirm 1 held: %+v", pv)
 	}
-	if pv := confirmProgress(config.Trigger{Type: "ocr_match"}, state.Sample{Pending: 1, Need: 1}); pv != nil {
+	if pv := confirmProgress(config.Trigger{Type: "ocr_match"}, state.Sample{Pending: 1, Need: 1}, false); pv != nil {
 		t.Errorf("confirm 1 without a cooldown has no progress: %+v", pv)
 	}
 }

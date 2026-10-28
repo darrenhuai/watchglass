@@ -38,10 +38,10 @@
   {{if .Read}}
   <dl class="test-facts">
     <dt>Read</dt>
-    <dd>{{with .Reading.Placeholder}}<span class="reading-none">{{.}}</span>{{else}}<span class="mono test-reading">{{template "readingText" .Reading}}</span>{{end}}</dd>
-    {{/* No chips beside "No digits read": a glyph the decoder couldn't
-         make a digit of is a "?" chip, and one beside that heading reads
-         as a digit after all. The note under the list says what to do. */}}
+    <dd>{{with .Reading.Placeholder}}<span class="reading-none">{{.}}</span>{{else}}<span class="mono test-reading">{{template "readingText" .Reading}}</span>{{if .Reading.Unreadable}} <span class="reading-sub" aria-hidden="true">no digits read</span>{{end}}{{end}}</dd>
+    {{/* No chips for a reading with no digit: its "?" chips would only
+         repeat the "?" above at a made-up confidence. The note under the
+         list says what to do. */}}
     {{if and .Words (not .Reading.Unreadable)}}
     <dt>Confidence</dt>
     <dd><p class="word-list">{{range .Words}}{{$low := lowConf .Conf}}
@@ -49,7 +49,11 @@
     </p></dd>
     {{end}}
   </dl>
-  {{if .Reading.Partial}}<p class="test-note"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>
+  {{/* A '?' the watch's pattern matches is what the pattern was written
+       to catch (the washer's End, the boiler's E4): the box works, so the
+       note doesn't tell the user to fix it unless it shows a number. */}}
+  {{if .Reading.Matched}}<p class="test-note">{{matchedNote}}</p>
+  {{else if .Reading.Partial}}<p class="test-note"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>
   {{else if .Reading.Unreadable}}<p class="test-note">The seven-segment decoder couldn't make a digit of anything here. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{end}}
   {{with .Note}}<p class="test-note test-note-status"><span class="led led-off" aria-hidden="true"></span><span>{{.}}</span></p>{{end}}

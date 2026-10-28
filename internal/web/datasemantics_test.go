@@ -126,8 +126,10 @@ func TestViewReading(t *testing.T) {
 		want            readingView
 	}{
 		{"sevenseg", "23.5", readingView{Runs: []readingRun{{Text: "23.5"}}}},
-		{"sevenseg", "?", readingView{Unreadable: true, Placeholder: "No digits read"}},
-		{"sevenseg", "?.?", readingView{Unreadable: true, Placeholder: "No digits read"}},
+		// No digit read: still shown, as a watch may act on it ("?" is how
+		// the washer recipe's End screen reads).
+		{"sevenseg", "?", readingView{Unreadable: true, Runs: []readingRun{{"?", true}}}},
+		{"sevenseg", "?.?", readingView{Unreadable: true, Runs: []readingRun{{"?", true}, {".", false}, {"?", true}}}},
 		{"sevenseg", "?4?", readingView{Partial: true, Runs: []readingRun{{"?", true}, {"4", false}, {"?", true}}}},
 		{"sevenseg", "1??.5", readingView{Partial: true, Runs: []readingRun{{"1", false}, {"??", true}, {".5", false}}}},
 		{"", "Ready?", readingView{Runs: []readingRun{{Text: "Ready?"}}}},
@@ -163,9 +165,10 @@ func startBlocked(t *testing.T, s *Server, engine string) {
 }
 
 // The seven-segment decoder's '?' is a digit it couldn't read: a reading of
-// nothing but '?' is named in words with a half-lit LED, a partial one
-// marks the unread digits, and neither looks like a clean reading. Text
-// engines' question marks are left alone.
+// nothing but '?' is shown as the '?' it is (a watch can act on it), with
+// "no digits read" beside it and a half-lit LED; a partial one marks the
+// unread digits, and neither looks like a clean reading. Text engines'
+// question marks are left alone.
 func TestUnreadableSevenSegReadings(t *testing.T) {
 	s, _ := newTestServer(t)
 	startBlocked(t, s, "sevenseg")
@@ -174,15 +177,16 @@ func TestUnreadableSevenSegReadings(t *testing.T) {
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?", PNG: pngBytes(t)})
 	_, index := get(t, h, "/")
 	row := index[strings.Index(index, `data-label="Last reading"`):]
-	if !strings.Contains(row, "led-unsure") || strings.Contains(row, "led-green") || !strings.Contains(row, `<span class="reading-none" title="The seven-segment decoder couldn't read any digit.`) || !strings.Contains(row, ">No digits read</span>") {
-		t.Errorf("an all-? reading should be named, with a half-lit LED; row:\n%s", row)
+	q := `<span class="digit-unknown" title="Digit not read">?</span><span class="sr-only"> (no digits read)</span>`
+	if !strings.Contains(row, "led-unsure") || strings.Contains(row, "led-green") || !strings.Contains(row, `<span class="mono">`+q+`</span> <span class="reading-sub" aria-hidden="true" title="The seven-segment decoder couldn't read any digit.`) || !strings.Contains(row, ">no digits read</span>") {
+		t.Errorf("an all-? reading should show the ?, say no digits were read, with a half-lit LED; row:\n%s", row)
 	}
 	_, live := get(t, h, "/watch/printer/live")
 	if !strings.Contains(live, "led-unsure") || strings.Contains(live, "led-green") ||
-		!strings.Contains(live, `<strong class="readout-value reading-none">No digits read</strong>`) ||
+		!strings.Contains(live, `<strong class="readout-value mono">`+q+`</strong>`) ||
 		!strings.Contains(live, `class="readout-hint">The seven-segment decoder couldn't read any digit.`) ||
-		!strings.Contains(live, `<figcaption class="caption-none" title="No digits read"><span class="cap-body"><span class="cap-text">No digits read</span></span></figcaption>`) {
-		t.Errorf("live readout should name an unreadable reading and say what to do; body:\n%s", live)
+		!strings.Contains(live, `<figcaption title="? (no digits read)"><span class="cap-body"><span class="cap-text">`+q+`</span></span></figcaption>`) {
+		t.Errorf("live readout should show an unreadable reading and say what to do; body:\n%s", live)
 	}
 
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?4?", PNG: pngBytes(t)})
@@ -354,9 +358,9 @@ func TestTestResultExplainsUndecodedDigits(t *testing.T) {
 		`<span class="mono test-reading"><span class="digit-unknown" title="Digit not read">?</span>4<span class="sr-only"> (some digits not read)</span></span>`,
 		`marks a digit the seven-segment decoder couldn't read`,
 		`<p class="test-meta mono"><span>sevenseg</span>`,
-		// "?4" of what may be 24.5 isn't "not met": it's a partial read.
-		`<p class="verdict verdict-info">`,
-		`<strong class="verdict-title">Partial reading</strong> <span class="verdict-detail">Some digits weren&#39;t read, so this only checked part of the number: 4 is not above 24.</span>`,
+		// "?4" of what may be 24.5 isn't "not met": the watch skips it.
+		`<p class="verdict verdict-skipped">`,
+		`<strong class="verdict-title">Reading skipped</strong> <span class="verdict-detail">A digit wasn&#39;t read, so this reading is skipped and the watch keeps its last state.</span>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sevenseg partial read: missing %s; body:\n%s", want, body)
@@ -370,12 +374,18 @@ func TestTestResultExplainsUndecodedDigits(t *testing.T) {
 		t.Errorf("a partial read must not get a met/unmet LED; body:\n%s", body)
 	}
 
-	// The same caveat for a pattern checked against a partial read.
+	// A pattern is checked against the text as read, '?' included, as the
+	// running watch checks it: met is met.
 	form.Set("ttype", "ocr_match")
 	form.Set("pattern", "4")
 	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
-	if !strings.Contains(body, `verdict-info`) || !strings.Contains(body, "only checked part of the number: the text matches the pattern.") {
+	if !strings.Contains(body, `<p class="verdict verdict-met">`) || !strings.Contains(body, "The text as read, ? included, matches the pattern. The watch fires") {
 		t.Errorf("ocr_match on a partial read; body:\n%s", body)
+	}
+	form.Set("pattern", "^[0-9]+$")
+	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, `<p class="verdict verdict-unmet">`) || !strings.Contains(body, "The text as read, ? included, doesn&#39;t match the pattern.") {
+		t.Errorf("ocr_match not met on a partial read; body:\n%s", body)
 	}
 
 	// A text engine's '?' is just text, so its verdict stands.
@@ -391,12 +401,12 @@ func TestTestResultExplainsUndecodedDigits(t *testing.T) {
 	}
 
 	// No digit read at all: "no number found, not met" would claim the
-	// display is below the threshold; it says nothing was read instead.
+	// display is below the threshold; the watch skips it, and Test says so.
 	s.engines.SevenSeg = readsAs("?.?")
 	form.Set("engine", "sevenseg")
 	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
-	if !strings.Contains(body, `<p class="verdict verdict-info">`) || !strings.Contains(body, `<strong class="verdict-title">No digits read</strong>`) || strings.Contains(body, "No number found") {
-		t.Errorf("an unreadable sevenseg test has no verdict; body:\n%s", body)
+	if !strings.Contains(body, `<p class="verdict verdict-skipped">`) || !strings.Contains(body, `<strong class="verdict-title">Reading skipped</strong>`) || strings.Contains(body, "No number found") {
+		t.Errorf("an unreadable sevenseg test is skipped by a numeric watch; body:\n%s", body)
 	}
 	// ...but a text engine that read nothing numeric is a plain "not met".
 	s.engines.RapidOCR = readsAs("Ready?")

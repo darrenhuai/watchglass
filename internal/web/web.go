@@ -149,25 +149,29 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		// watchURL is the only way a watch name enters a URL: names may hold
 		// '%', '\', spaces or non-ASCII, which a bare concatenation leaves
 		// to be decoded (or path-normalized) into a different name.
-		"watchURL":        watchURL,
-		"pageTitle":       pageTitle,
-		"shortErr":        summarizeErr,
-		"errHint":         errHint,
-		"reading":         viewReading,
-		"pct":             confidencePct,
-		"lowConf":         func(c float64) bool { return c < lowConfidence },
-		"isoTime":         isoTime,
-		"ppSet":           preprocessSet,
-		"ppSummary":       preprocessSummary,
-		"rotateOptions":   func() []rotateOption { return rotateOptions },
-		"trigLabel":       triggerLabel,
-		"confirmHelp":     confirmHelp,
-		"patternHelp":     patternHelp,
-		"redact":          redactSource,
-		"deviceClasses":   func() []string { return config.DeviceClasses },
-		"unitSuggestions": unitSuggestions,
-		"unitsJSON":       unitsJSON,
-		"unitList":        unitList,
+		"watchURL":         watchURL,
+		"pageTitle":        pageTitle,
+		"shortErr":         summarizeErr,
+		"errHint":          errHint,
+		"reading":          viewReading,
+		"readingFor":       viewReadingFor,
+		"matchedNote":      func() string { return matchedNote },
+		"skippedNote":      func() string { return skippedNote },
+		"blankSkippedNote": func() string { return blankSkippedNote },
+		"pct":              confidencePct,
+		"lowConf":          func(c float64) bool { return c < lowConfidence },
+		"isoTime":          isoTime,
+		"ppSet":            preprocessSet,
+		"ppSummary":        preprocessSummary,
+		"rotateOptions":    func() []rotateOption { return rotateOptions },
+		"trigLabel":        triggerLabel,
+		"confirmHelp":      confirmHelp,
+		"patternHelp":      patternHelp,
+		"redact":           redactSource,
+		"deviceClasses":    func() []string { return config.DeviceClasses },
+		"unitSuggestions":  unitSuggestions,
+		"unitsJSON":        unitsJSON,
+		"unitList":         unitList,
 		"engineNote": func(w config.Watch, tess, rapid bool) engineNote {
 			return engineNoteFor(w, tess, rapid)
 		},
@@ -466,6 +470,9 @@ type liveData struct {
 	// in a reading is the seven-segment decoder's "digit not read" or just
 	// text that has a question mark in it.
 	Engine string
+	// Trigger is the watch's trigger: with Engine it says what the watch
+	// does with a '?' reading (viewReadingFor).
+	Trigger config.Trigger
 	// Recent is newest first; the readout shows Recent[0]. Tiles is the
 	// filmstrip: Recent with runs of equal readings collapsed.
 	Recent []state.Sample
@@ -497,12 +504,13 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	s.renderCached(w, r, "live.html", liveData{
 		Name:     name,
 		Engine:   wc.Engine,
+		Trigger:  wc.Trigger,
 		Recent:   recent,
 		Tiles:    collapseSamples(recent),
 		Status:   s.statusFor(name, s.isRunning(name)),
 		Delivery: dv,
 		FiredTag: dv.firedTag,
-		Progress: confirmProgress(wc.Trigger, latest),
+		Progress: confirmProgress(wc.Trigger, latest, viewReadingFor(wc.Trigger, wc.Engine, latest.Reading).Skipped),
 	})
 }
 
@@ -1198,8 +1206,9 @@ type pixelTest struct {
 }
 
 // testVerdict answers "would this fire?" for one test. State is "met",
-// "unmet", "info" (the type can't be judged from one frame) or "invalid"
-// (the trigger settings themselves don't work).
+// "unmet", "skipped" (a numeric watch ignores this reading), "info" (the
+// type can't be judged from one frame) or "invalid" (the trigger settings
+// themselves don't work).
 type testVerdict struct {
 	State  string
 	Title  string
@@ -1208,12 +1217,8 @@ type testVerdict struct {
 
 // verdictFor checks trig against the test's reading. It says "condition
 // met", never "will notify": edges, Confirm and Cooldown depend on the
-// readings around this one. view says whether the seven-segment decoder
-// left digits unread ("?4?", "?"): the check still runs, since the watch
-// judges the same text, but a met/unmet answer about "4" (or "no number")
-// when the display shows 24.5 would be false confidence, so it comes back
-// as info.
-func verdictFor(trig config.Trigger, reading string, view readingView, errs []fieldError) *testVerdict {
+// readings around this one.
+func verdictFor(trig config.Trigger, engine, reading string, errs []fieldError) *testVerdict {
 	// Only a request without ttype on a saved pixel_change watch gets here
 	// with that type (curl, an older client): the engine read the crop, and
 	// one frame says nothing about a change, so there is no verdict. The
@@ -1228,20 +1233,44 @@ func verdictFor(trig config.Trigger, reading string, view readingView, errs []fi
 			return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: e.Msg}
 		}
 	}
-	cond, err := trigger.Check(trig, reading)
+	v := readingVerdict(trig, engine, reading)
+	return &v
+}
+
+// Verdict is what Test this region says about one reading from engine:
+// its State ("met", "unmet", "skipped", "info" or "invalid"), Title and
+// Detail. internal/docscheck checks each recipe's stated result with it,
+// so a recipe can't promise a result Test doesn't show.
+func Verdict(trig config.Trigger, engine, reading string) (state, title, detail string) {
+	v := readingVerdict(trig, engine, reading)
+	return v.State, v.Title, v.Detail
+}
+
+// readingVerdict is the verdict for one reading, judged as a running
+// watch with that engine judges it (trigger.CheckEngine). A seven-segment
+// '?' is a digit the decoder couldn't read: a numeric watch skips the
+// reading, and the page says so instead of answering for the digits that
+// were read. ocr_match judges the text as read, '?' included, because the
+// watch does: the washer recipe's pattern catches "?", the End screen.
+func readingVerdict(trig config.Trigger, engine, reading string) testVerdict {
+	cond, err := trigger.CheckEngine(trig, engine, reading)
 	if err != nil {
-		return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
+		return testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
+	}
+	detail := cond.Detail
+	if trig.Type == "ocr_match" && engine == "sevenseg" && strings.Contains(reading, "?") {
+		detail = "The text as read, ? included, matches the pattern"
+		if !cond.Met {
+			detail = "The text as read, ? included, doesn't match the pattern"
+		}
 	}
 	switch {
 	case !cond.Evaluable:
-		return &testVerdict{State: "info", Title: "No verdict from one reading", Detail: cond.Detail + "."}
-	case view.Unreadable:
-		return &testVerdict{State: "info", Title: "No digits read", Detail: "The decoder couldn't read any digit, so there's nothing to check the trigger against yet."}
-	case view.Partial:
-		return &testVerdict{State: "info", Title: "Partial reading", Detail: "Some digits weren't read, so this only checked part of the number: " +
-			lowerFirst(cond.Detail) + "."}
+		return testVerdict{State: "info", Title: "No verdict from one reading", Detail: detail + "."}
+	case cond.Skipped:
+		return testVerdict{State: "skipped", Title: "Reading skipped", Detail: detail + "."}
 	case !cond.Met:
-		return &testVerdict{State: "unmet", Title: "Condition not met", Detail: cond.Detail + "."}
+		return testVerdict{State: "unmet", Title: "Condition not met", Detail: detail + "."}
 	}
 	confirm := trig.Confirm
 	if confirm <= 0 {
@@ -1253,7 +1282,7 @@ func verdictFor(trig config.Trigger, reading string, view readingView, errs []fi
 		// condKey), not identical texts.
 		when = fmt.Sprintf("after %d readings in a row meet it", confirm)
 	}
-	return &testVerdict{State: "met", Title: "Condition met", Detail: cond.Detail + ". The watch fires " + when + ", unless it was already met or Cooldown is running."}
+	return testVerdict{State: "met", Title: "Condition met", Detail: detail + ". The watch fires " + when + ", unless it was already met or Cooldown is running."}
 }
 
 func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
@@ -1385,8 +1414,8 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		res.Read = true
-		res.Reading = viewReading(engName, res.Text)
-		res.Verdict = verdictFor(trig, res.Text, res.Reading, trigErrs)
+		res.Reading = viewReadingFor(trig, res.Engine, res.Text)
+		res.Verdict = verdictFor(trig, res.Engine, res.Text, trigErrs)
 	}
 	s.render(w, "testresult.html", res)
 }

@@ -110,10 +110,11 @@
   }
 
   // ---- Row = link, for the parts the stretched name link can't cover ----
-  // The error sentence and "No digits read" sit above the row link so
-  // their tooltips still show; a plain click on them follows the row's
-  // link like a click anywhere else in the row would. A modifier click
-  // (new tab) or a text selection is left alone.
+  // The error sentence and the "skipped" / "no digits read" note
+  // (.reading-sub) sit above the row link so their tooltips still show;
+  // a plain click on them follows the row's link like a click anywhere
+  // else in the row would. A modifier click (new tab) or a text
+  // selection is left alone.
   if (table) {
     table.classList.add("js-rows");
     table.addEventListener("click", function (e) {

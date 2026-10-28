@@ -131,26 +131,37 @@ type progressView struct {
 const maxProgressDots = 10
 
 // confirmProgress is nil when the reading isn't on its way to a fire.
-func confirmProgress(trig config.Trigger, s state.Sample) *progressView {
+// skipped says the newest reading is one the watch skips (a numeric
+// watch's '?' reading, readingView.Skipped): the count it carries is the
+// one from before, so the line says the count stays rather than "Above
+// 24: 1 of 3" under a hint that this reading didn't count.
+func confirmProgress(trig config.Trigger, s state.Sample, skipped bool) *progressView {
 	cooling := !s.CooldownEnds.IsZero()
 	if s.Pending <= 0 || s.Fired || (s.Need <= 1 && !cooling) {
 		return nil
 	}
-	cond := "Condition met"
+	cond, low := "Condition met", "the condition"
 	switch trig.Type {
 	case "ocr_match":
-		cond = "Matches the pattern"
+		cond, low = "Matches the pattern", "matching the pattern"
 	case "ocr_changed":
-		cond = "New text"
+		cond, low = "New text", "new text"
 	case "numeric":
 		word := "Above"
 		if trig.Op == "lt" {
 			word = "Below"
 		}
 		cond = word + " " + strconv.FormatFloat(trig.Threshold, 'f', -1, 64)
+		low = strings.ToLower(cond)
 	}
 	var pv *progressView
 	switch {
+	case skipped && cooling && s.Pending >= s.Need:
+		pv = &progressView{Text: "This reading was skipped; " + low + " stays confirmed. Cooldown holds the alert until", Until: s.CooldownEnds, After: "; it goes out then if this still holds."}
+	case skipped && cooling:
+		pv = &progressView{Text: fmt.Sprintf("This reading was skipped, so the count stays at %d of %d readings in a row %s. Cooldown holds any alert until", s.Pending, s.Need, low), Until: s.CooldownEnds, After: "."}
+	case skipped:
+		pv = &progressView{Text: fmt.Sprintf("This reading was skipped, so the count stays at %d of %d readings in a row %s.", s.Pending, s.Need, low)}
 	case cooling && s.Pending >= s.Need:
 		// Confirmed, and held: the first confirmed reading after the
 		// cooldown fires (trigger.go's delay-not-drop cooldown).

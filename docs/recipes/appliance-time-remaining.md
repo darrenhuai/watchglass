@@ -46,8 +46,11 @@ watches:
 <!-- sample-check: washer-finished samples/washer-0-04.jpg not-met reads=0:04 -->
 <!-- sample-check: washer-finished samples/washer-0-00.jpg met reads=0:00 -->
 <!-- sample-check: washer-finished samples/washer-end.jpg met reads=? -->
+<!-- sample-check: washer-almost-done samples/washer-end.jpg skipped reads=? -->
 
-On the samples, the first watch reads `1:23` (the pattern doesn't match, so nothing happens) and then `0:04`, which is below 5. The second fires on `0:00`, and on `End`, which reads as `?`:
+On the samples, the first watch reads `1:23` (the pattern doesn't match, so nothing happens) and then `0:04`, which is below 5. The second fires on `0:00`, and on `End`, which reads as `?`. The first watch skips that `?`, as a `numeric` watch skips every reading with a digit it couldn't read, and Test this region shows the `?` with "no digits read" beside it.
+
+Test this region on the `0:04` frame:
 
 ![Test this region on the 0:04 frame: the crop of the amber digits, Read 0:04, and the verdict that 4 is below 5](img/washer-test.png)
 

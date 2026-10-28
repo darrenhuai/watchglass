@@ -23,7 +23,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/ocr"
-	"github.com/darrenhuai/watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/web"
 )
 
 // root is the repository, two levels up from this package.
@@ -355,10 +355,15 @@ func TestUILinksToDocsResolve(t *testing.T) {
 	}
 }
 
-var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met)(?:\s+reads=(\S+))?\s*-->`)
+var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met|skipped)(?:\s+reads=(\S+))?\s*-->`)
+
+// sampleStates maps a sample-check verdict to the Test page's verdict
+// state (web.Verdict).
+var sampleStates = map[string]string{"met": "met", "not-met": "unmet", "skipped": "skipped"}
 
 // TestRecipeSamples reads each recipe's committed sample frame with the
-// recipe's own watch, as Test this region would.
+// recipe's own watch, as Test this region would, and asks the Test page's
+// own verdict code what it says about that reading.
 func TestRecipeSamples(t *testing.T) {
 	var tess ocr.Engine
 	if bin, err := ocr.FindTesseract(""); err == nil {
@@ -433,13 +438,14 @@ func TestRecipeSamples(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					cond, err := trigger.Check(w.Trigger, text)
-					if err != nil {
-						t.Fatal(err)
+					engine := w.Engine
+					if engine == "" {
+						engine = "tesseract"
 					}
-					t.Logf("read %q: %s", text, cond.Detail)
-					if cond.Met != (verdict == "met") {
-						t.Errorf("read %q, and %s; the recipe says %s", text, cond.Detail, verdict)
+					state, title, detail := web.Verdict(w.Trigger, engine, text)
+					t.Logf("read %q: %s. %s", text, title, detail)
+					if state != sampleStates[verdict] {
+						t.Errorf("read %q, and Test says %q (%s); the recipe says %s", text, title, detail, verdict)
 					}
 					if reads != "" && text != reads {
 						t.Errorf("read %q, the recipe says it reads %q", text, reads)

@@ -55,7 +55,7 @@ Recipes live in [docs/recipes](docs/recipes/). Each one has:
    <!-- sample-check: heat-pump-fault samples/heat-pump-fault.jpg met -->
    ```
 
-   The test crops the frame to the watch's region, reads it with the watch's engine, and checks that the trigger's condition is `met` or `not-met`, as Test this region would. Add `reads=<text>` to check the exact text (only for `sevenseg`, whose output doesn't depend on the tesseract version). Checks for tesseract skip when it isn't installed, and rapidocr checks skip without Python.
+   The test crops the frame to the watch's region, reads it with the watch's engine, and checks that Test this region says `met` ("Condition met"), `not-met` ("Condition not met") or `skipped` ("Reading skipped", for a `numeric` watch on `sevenseg` reading a `?`). Add `reads=<text>` to check the exact text (only for `sevenseg`, whose output doesn't depend on the tesseract version). Checks for tesseract skip when it isn't installed, and rapidocr checks skip without Python.
 4. A screenshot of Test this region on the sample, in `docs/recipes/img/`.
 
 Point the watch at the frame to take the screenshot: run watchglass from the repository folder with a watch whose source is `ffmpeg:-i docs/recipes/samples/<frame>`.

@@ -51,7 +51,8 @@ type Event struct {
 	// frames in a row never show, and a value that changes on every
 	// reading (a power meter) is still followed, a reading or so behind;
 	// the published number is always one that was actually read. Readings
-	// with no number, or (SevenSeg) a partly read one, don't count.
+	// with no number, and (SevenSeg) every reading with a '?' in it or no
+	// digits at all, don't count.
 	// HasValue is false until the window has filled, and on every other
 	// type.
 	Value    float64
@@ -104,9 +105,12 @@ type Evaluator struct {
 	// Now is the clock; tests replace it.
 	Now func() time.Time
 	// SevenSeg says the readings come from the seven-segment decoder, whose
-	// '?' is a digit it couldn't read rather than text: a number touching
-	// one is only partly read and stays out of Value. (The condition still
-	// judges what was read, as the web UI's Test does.)
+	// '?' is a digit it couldn't read rather than text, and whose blank
+	// reading is a frame with no digit on it. A numeric watch skips every
+	// such reading (see unread): it counts toward Confirm in neither
+	// direction, leaves the settled state alone and never reaches Value.
+	// ocr_match still judges the text as read, '?' included, so a pattern
+	// can catch a '?' on purpose ("End" reads as "?").
 	SevenSeg bool
 }
 
@@ -228,7 +232,12 @@ func (e *Evaluator) fire(reading, reason string) Event {
 // itself for ocr_changed (it fires on the text settling on a new value), and
 // whether the condition holds for ocr_match and numeric (condKey). A numeric
 // reading with no number in it says nothing either way, so it resets the
-// count rather than counting as "below".
+// count rather than counting as "below". A numeric reading with a digit
+// the seven-segment decoder couldn't read, or with no digit at all
+// (unread), is skipped outright: it neither counts nor resets, so "22.5,
+// ?2.5, 22.5" is two readings in a row above 20, and so is "22.5, , 22.5",
+// and a steady display read now whole, now partly or not at all, never
+// looks like it left the condition and came back.
 func (e *Evaluator) ObserveText(s string) Event {
 	ev := e.observeText(s)
 	if e.cfg.Type == "numeric" {
@@ -258,9 +267,13 @@ func (e *Evaluator) settleText(ev *Event, s string) {
 // decoder's '?' readings are digits it couldn't read, not text, so they
 // settle nothing.
 func (e *Evaluator) settleNumber(ev *Event, s string) {
-	v, partial, ok := e.extractPartial(s)
-	if !ok || (partial && e.SevenSeg) {
-		if !ok && s != "" && !(e.SevenSeg && strings.Contains(s, "?")) {
+	if e.unread(s) {
+		e.textRun = 0
+		return
+	}
+	v, ok := e.extract(s)
+	if !ok {
+		if s != "" {
 			e.settleText(ev, s)
 		} else {
 			e.textRun = 0
@@ -291,6 +304,9 @@ func (e *Evaluator) observeText(s string) Event {
 		met = e.re.MatchString(s)
 		key = condKey(met)
 	case "numeric":
+		if e.unread(s) {
+			return e.skipped(s)
+		}
 		v, ok := e.extract(s)
 		if !ok {
 			e.candidate, e.candCount = "", 0
@@ -345,6 +361,31 @@ func (e *Evaluator) observeText(s string) Event {
 	}
 	v, _ := e.extract(s)
 	return e.fire(s, fmt.Sprintf("value %v crossed threshold", v))
+}
+
+// skipped is the Event for a numeric reading the watch skips (unread).
+// The count in progress is left as it is, and the event carries it, so
+// the Live tile for the skipped frame still says "1 of 3 needed to fire"
+// or "held by Cooldown" instead of dropping the line until the next clean
+// reading.
+func (e *Evaluator) skipped(s string) Event {
+	ev := Event{Reading: s}
+	if e.candCount == 0 {
+		return ev
+	}
+	met := e.candidate == condMet
+	if !e.edge(e.candidate, met) {
+		return ev
+	}
+	switch {
+	case e.candCount < e.cfg.Confirm:
+		ev.Pending, ev.Need = e.candCount, e.cfg.Confirm
+		ev.CooldownEnds = e.cooldownEnds()
+	case e.coolingDown():
+		ev.Pending, ev.Need = e.cfg.Confirm, e.cfg.Confirm
+		ev.CooldownEnds = e.cooldownEnds()
+	}
+	return ev
 }
 
 // edge reports whether a reading with candidate key (and, for the
@@ -404,17 +445,30 @@ type Condition struct {
 	// reading with the previous stable one.
 	Evaluable bool
 	Met       bool
+	// Skipped is a numeric watch's seven-segment reading with a digit the
+	// decoder couldn't read, or with no digit at all: the watch ignores it
+	// (Met is false, and it doesn't count as "not met" either).
+	Skipped bool
 	// Detail says why, in a short sentence without a trailing period.
 	Detail string
 }
 
-// Check evaluates cfg's condition against one reading. The error is
+// Check evaluates cfg's condition against one reading from a text engine
+// (tesseract, rapidocr), where a '?' is just text. The error is
 // trigger.New's: an unknown type, a missing or invalid pattern, a bad op.
 func Check(cfg config.Trigger, reading string) (Condition, error) {
+	return CheckEngine(cfg, "", reading)
+}
+
+// CheckEngine is Check for a reading from engine, judged exactly as a
+// running watch with that engine judges it: a numeric watch on the
+// seven-segment decoder skips a reading with a '?' in it (Skipped).
+func CheckEngine(cfg config.Trigger, engine, reading string) (Condition, error) {
 	e, err := New(cfg)
 	if err != nil {
 		return Condition{}, err
 	}
+	e.SevenSeg = engine == "sevenseg"
 	switch cfg.Type {
 	case "ocr_match":
 		if e.re.MatchString(reading) {
@@ -422,6 +476,13 @@ func Check(cfg config.Trigger, reading string) (Condition, error) {
 		}
 		return Condition{Evaluable: true, Detail: "The text doesn't match the pattern"}, nil
 	case "numeric":
+		if e.unread(reading) {
+			detail := "A digit wasn't read, so this reading is skipped and the watch keeps its last state"
+			if reading == "" {
+				detail = "Nothing was read, so this reading is skipped and the watch keeps its last state"
+			}
+			return Condition{Evaluable: true, Skipped: true, Detail: detail}, nil
+		}
 		v, ok := e.extract(reading)
 		if !ok {
 			return Condition{Evaluable: true, Detail: "No number found in the reading"}, nil
@@ -445,24 +506,36 @@ func Check(cfg config.Trigger, reading string) (Condition, error) {
 // extract finds the number in s: the pattern's first capture group when
 // it matched something, else the whole match.
 func (e *Evaluator) extract(s string) (float64, bool) {
-	v, _, ok := e.extractPartial(s)
-	return v, ok
-}
-
-// extractPartial is extract that also reports whether the number touches a
-// '?': the seven-segment decoder's mark for a digit it saw but couldn't
-// read, so "?4?" may well be 142 and "2?.5" isn't 2.
-func (e *Evaluator) extractPartial(s string) (v float64, partial, ok bool) {
 	loc := e.re.FindStringSubmatchIndex(s)
 	if loc == nil {
-		return 0, false, false
+		return 0, false
 	}
 	start, end := loc[0], loc[1]
 	if len(loc) >= 4 && loc[2] >= 0 && loc[3] > loc[2] {
 		start, end = loc[2], loc[3]
 	}
-	val := s[start:end]
-	partial = strings.Contains(val, "?") || (start > 0 && s[start-1] == '?') || (end < len(s) && s[end] == '?')
-	f, err := strconv.ParseFloat(val, 64)
-	return f, partial, err == nil
+	f, err := strconv.ParseFloat(s[start:end], 64)
+	return f, err == nil
+}
+
+// unread reports whether s is a seven-segment reading that says nothing
+// about the number: a digit the decoder saw but couldn't read (any '?' at
+// all), or no digits at all (""). A numeric watch skips it.
+//
+// Not just a '?' inside or next to the number the pattern picks: the
+// default pattern finds "0" in "??.0" (71.0 on the display), "5.5" in
+// "?5.5" and "3" in "?.3", each a wrong number with the '?' a character or
+// two away. The decoder's output has no spaces, so a '?' elsewhere is on
+// the same display, and still changes what the number means: "?:04" may
+// be 1:04 rather than 4 minutes. Test this region shows such a reading as
+// skipped, so a box that always catches an unreadable glyph is noticed and
+// tightened rather than read wrong.
+//
+// A blank reading is a frame with no digit on it: a display caught dark
+// between refreshes, a glare, a backlight that went off. It isn't "Err" or
+// "OFF" (text a panel shows instead of a number, which a text engine
+// reads and which does reset the count): the display said nothing, so the
+// count in progress stands, as it does across a '?'.
+func (e *Evaluator) unread(s string) bool {
+	return e.SevenSeg && (s == "" || strings.Contains(s, "?"))
 }

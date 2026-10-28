@@ -81,7 +81,8 @@ watches:
     engine: sevenseg
     trigger:
       type: numeric
-      # Only a clean temperature: "?4" (fault E4) must not count as 4 °C.
+      # One to three digits and nothing else. A reading with a "?" in it,
+      # like "?4" for fault E4, is skipped and never counts as 4 °C.
       pattern: "^([0-9]{1,3})$"
       op: lt
       threshold: 40
@@ -108,13 +109,13 @@ watches:
 ```
 
 <!-- sample-check: boiler-temp samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
-<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg not-met reads=?4 -->
+<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg skipped reads=?4 -->
 <!-- sample-check: boiler-fault samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
 <!-- sample-check: boiler-fault samples/boiler-seven-segment-fault.jpg met reads=?4 -->
 
-On the sample frames, `boiler-temp` reads `52` and `boiler-fault` matches `?4`. Test this region calls a reading with a `?` in it a "Partial reading", since it usually means a digit was missed; here the `?` is what the watch looks for, and the line under the verdict says the text matches the pattern:
+On the sample frames, `boiler-temp` reads `52`, and on the E4 frame it skips `?4`: a `numeric` watch ignores every reading with a `?` in it, so a fault code never counts as a temperature. `boiler-fault` matches `?4`. An `ocr_match` pattern sees the `?` as text, so Test this region checks the pattern against the reading as it was read, `?` included, just as the running watch does:
 
-![Test this region on the E4 frame: the crop of the two blue digits, Read ?4 with the E at 30% confidence, and the verdict Partial reading: the text matches the pattern](img/boiler-fault-test.png)
+![Test this region on the E4 frame: the crop of the two blue digits, Read ?4 with the E at 30% confidence, and the verdict Condition met: the text as read, ? included, matches the pattern](img/boiler-fault-test.png)
 
 A `?` also shows up when a digit is caught half-lit or behind a reflection, which is why the fault watch wants three readings in a row. The alert tells you a code is showing; the photo attached to the ntfy push tells you which.
 

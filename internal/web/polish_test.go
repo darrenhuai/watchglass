@@ -149,19 +149,19 @@ func (e wordsAs) RecognizeWords(ctx context.Context, img image.Image) (string, [
 	return e.text, e.words, nil
 }
 
-// "No digits read" comes without a confidence chip: a glyph the decoder
-// couldn't make a digit of is a "?" chip, which beside that heading reads
-// as a digit after all. A partial read keeps its chips.
+// A reading with no digit shows its "?" and says "no digits read", without
+// a confidence chip: a "?" chip would only repeat it at a made-up
+// confidence. A partial read keeps its chips.
 func TestNoDigitsReadHasNoConfidenceChips(t *testing.T) {
 	s, _ := newTestServerWith(t, ocr.Engines{Tesseract: fakeDetailed{}, SevenSeg: wordsAs{"?", []ocr.Word{{Text: "?", Conf: 11}}}})
 	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "engine": {"sevenseg"}, "ttype": {"numeric"},
 		"pattern": {"([0-9.]+)"}, "op": {"gt"}, "tthreshold": {"1"}}
 	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
-	if !strings.Contains(body, `<span class="reading-none">No digits read</span>`) {
-		t.Fatalf("no placeholder; body:\n%s", body)
+	if !strings.Contains(body, `<span class="mono test-reading"><span class="digit-unknown" title="Digit not read">?</span><span class="sr-only"> (no digits read)</span></span> <span class="reading-sub" aria-hidden="true">no digits read</span>`) {
+		t.Fatalf("the ? or its explanation is missing; body:\n%s", body)
 	}
 	if strings.Contains(body, "word-chip") || strings.Contains(body, "<dt>Confidence</dt>") {
-		t.Errorf("a confidence chip beside \"No digits read\"; body:\n%s", body)
+		t.Errorf("a confidence chip beside a reading with no digit; body:\n%s", body)
 	}
 	if !strings.Contains(body, "couldn't make a digit of anything here") {
 		t.Errorf("the note that says what to do is gone; body:\n%s", body)
