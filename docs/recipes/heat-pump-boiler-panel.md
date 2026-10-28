@@ -81,7 +81,8 @@ watches:
     engine: sevenseg
     trigger:
       type: numeric
-      # Only a clean temperature: "?4" (fault E4) must not count as 4 °C.
+      # One to three digits and nothing else. A reading with a "?" in it,
+      # like "?4" for fault E4, is skipped and never counts as 4 °C.
       pattern: "^([0-9]{1,3})$"
       op: lt
       threshold: 40
@@ -108,21 +109,21 @@ watches:
 ```
 
 <!-- sample-check: boiler-temp samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
-<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg not-met reads=?4 -->
+<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg skipped reads=?4 -->
 <!-- sample-check: boiler-fault samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
 <!-- sample-check: boiler-fault samples/boiler-seven-segment-fault.jpg met reads=?4 -->
 
-On the sample frames, `boiler-temp` reads `52` and `boiler-fault` matches `?4`. Test this region calls a reading with a `?` in it a "Partial reading", since it usually means a digit was missed; here the `?` is what the watch looks for, and the line under the verdict says the text matches the pattern:
+On the sample frames, `boiler-temp` reads `52`, and on the E4 frame it skips `?4`: a `numeric` watch ignores every reading with a `?` in it, so a fault code never counts as a temperature. `boiler-fault` matches `?4`. An `ocr_match` pattern sees the `?` as text, so Test this region checks the pattern against the reading as it was read, `?` included, just as the running watch does:
 
-![Test this region on the E4 frame: the crop of the two blue digits, Read ?4 with the E at 30% confidence, and the verdict Partial reading: the text matches the pattern](img/boiler-fault-test.png)
+![Test this region on the E4 frame: the crop of the two blue digits, Read ?4 with the E at 30% confidence, and the verdict Condition met: the text as read, ? included, matches the pattern](img/boiler-fault-test.png)
 
-A `?` also shows up when a digit is caught half-lit or behind a reflection, which is why the fault watch wants three readings in a row. The alert tells you a code is showing; the photo attached to the ntfy push tells you which.
+A `?` also shows up when a digit is caught half-lit or behind a reflection, which is why the fault watch wants three readings in a row. When the decoder saw a digit there but wasn't sure of it (the chip on Test this region shows the digit), the watch skips the reading rather than take it for a code. A reading the pattern doesn't match that has a `?` in it, like a bare `?`, is skipped, and once the code has shown it takes six temperature readings in a row (twice `confirm`) to clear the watch, so a few half-read frames don't send the same alert again. The alert tells you a code is showing; the photo attached to the ntfy push tells you which. A fault code that shares its digits with the temperature needs this `ocr_match` watch: `E4` reads `?4`, which an `ocr_changed` watch on the same box takes for `54` read with a digit missing, not for a change.
 
 ## Mounting the camera
 
 - **Glare** is the main enemy. A glossy panel reflects windows and ceiling lights, and a reflection across a digit reads as a different digit. Angle the camera 10-20° off square, so reflections go past it, and check the view with the room lights on and off, and in daylight.
 - **Angle**: keep it as close to head-on as the glare allows. tesseract copes with a little perspective; `sevenseg` expects upright digits and loses side bars on a strong slant. If the camera only fits on its side, that is fine: set `preprocess: {rotate: 90}` (or `270`) and the crop is turned before it is read ([configuration.md](../configuration.md#a-display-that-is-sideways)).
-- **Backlight timeout**: many panels turn the backlight off after a minute. A dark LCD reads as nothing: the poll counts as a normal one, the Reading in Home Assistant goes blank, the Value sensor keeps its last number, and no alert goes out. watchglass doesn't alert on a blank display today; "down" is only for a camera that stops delivering frames. If your panel always goes dark, look for a setting that keeps it on, or watch the one indicator that stays lit (a fault LED) with `pixel_change`. To be told when the backlight goes off, an `ocr_changed` watch on the same box fires when the reading changes, blank included, but also on every other change.
+- **Backlight timeout**: many panels turn the backlight off after a minute. A dark LCD reads as nothing: the poll counts as a normal one, both watches skip it and keep their state, `boiler-fault`'s Reading in Home Assistant goes blank once it has read nothing `confirm` times, `boiler-temp`'s Reading and Value keep their last number, and no alert goes out. Dark for longer than 15 minutes (or twice the poll interval, if that is longer), both watches start fresh, so a fault still showing when the backlight comes back on is reported again. watchglass doesn't alert on a blank display today; "down" is only for a camera that stops delivering frames. The text LCD's fault watch reads a dark panel as an empty line, which counts as the code clearing: a fault still showing when the backlight comes back on is reported again, once the hour's cooldown is over. If your panel always goes dark, look for a setting that keeps it on, or watch the one indicator that stays lit (a fault LED) with `pixel_change`. To be told when the backlight goes off, an `ocr_changed` watch on the same box fires when the reading changes, blank included, but also on every other change.
 - **Night**: a camera with IR night vision may wash out an LCD. Most panels are lit anyway; turn the camera's IR off if it helps.
 
 ## In Home Assistant

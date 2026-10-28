@@ -19,16 +19,20 @@
 <p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}}. The readings below are from before it stopped{{end}}</p>
 {{end}}
 {{if .Recent}}
-{{$latest := index .Recent 0}}{{$r := reading .Engine $latest.Reading}}
+{{$latest := index .Recent 0}}{{$r := readingFor .Trigger .Engine $latest.Reading $latest.Unsure}}
 <div class="readout">
-  <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
+  <span class="led {{if eq .Status.State "stopped"}}led-stopped{{else if eq .Status.State "error"}}led-error{{else if $latest.Fired}}led-amber{{else if or (and $r.Unreadable (not $r.Matched)) $r.Skipped}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
   {{/* Two rows at every width (style.css): LED, label, fired tag and the
        time on the first, the reading full width under them. */}}
   <span class="readout-label">Latest reading</span>
   {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired{{with $.FiredTag}} · {{.}}{{end}}</span>{{end}}
   <time class="readout-ts mono" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
-  {{if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit. Tighten the region around the digits or adjust Binarize.</p>
-  {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize.</p>{{end}}
+  {{/* What the watch does with a '?' or a blank (viewReadingFor): a pattern
+       that matches a '?' is working as written; a numeric watch skips both. */}}
+  {{if $r.Matched}}<p class="readout-hint">{{matchedNote}}</p>
+  {{else if and $r.Placeholder $r.Skipped}}<p class="readout-hint">{{blankSkippedNote}}</p>
+  {{else if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit{{if $r.Skipped}}, so the watch skips this reading and keeps its last state{{end}}. Tighten the region around the digits or adjust Binarize.</p>
+  {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read or wasn't sure of{{if $r.Skipped}}, so the watch skips this reading and keeps its last state{{end}}. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{/* Confirm progress (confirmProgress in livefeed.go): the reading meets
        the trigger, and this many in a row so far of the Confirm needed;
        while Cooldown runs, until when it holds the alert. */}}
@@ -60,9 +64,9 @@
      is one frame with a count (collapseSamples in livefeed.go). */}}
 <div class="strip" tabindex="0" role="region" aria-label="Recent readings, newest first">
 {{range .Tiles}}
-  {{$r := reading $.Engine .Reading}}<figure data-key="{{.TS.UnixNano}}-{{.Count}}">
+  {{$r := readingFor $.Trigger $.Engine .Reading .Unsure}}<figure data-key="{{.TS.UnixNano}}-{{.Count}}">
     <img src="{{b64png .PNG}}" alt="">
-    <figcaption{{if .Fired}} class="fired"{{else if $r.Placeholder}} class="caption-none"{{end}} title="{{if .Fired}}Fired: {{end}}{{or $r.Placeholder .Reading}}{{if gt .Count 1}} ({{.Count}} readings in a row){{end}}{{if .Pending}} ({{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}} needed to fire{{else if ge .Pending .Need}}held by Cooldown{{else}}{{.Pending}} of {{.Need}} readings in a row, held by Cooldown{{end}}){{end}}">{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}<span class="cap-body"><span class="cap-text">{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</span>{{if gt .Count 1}}<span class="tile-count" aria-hidden="true">&times;{{.Count}}</span><span class="sr-only">, {{.Count}} readings in a row</span>{{end}}</span>{{if .Pending}}<span class="tile-progress">{{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}}<span class="sr-only"> needed to fire</span>{{else if ge .Pending .Need}}held<span class="sr-only"> by Cooldown</span>{{else}}{{.Pending}} of {{.Need}}<span class="sr-only"> readings in a row,</span><span aria-hidden="true"> ·</span> held<span class="sr-only"> by Cooldown</span>{{end}}</span>{{end}}</figcaption>
+    <figcaption{{if .Fired}} class="fired"{{else if $r.Placeholder}} class="caption-none"{{end}} title="{{if .Fired}}Fired: {{end}}{{or $r.Placeholder .Reading}}{{if $r.Unreadable}} (no digits read{{if $r.Skipped}}, skipped{{end}}){{else if $r.Skipped}} (skipped){{end}}{{if gt .Count 1}} ({{.Count}} readings in a row){{end}}{{if .Pending}} ({{if $r.Skipped}}still {{end}}{{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}} needed to fire{{else if ge .Pending .Need}}held by Cooldown{{else}}{{.Pending}} of {{.Need}} readings in a row, held by Cooldown{{end}}){{end}}">{{if .Fired}}<span class="tag tag-fired">fired</span> {{end}}<span class="cap-body"><span class="cap-text">{{with $r.Placeholder}}{{.}}{{else}}{{template "readingText" $r}}{{end}}</span>{{if gt .Count 1}}<span class="tile-count" aria-hidden="true">&times;{{.Count}}</span><span class="sr-only">, {{.Count}} readings in a row</span>{{end}}</span>{{if .Pending}}<span class="tile-progress">{{if $r.Skipped}}still {{end}}{{if .CooldownEnds.IsZero}}{{.Pending}} of {{.Need}}<span class="sr-only"> needed to fire</span>{{else if ge .Pending .Need}}held<span class="sr-only"> by Cooldown</span>{{else}}{{.Pending}} of {{.Need}}<span class="sr-only"> readings in a row,</span><span aria-hidden="true"> ·</span> held<span class="sr-only"> by Cooldown</span>{{end}}</span>{{end}}</figcaption>
   </figure>
 {{end}}
 </div>

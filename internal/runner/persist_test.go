@@ -171,9 +171,10 @@ func TestRestartDoesNotRepeatAnAlert(t *testing.T) {
 				t.Errorf("RestoredFire = %v, %v; want %v, true", got, ok, firedAt)
 			}
 
-			// The display changes for real. Inside the cooldown the alert is
+			// The display changes for real (leaving a met condition takes
+			// twice Confirm readings). Inside the cooldown the alert is
 			// held until the moment the cooldown was always going to end.
-			g.show(r2, c.away, 2)
+			g.show(r2, c.away, 4)
 			if ev := g.show(r2, c.back, 2); ev.Fired || ev.Pending != 2 || !ev.CooldownEnds.Equal(ends) {
 				t.Fatalf("a real change inside the cooldown: %+v, want it held until %v", ev, ends)
 			}
@@ -189,6 +190,100 @@ func TestRestartDoesNotRepeatAnAlert(t *testing.T) {
 				t.Errorf("third run: %+v, %d alerts; want none new", ev, g.sent())
 			}
 		})
+	}
+}
+
+// The hysteresis survives a restart, through the runner and its saved
+// rows: a restored met condition isn't re-armed by a misread frame or two,
+// is left only after twice confirm clean readings (and the row says so),
+// and the text fires again after that. Inside one run, a display dark for
+// longer than the restart window is forgotten the same way, a short dark
+// spell is not.
+func TestRestartKeepsTheHysteresis(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "ocr_match", Pattern: "(?i)print complete", Confirm: 2})
+	stable := func(want string) {
+		t.Helper()
+		row, ok, err := g.store.LoadTriggerState(w.Name)
+		if err != nil || !ok || !row.HasStable || row.Stable != want {
+			t.Errorf("saved state = %+v (ok=%v err=%v), want it settled on %q", row, ok, err, want)
+		}
+	}
+	r1 := g.start(w)
+	if ev := g.show(r1, "PRINT COMPLETE", 2); !ev.Fired || g.sent() != 1 {
+		t.Fatalf("first run: %+v, %d alerts; want one fire", ev, g.sent())
+	}
+
+	g.now = g.now.Add(time.Minute)
+	r2 := g.start(w)
+	g.show(r2, "PRlNT C0MPLETE", 2) // two frames misread through glare
+	if ev := g.show(r2, "PRINT COMPLETE", 2); ev.Fired || g.sent() != 1 {
+		t.Fatalf("after two misread frames: %+v, %d alerts; want the restored condition kept", ev, g.sent())
+	}
+	stable("cond:true")
+	g.show(r2, "PRINTING 5%", 3) // one short of twice confirm
+	stable("cond:true")
+	if ev := g.show(r2, "PRINT COMPLETE", 2); ev.Fired || g.sent() != 1 {
+		t.Fatalf("after three readings away: %+v, %d alerts; want the condition still kept", ev, g.sent())
+	}
+	g.show(r2, "PRINTING 5%", 4)
+	stable("cond:false")
+
+	g.now = g.now.Add(time.Minute)
+	r3 := g.start(w)
+	if ev := g.show(r3, "PRINT COMPLETE", 2); !ev.Fired || g.sent() != 2 {
+		t.Fatalf("the text after a restart on the left state: %+v, %d alerts; want the second alert", ev, g.sent())
+	}
+
+	// tesseract reading the line blank for twice Confirm polls: the text
+	// cleared, which leaves the condition, so its return is news.
+	g.show(r3, "", 4)
+	stable("cond:false")
+	if ev := g.show(r3, "PRINT COMPLETE", 2); !ev.Fired || g.sent() != 3 {
+		t.Errorf("the text after the line cleared: %+v, %d alerts; want the third alert", ev, g.sent())
+	}
+}
+
+// A seven-segment display that goes dark says nothing, so a short dark
+// spell is one event; dark for longer than the restart window (15 minutes
+// for a watch polling every 2 s) the watch forgets the condition. A
+// restart during the dark spell doesn't stop that clock: it counts on from
+// the restart, and the saved state goes once it has run out.
+func TestADarkSpellAcrossARestart(t *testing.T) {
+	g := newRig(t, openStore(t))
+	w := textWatch(config.Trigger{Type: "ocr_match", Pattern: "^0:00$", Confirm: 2})
+	w.Engine = "sevenseg"
+	dark := func(r *Runner, n int, step time.Duration) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			g.now = g.now.Add(step)
+			if ev := g.show(r, "", 1); ev.Fired {
+				t.Fatalf("a dark poll fired: %+v", ev)
+			}
+		}
+	}
+	r1 := g.start(w)
+	if ev := g.show(r1, "0:00", 2); !ev.Fired || g.sent() != 1 {
+		t.Fatalf("first run: %+v, %d alerts; want one fire", ev, g.sent())
+	}
+	dark(r1, 5, 2*time.Second)
+
+	g.now = g.now.Add(time.Minute)
+	r2 := g.start(w) // an update while the display is dark
+	dark(r2, 30, 2*time.Minute)
+	if row, ok, err := g.store.LoadTriggerState(w.Name); err != nil || !ok || row.HasStable {
+		t.Errorf("saved state after an hour dark = %+v (ok=%v err=%v), want the settled state gone", row, ok, err)
+	}
+	if ev := g.show(r2, "0:00", 2); !ev.Fired || g.sent() != 2 {
+		t.Errorf("0:00 after an hour dark across a restart: %+v, %d alerts; want the second alert", ev, g.sent())
+	}
+
+	dark(r2, 5, 2*time.Second)
+	g.now = g.now.Add(time.Minute)
+	r3 := g.start(w)
+	dark(r3, 6, 2*time.Minute)
+	if ev := g.show(r3, "0:00", 2); ev.Fired || g.sent() != 2 {
+		t.Errorf("0:00 after 12 minutes dark across a restart: %+v, %d alerts; want nothing new", ev, g.sent())
 	}
 }
 
@@ -534,7 +629,7 @@ func TestRestartDropsAFireTimeInTheFuture(t *testing.T) {
 	if ev := g.show(r, "PRINT COMPLETE", 2); ev.Fired {
 		t.Fatalf("the settled state should still carry on: %+v", ev)
 	}
-	g.show(r, "PRINTING 5%", 2)
+	g.show(r, "PRINTING 5%", 4)
 	if ev := g.show(r, "PRINT COMPLETE", 2); !ev.Fired {
 		t.Errorf("next job: %+v, want a fire, not one held until the wrong clock's time", ev)
 	}
@@ -578,7 +673,7 @@ func TestStateIsWrittenOnlyWhenItChanges(t *testing.T) {
 	if g.logs.has("save trigger state") {
 		t.Fatalf("polls that changed nothing tried to write the state: %q", g.logs.lines)
 	}
-	g.show(r, "PRINTING 3%", 2) // the condition ends: a new settled state
+	g.show(r, "PRINTING 3%", 4) // the condition ends (twice Confirm readings): a new settled state
 	if !g.logs.has("save trigger state") {
 		t.Errorf("a new settled state was not written (expected the closed store to refuse it): %q", g.logs.lines)
 	}

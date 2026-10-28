@@ -41,11 +41,15 @@
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
           <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span>{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}}<span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}{{with .AlertsRetrying}}<span class="alerts-failing alerts-retrying" title="{{.}}">retrying alert</span>{{end}}</span>
-        {{else if .Has}}{{$r := reading .Watch.Engine .Latest.Reading}}
+        {{else if .Has}}{{$r := readingFor .Watch.Trigger .Watch.Engine .Latest.Reading .Latest.Unsure}}
           {{/* Fired stays first: an alert is never hidden behind "unreadable". */}}
           {{/* An earlier fire, once newer readings came in: "fired 12 s ago". */}}
-          <span class="led {{if .Latest.Fired}}led-amber{{else if $r.Unreadable}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none"{{if $r.Unreadable}} title="The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize."{{end}}>{{.}}</span>{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}} <span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}{{with .AlertsRetrying}} <span class="alerts-failing alerts-retrying" title="{{.}}">retrying alert</span>{{end}}</span>
+          {{/* A numeric watch skips a '?' or blank reading (viewReadingFor):
+               a half-lit LED and "skipped", never a green LED beside "??.0".
+               A '?' the pattern matches on purpose isn't a box to fix,
+               so it keeps the green LED. */}}
+          <span class="led {{if .Latest.Fired}}led-amber{{else if or (and $r.Unreadable (not $r.Matched)) $r.Skipped}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
+          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none">{{.}}</span>{{if $r.Skipped}} <span class="reading-sub" title="{{blankSkippedNote}}">skipped</span>{{end}}{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{if and $r.Unreadable $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}"><span aria-hidden="true">no digits read, </span>skipped</span>{{else if $r.Unreadable}} <span class="reading-sub" aria-hidden="true" title="{{if $r.Matched}}{{matchedNote}}{{else}}The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize.{{end}}">no digits read</span>{{else if $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}">skipped</span>{{end}}{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}} <span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}{{with .AlertsRetrying}} <span class="alerts-failing alerts-retrying" title="{{.}}">retrying alert</span>{{end}}</span>
         {{else}}
           {{/* After a restart the registry knows the last fire (seeded from
                the history database) before the watch has read again. */}}

@@ -58,6 +58,9 @@
 {{/* A reading's text (a readingView from the "reading" func). The decoder's
      undecoded digits stay in place as a faint, underlined "?" so the shape
      of the number survives; screen readers hear that some weren't read.
+     An unreadable reading ("?") is shown the same way: a watch may act on
+     it, so it is never hidden behind words. Callers that have room say "no
+     digits read" beside it (aria-hidden, as the sr-only text here says it).
      Callers render .Placeholder instead when it is set. No whitespace: the
      text sits inline in exact markup. */}}
-{{define "readingText"}}{{range .Runs}}{{if .Unknown}}<span class="digit-unknown" title="Digit not read">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{if .Partial}}<span class="sr-only"> (some digits not read)</span>{{end}}{{end}}
+{{define "readingText"}}{{range .Runs}}{{if .Unknown}}<span class="digit-unknown" title="Digit not read">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{if .Partial}}<span class="sr-only"> (some digits not read)</span>{{else if .Unreadable}}<span class="sr-only"> (no digits read)</span>{{end}}{{end}}

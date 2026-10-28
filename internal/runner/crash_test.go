@@ -385,6 +385,8 @@ func TestConsumerCrashKeepsTheReadingAndItsFirstTime(t *testing.T) {
 	r.OnReading = broken
 	var crashes []*CrashError
 	r.OnCrash = func(ce *CrashError) { crashes = append(crashes, ce) }
+	ends := 0
+	r.OnCrashEnd = func() { ends++ }
 	for i := 0; i < 3; i++ {
 		if ev, err := r.Tick(context.Background()); err != nil || ev.Reading != "1" {
 			t.Fatalf("tick %d: %+v, %v; want the reading and no error", i+1, ev, err)
@@ -393,6 +395,11 @@ func TestConsumerCrashKeepsTheReadingAndItsFirstTime(t *testing.T) {
 	}
 	if len(crashes) != 3 {
 		t.Fatalf("OnCrash heard %d crashes, want 3", len(crashes))
+	}
+	// Each poll made a reading and then crashed: none of them was clean,
+	// so the watch stays in error between its readings.
+	if ends != 0 {
+		t.Errorf("OnCrashEnd heard %d ends while every poll crashed, want none", ends)
 	}
 	for i, ce := range crashes {
 		if ce.Step != StepAfter || !strings.Contains(ce.Error(), StepAfter.Sentence()) || strings.Contains(ce.Error(), ErrCrashed.Error()) {
@@ -405,6 +412,13 @@ func TestConsumerCrashKeepsTheReadingAndItsFirstTime(t *testing.T) {
 	// A poll whose consumer works ends the run; the next crash is a new one.
 	r.OnReading = nil
 	r.Tick(context.Background())
+	if ends != 1 {
+		t.Errorf("OnCrashEnd heard %d ends after a clean poll, want 1", ends)
+	}
+	r.Tick(context.Background())
+	if ends != 1 {
+		t.Errorf("OnCrashEnd heard %d ends; a second clean poll ends no run", ends)
+	}
 	time.Sleep(2 * time.Millisecond)
 	r.OnReading = broken
 	r.Tick(context.Background())
@@ -525,7 +539,8 @@ func TestPanicAfterTheSendKeepsTheSenderGoing(t *testing.T) {
 	w.Interval = config.Duration(10 * time.Millisecond)
 	var logs logBook
 	notifier := &fakeNotifier{}
-	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, &fakeOCR{texts: []string{"GO", "no"}}, notifier, nil, logs.logf)
+	// Leaving a met condition takes twice Confirm readings, so "no" twice.
+	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, &fakeOCR{texts: []string{"GO", "no", "no"}}, notifier, nil, logs.logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +585,8 @@ func (panicNotifier) Send(ctx context.Context, title, body string) error { panic
 func TestSendPanicFailsTheAlertOnly(t *testing.T) {
 	w := watchCfg(config.Trigger{Type: "ocr_match", Pattern: "GO", Confirm: 1})
 	w.Interval = config.Duration(10 * time.Millisecond)
-	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, &fakeOCR{texts: []string{"GO", "no"}}, panicNotifier{}, nil, t.Logf)
+	// Leaving a met condition takes twice Confirm readings, so "no" twice.
+	r, err := New(w, &fakeSource{imgs: []image.Image{flat(10, 10, 128)}}, &fakeOCR{texts: []string{"GO", "no", "no"}}, panicNotifier{}, nil, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}

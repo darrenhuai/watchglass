@@ -81,8 +81,13 @@ type Runner struct {
 	// source, in the engine, the preprocessing or the trigger code (which
 	// fails that one read), in a consumer of the reading, or, under Run,
 	// anywhere else in a Tick. The web UI shows the watch in error until
-	// it reads again. Keep it fast: it runs on the poll goroutine.
+	// OnCrashEnd. Keep it fast: it runs on the poll goroutine.
 	OnCrash func(ce *CrashError)
+	// OnCrashEnd, when set, hears that a run of crashes ended: a poll
+	// finished with no crash anywhere in it. A consumer that crashes after
+	// every reading never ends the run, so the watch stays in error
+	// between its readings too.
+	OnCrashEnd func()
 	// crashes is the current run of crashes (crashed, endTick).
 	crashes crashRun
 
@@ -164,6 +169,7 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		return nil, fmt.Errorf("watch %q: %w", w.Name, err)
 	}
 	eval.SevenSeg = w.Engine == "sevenseg"
+	eval.StaleAfter = restoreWindow(w)
 	if w.Trigger.Type != "pixel_change" && engine == nil {
 		return nil, fmt.Errorf("watch %q: trigger %q requires an OCR engine", w.Name, w.Trigger.Type)
 	}
@@ -416,11 +422,23 @@ func (r *Runner) read(ctx context.Context, img image.Image) (ev trigger.Event, c
 	crop = imgproc.Rotate(crop, pp.Rotate)
 	pp.Rotate = 0 // already turned
 	prepped := imgproc.Apply(crop, pp)
-	text, err := r.engine.Recognize(ctx, prepped)
+	// The seven-segment decoder's Words say which '?' is a digit it
+	// wasn't sure of, which no pattern may match (ObserveRead).
+	var (
+		text   string
+		unsure bool
+	)
+	if d, ok := r.engine.(ocr.DetailedEngine); ok && r.watch.Engine == "sevenseg" {
+		var words []ocr.Word
+		text, words, err = d.RecognizeWords(ctx, prepped)
+		unsure = ocr.HasUnsureDigit(text, words)
+	} else {
+		text, err = r.engine.Recognize(ctx, prepped)
+	}
 	if err != nil {
 		return trigger.Event{}, crop, false, err
 	}
-	return r.eval.ObserveText(text), crop, false, nil
+	return r.eval.ObserveRead(text, unsure), crop, false, nil
 }
 
 // raise sends an alert, or says why it isn't sent. Under Run it only queues

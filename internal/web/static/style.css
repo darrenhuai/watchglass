@@ -1099,6 +1099,10 @@ select.needs-engine option { color: var(--text); }
 .watch-table .reading-wrap .mono { font-size: var(--fs-read); line-height: var(--reading-line); color: var(--text); }
 .watch-table .reading-wrap .mono.fired { color: var(--amber); }
 .reading-pending, .reading-none { color: var(--text-faint); font-style: italic; }
+/* "no digits read" beside a "?" reading: the reading is what the watch
+   acted on, so it stays; this says why it is only a "?". */
+.reading-sub { color: var(--text-faint); font-family: var(--font-ui); font-style: italic; font-size: var(--fs-sm); white-space: nowrap; }
+.reading-body > .reading-sub { flex: none; }
 .watch-table .reading-pending, .watch-table .reading-none { line-height: var(--reading-line); }
 /* The seven-segment decoder's "?": kept in place so the number keeps its
    shape, but faint and dotted-underlined so it never reads as a glyph that

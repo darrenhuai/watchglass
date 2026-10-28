@@ -35,10 +35,57 @@ func (s *SevenSeg) RecognizeWords(ctx context.Context, img image.Image) (string,
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
 	}
+	best := s.read(img)
+	if len(best.glyphs) == 0 {
+		return "", nil, nil
+	}
+	var text strings.Builder
+	words := make([]Word, 0, len(best.glyphs))
+	for _, gl := range best.glyphs {
+		ch := gl.ch
+		if gl.unsure() {
+			// The text, which a watch acts on and the pages show, says
+			// the digit wasn't read; the Word keeps what the decoder saw
+			// and how sure it was, so Test this region can show both.
+			ch = '?'
+		}
+		text.WriteByte(ch)
+		words = append(words, Word{Text: string(gl.ch), Conf: gl.conf})
+	}
+	return text.String(), words, nil
+}
+
+// HasUnsureDigit reports whether a '?' in text, as RecognizeWords returned
+// it with words, is a digit the decoder saw and wasn't sure of (its Word
+// holds the digit) rather than a glyph that spells no digit at all. A
+// pattern written to catch a '?' means the second kind: the "E" of a
+// boiler's E4, a washer's End. False for any other engine's words, which
+// don't line up with the text glyph by glyph.
+func HasUnsureDigit(text string, words []Word) bool {
+	if len(words) != len(text) {
+		return false
+	}
+	for i, w := range words {
+		if text[i] == '?' && w.Text != "?" {
+			return true
+		}
+	}
+	return false
+}
+
+// unsure reports whether the glyph is a digit read below UnsureDigit that
+// may be another digit (alt), which the text gives as '?'.
+func (g glyph) unsure() bool {
+	return g.numeral() && g.conf < UnsureDigit && g.alt != 0 && g.alt != g.ch
+}
+
+// read is the decode behind Recognize and RecognizeWords: the best reading
+// of the crop, with no glyphs when nothing is lit or nothing reads.
+func (s *SevenSeg) read(img image.Image) reading {
 	g := toGray(img)
 	thr, primary, ok := thresholdLevels(g)
 	if !ok {
-		return "", nil, nil // uniform (or empty) crop: nothing lit
+		return reading{} // uniform (or empty) crop: nothing lit
 	}
 	best := readGray(g, thr, primary, frameCut{})
 	// A box drawn round the housing is read as if drawn on the window:
@@ -56,16 +103,7 @@ func (s *SevenSeg) RecognizeWords(ctx context.Context, img image.Image) (string,
 			}
 		}
 	}
-	if len(best.glyphs) == 0 {
-		return "", nil, nil
-	}
-	var text strings.Builder
-	words := make([]Word, 0, len(best.glyphs))
-	for _, gl := range best.glyphs {
-		text.WriteByte(gl.ch)
-		words = append(words, Word{Text: string(gl.ch), Conf: gl.conf})
-	}
-	return text.String(), words, nil
+	return best
 }
 
 // readGray reads one gray crop; cut says which of its edges findWindow cut
@@ -175,6 +213,21 @@ const (
 	pointConfSlope = 2.5
 	// unsureConf is the most a '?' scores.
 	unsureConf = 30
+	// UnsureDigit: a digit read below this confidence whose least certain
+	// segment, read the other way, spells a different digit (glyph.alt)
+	// comes back as '?': the decoder saw an 8 but it may be a 0. Its chip
+	// on Test this region keeps the digit and its confidence. Chosen on
+	// round 6's 75 real seven-segment photos and their box variants, where
+	// a plain floor at any level dropped two exact reads for each wrong
+	// value it removed; limited to ambiguous digits it removes a clock's
+	// wrong 5:58 (the 8 at 11%, a 0 with its middle bar nearly lit) and
+	// drops one exact read, a meter's 002.4 whose 4 at 11% may be a 9, and
+	// which did read 002.9 once the photo was re-encoded. The decoder's
+	// confidences sit at 11, 33, 55 and 78 (probes in ninths), so any
+	// value from 12 to 55 gives the same result on those photos. Exported
+	// so the Test page's note and the docs check quote the number the
+	// decoder uses.
+	UnsureDigit = 40
 	// blurredPointSolid: a blurred, noisy point fills at least this share
 	// of its bounding box (a clean one, dotSolidFrac).
 	blurredPointSolid = 0.4
@@ -479,6 +532,13 @@ type glyph struct {
 	conf   float64
 	x0, x1 int     // cell columns, to match a glyph across thresholds
 	x      float64 // centre, for reading order
+	// alt is the digit the cell would spell if its least certain segment
+	// (the one conf measures) were read the other way, or 0 when that
+	// spells no digit: a 0 whose middle bar is nearly lit has alt '8', a
+	// 1 whose top is nearly lit has alt '7'. A 6 or 7 or 9, which the
+	// table spells two ways, may have alt equal to ch: not ambiguous.
+	// Set by classify; see unsure.
+	alt byte
 }
 
 // digit reports whether the glyph is a cell (a digit, '-' or '?') rather
@@ -1993,6 +2053,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 		var (
 			ch    byte
 			conf  float64
+			alt   byte
 			blank bool
 		)
 		if k.offCrop || k.thin {
@@ -2008,19 +2069,19 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			// "1", a colon and a "0" glowing into one blob.
 			ch, conf = '?', unsureConf
 		} else {
-			ch, conf, blank = classify(m, k, stroke, minRun)
+			ch, conf, alt, blank = classify(m, k, stroke, minRun)
 			if !blank && ch != '?' && strayInk(k, cells) {
 				// Ink over or under the cell that no probe reaches: a
 				// bar the clustering left out of its digit (a thin "7"
 				// whose top bar stands a wide gap above its side bars
 				// spells "1" without it), or a mark on the glass.
-				ch, conf = '?', unsureConf
+				ch, conf, alt = '?', unsureConf, 0
 			}
 		}
 		if blank {
 			continue
 		}
-		r.glyphs = append(r.glyphs, glyph{ch: ch, conf: conf, x0: k.x0, x1: k.x1, x: k.centre})
+		r.glyphs = append(r.glyphs, glyph{ch: ch, conf: conf, alt: alt, x0: k.x0, x1: k.x1, x: k.centre})
 		if ch == '?' {
 			r.score -= 100
 		} else {
@@ -2112,11 +2173,12 @@ var patterns = func() map[uint8]byte {
 // render scores 100 and a half-lit bar scores near 0. The two hole zones
 // sit between the vertical bars, a measured stroke plus a margin in from
 // either side; a lit hole or a pattern that spells no digit is '?', capped
-// low.
-func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, blank bool) {
+// low. alt is the digit the closest zone read the other way would spell
+// (glyph.alt), 0 when none.
+func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, alt byte, blank bool) {
 	W, H := k.x1-k.x0+1, k.y1-k.y0+1
 	if W <= 0 || H <= 0 {
-		return 0, 0, true
+		return 0, 0, 0, true
 	}
 	in := math.Min((float64(stroke)+holePad*float64(W))/float64(W), 0.5-holeMinFrac/2)
 	holes := [2]zone{
@@ -2136,23 +2198,28 @@ func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, blan
 		maxFill = math.Max(maxFill, fill[i])
 	}
 	if maxFill == 0 {
-		return 0, 0, true
+		return 0, 0, 0, true
 	}
 	thr := math.Max(onFloor, onHalf*maxFill)
 	var bits uint8
-	margin := 1.0
+	margin, nearest := 1.0, -1
 	for i := 0; i < 7; i++ {
 		if fill[i] >= thr {
 			bits |= 1 << uint(6-i)
 		}
-		margin = math.Min(margin, 2*math.Abs(fill[i]-thr))
+		if d := 2 * math.Abs(fill[i]-thr); d < margin {
+			margin, nearest = d, i
+		}
 	}
 	conf = math.Round(1000*math.Min(1, margin)) / 10
 	ch, ok := patterns[bits]
 	if !ok || fill[7] >= holeLit || fill[8] >= holeLit {
-		return '?', math.Min(conf, unsureConf), false
+		return '?', math.Min(conf, unsureConf), 0, false
 	}
-	return ch, conf, false
+	if nearest >= 0 {
+		alt = patterns[bits^(1<<uint(6-nearest))]
+	}
+	return ch, conf, alt, false
 }
 
 // zoneFill is the share of a zone's probes that cross a lit run.

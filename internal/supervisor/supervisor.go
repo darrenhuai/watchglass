@@ -138,7 +138,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		}
 		// at is also the TS of this reading's alert (runner.Delivery), which
 		// is how the Live panel ties "sent" / "not delivered" to its fire.
-		s.reg.Add(name, state.Sample{TS: at, Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes(), Pending: ev.Pending, Need: ev.Need, CooldownEnds: ev.CooldownEnds})
+		s.reg.Add(name, state.Sample{TS: at, Reading: ev.Reading, Fired: ev.Fired, PNG: buf.Bytes(), Pending: ev.Pending, Need: ev.Need, CooldownEnds: ev.CooldownEnds, Unsure: ev.Unsure})
 		// Reuse the same encoding for the hook; buf.Bytes() is read-only from
 		// here on, matching the registry's PNG read-only convention.
 		if onEvent != nil {
@@ -198,11 +198,12 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		}
 	}
 	// A panic in the poll was contained (runner Contain); the page shows
-	// the watch in error, with words for where it crashed, until it reads
-	// again. Since is the runner's: the first crash of the current run.
+	// the watch in error, with words for where it crashed, until a poll
+	// finishes clean. Since is the runner's: the first crash of the current run.
 	r.OnCrash = func(ce *runner.CrashError) {
 		s.reg.SetCrash(name, state.Crash{Message: ce.Error(), Since: ce.First})
 	}
+	r.OnCrashEnd = func() { s.reg.ClearCrash(name) }
 	// Delivery reports come from the runner's sender goroutine, which may
 	// still be finishing an alert after Stop. Only the watch's current run
 	// reports: a straggler from before a Save & restart (possibly about

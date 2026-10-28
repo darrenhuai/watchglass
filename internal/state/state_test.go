@@ -253,12 +253,12 @@ func TestSeedRestoredLastsUntilTheNextFire(t *testing.T) {
 	}
 }
 
-// A crash shows, as the runner reports it, until the watch reads again.
+// A crash shows, as the runner reports it, until a clean poll clears it.
 // The runner says when the run of crashes began (CrashError.First), so
 // the newest report is the whole truth, time included: a consumer that
-// crashes after every reading clears the crash with each Add and sets it
-// again, and the time it carries is still the first crash's.
-func TestCrashUntilTheNextReading(t *testing.T) {
+// crashes after every reading sets it again with each poll, and the time
+// it carries is still the first crash's.
+func TestCrashUntilACleanPoll(t *testing.T) {
 	r := New(5)
 	if _, ok := r.GetCrash("w"); ok {
 		t.Fatal("a new watch has a crash")
@@ -268,9 +268,11 @@ func TestCrashUntilTheNextReading(t *testing.T) {
 	if c, ok := r.GetCrash("w"); !ok || c.Message != "second" || !c.Since.Equal(time.Unix(20, 0)) {
 		t.Errorf("crash = %+v, %v; want the newest report", c, ok)
 	}
+	// A reading made before a consumer crashed on it is no clean poll:
+	// only the runner's OnCrashEnd (ClearCrash) ends the crash.
 	r.Add("w", Sample{TS: time.Unix(30, 0), Reading: "1"})
-	if _, ok := r.GetCrash("w"); ok {
-		t.Error("a reading didn't clear the crash")
+	if _, ok := r.GetCrash("w"); !ok {
+		t.Error("a reading cleared the crash")
 	}
 	r.SetCrash("w", Crash{Message: "again", Since: time.Unix(40, 0)})
 	if c, _ := r.GetCrash("w"); !c.Since.Equal(time.Unix(40, 0)) || c.Message != "again" {

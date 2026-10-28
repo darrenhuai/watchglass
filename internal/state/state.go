@@ -26,6 +26,9 @@ type Sample struct {
 	// CooldownEnds: Cooldown holds the alert this progress leads to until
 	// then (trigger.Event). Zero when no cooldown is running.
 	CooldownEnds time.Time
+	// Unsure: a '?' in Reading is a digit the seven-segment decoder saw
+	// and wasn't sure of, which the watch skips (trigger.Event).
+	Unsure bool
 }
 
 // Health is a watch's most recent stream health verdict, mirrored from
@@ -67,10 +70,11 @@ type Delivery struct {
 // Crash is a panic the runner caught in a watch's poll (runner.OnCrash):
 // a bug, which failed that poll's read, or came after the reading was
 // made, and touched no other watch. The web UI shows the watch in error,
-// with Message, until it reads again (Add). Since is when the run of
-// crashes began, as the runner counts it (CrashError.First): a consumer
-// that crashes on every reading clears the crash with each Add and sets
-// it again right after, and the time must not move with that.
+// with Message, until a poll finishes with no crash (runner.OnCrashEnd,
+// then ClearCrash). Since is when the run of crashes began, as the runner
+// counts it (CrashError.First). A reading alone (Add) doesn't clear it: a
+// consumer that crashes after every reading would otherwise show the
+// watch healthy between the reading and the crash.
 type Crash struct {
 	Message string
 	Since   time.Time
@@ -122,7 +126,6 @@ func (r *Registry) Add(watch string, s Sample) {
 		list = list[:r.n]
 	}
 	r.buf[watch] = list
-	delete(r.crash, watch) // it read again
 	if s.Fired && s.TS.After(r.fired[watch]) {
 		r.fired[watch] = s.TS
 	}
@@ -233,8 +236,8 @@ func (r *Registry) SetCrash(watch string, c Crash) {
 	r.crash[watch] = c
 }
 
-// ClearCrash forgets a watch's crash: a watch that restarts hasn't read
-// a frame yet.
+// ClearCrash forgets a watch's crash: its run of crashes ended with a
+// clean poll, or it restarts and hasn't read a frame yet.
 func (r *Registry) ClearCrash(watch string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

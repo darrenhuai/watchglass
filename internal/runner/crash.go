@@ -142,10 +142,13 @@ func (r *Runner) crashed(ce *CrashError, step Step) {
 
 // endTick closes the poll: one that crashed nowhere ends the run of
 // crashes, so the next crash starts a new run (its own First, its stack
-// logged again). Tick calls it on every return, and Run after a crash
-// that escaped Tick.
+// logged again), and tells OnCrashEnd. Tick calls it on every return, and
+// Run after a crash that escaped Tick.
 func (r *Runner) endTick() {
 	if !r.crashes.thisTick {
+		if !r.crashes.first.IsZero() && r.OnCrashEnd != nil {
+			r.OnCrashEnd()
+		}
 		r.crashes = crashRun{}
 	}
 	r.crashes.thisTick = false

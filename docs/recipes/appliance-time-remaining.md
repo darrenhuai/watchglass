@@ -46,15 +46,18 @@ watches:
 <!-- sample-check: washer-finished samples/washer-0-04.jpg not-met reads=0:04 -->
 <!-- sample-check: washer-finished samples/washer-0-00.jpg met reads=0:00 -->
 <!-- sample-check: washer-finished samples/washer-end.jpg met reads=? -->
+<!-- sample-check: washer-almost-done samples/washer-end.jpg skipped reads=? -->
 
-On the samples, the first watch reads `1:23` (the pattern doesn't match, so nothing happens) and then `0:04`, which is below 5. The second fires on `0:00`, and on `End`, which reads as `?`:
+On the samples, the first watch reads `1:23` (the pattern doesn't match, so nothing happens) and then `0:04`, which is below 5. The second fires on `0:00`, and on `End`, which reads as `?`. The first watch skips that `?`, as a `numeric` watch skips every reading with a digit it couldn't read, and Test this region shows the `?` with "no digits read" beside it.
+
+Test this region on the `0:04` frame:
 
 ![Test this region on the 0:04 frame: the crop of the amber digits, Read 0:04, and the verdict that 4 is below 5](img/washer-test.png)
 
 Notes:
 
 - **Why the pattern.** Without one, a `numeric` watch takes the first number in the reading, which for `1:23` is the hours. `^0:([0-9]{2})$` only matches in the last hour and captures the minutes. A display that counts in minutes only (`83`, then `4`) needs `^([0-9]+)$` instead.
-- **The end of the cycle.** Machines differ: some show `0:00`, some `End`, some go blank. `sevenseg` doesn't read letters: the sample's `End` comes back as a single `?`, which `^(0:00|\?+)$` catches. Press Test this region when yours has finished to see what it reads. A display that goes blank reads as nothing, and that is a normal poll: the Reading goes blank, nothing fires and no "down" alert is sent (that alert is for a camera that stops delivering frames). watchglass can't alert on a blank display today. If yours goes blank at the end, the smart plug below is the better "finished" signal, or an `ocr_changed` watch on the same box fires when the countdown stops reading, and on every minute change before that.
+- **The end of the cycle.** Machines differ: some show `0:00`, some `End`, some go blank. `sevenseg` doesn't read letters: the sample's `End` comes back as a single `?`, which `^(0:00|\?+)$` catches. Press Test this region when yours has finished to see what it reads. A display that goes blank reads as nothing, and that is a normal poll: the Reading goes blank, nothing fires and no "down" alert is sent (that alert is for a camera that stops delivering frames). If it shows `End` again within 15 minutes of going blank, that is the same end of the cycle and doesn't alert again; blank for longer than that, the watch starts fresh and an `End` that is still there when the display wakes is reported again. watchglass can't alert on a blank display today. If yours goes blank at the end, the smart plug below is the better "finished" signal, or an `ocr_changed` watch on the same box fires when the countdown stops reading, and on every minute change before that.
 - **Timers that jump.** Some machines recalculate mid-cycle, so `0:04` can go back to `0:12`. The watch fires once when the time first drops below 5, and again only after it has gone above 5 and come back, and after the cooldown.
 - **Door glass and glare.** Point the camera at the control panel, not through the door, and at a slight angle to keep ceiling lights off the display.
 

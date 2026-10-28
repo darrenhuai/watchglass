@@ -69,8 +69,8 @@ In practice you don't type the region: open the watch, drag a box around the dig
 ## What you get that ssocr didn't give you
 
 - **You see the read before you trust it.** Test this region shows one chip per digit with a confidence, so a marginal digit is obvious.
-- **Misreads don't reach HA.** The Value is the median of the last few readings, and with `confirm: 2` a single misread digit never reaches the history graph.
-- **Letters come back as `?`,** not as a wrong digit. `E4` on a boiler reads `?4`, which a pattern can catch (see the [heat pump recipe](heat-pump-boiler-panel.md)).
+- **Misreads don't reach HA.** The Value is the median of the last few readings, and with `confirm: 2` a single misread digit never reaches the history graph. A reading with a digit the decoder couldn't read (`?`), or read too unsurely to tell from another digit, is skipped altogether, and so is a frame with no digits on it. Once the counter is above the threshold, it takes twice `confirm` readings in a row below it to re-arm the watch, so a dropped digit on a frame or two doesn't alert twice.
+- **Letters come back as `?`,** not as a wrong digit. `E4` on a boiler reads `?4`, which an `ocr_match` pattern can catch (see the [heat pump recipe](heat-pump-boiler-panel.md)). A `numeric` watch skips it instead of reading 4.
 - **Alerts without an automation.** The watch fires on its own threshold and sends to ntfy, Telegram or any other service.
 - **A dead camera is noticed.** Three failed polls in a row (no frame, or the engine errored) send one "down" alert. A display that reads as blank is a normal poll and doesn't count.
 

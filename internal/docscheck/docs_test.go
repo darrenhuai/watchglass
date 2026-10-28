@@ -23,7 +23,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/ocr"
-	"github.com/darrenhuai/watchglass/internal/trigger"
+	"github.com/darrenhuai/watchglass/internal/web"
 )
 
 // root is the repository, two levels up from this package.
@@ -355,10 +355,15 @@ func TestUILinksToDocsResolve(t *testing.T) {
 	}
 }
 
-var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met)(?:\s+reads=(\S+))?\s*-->`)
+var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met|skipped)(?:\s+reads=(\S+))?\s*-->`)
+
+// sampleStates maps a sample-check verdict to the Test page's verdict
+// state (web.Verdict).
+var sampleStates = map[string]string{"met": "met", "not-met": "unmet", "skipped": "skipped"}
 
 // TestRecipeSamples reads each recipe's committed sample frame with the
-// recipe's own watch, as Test this region would.
+// recipe's own watch, as Test this region would, and asks the Test page's
+// own verdict code what it says about that reading.
 func TestRecipeSamples(t *testing.T) {
 	var tess ocr.Engine
 	if bin, err := ocr.FindTesseract(""); err == nil {
@@ -429,17 +434,30 @@ func TestRecipeSamples(t *testing.T) {
 					crop := imgproc.Apply(imgproc.Crop(frame, w.Region), w.Preprocess)
 					ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 					defer cancel()
-					text, err := eng.Recognize(ctx, crop)
+					engine := w.Engine
+					if engine == "" {
+						engine = "tesseract"
+					}
+					// As the running watch reads it: the seven-segment
+					// decoder's Words say which '?' is an unsure digit.
+					var (
+						text   string
+						unsure bool
+					)
+					if d, ok := eng.(ocr.DetailedEngine); ok && engine == "sevenseg" {
+						var words []ocr.Word
+						text, words, err = d.RecognizeWords(ctx, crop)
+						unsure = ocr.HasUnsureDigit(text, words)
+					} else {
+						text, err = eng.Recognize(ctx, crop)
+					}
 					if err != nil {
 						t.Fatal(err)
 					}
-					cond, err := trigger.Check(w.Trigger, text)
-					if err != nil {
-						t.Fatal(err)
-					}
-					t.Logf("read %q: %s", text, cond.Detail)
-					if cond.Met != (verdict == "met") {
-						t.Errorf("read %q, and %s; the recipe says %s", text, cond.Detail, verdict)
+					state, title, detail := web.VerdictRead(w.Trigger, engine, text, unsure)
+					t.Logf("read %q: %s. %s", text, title, detail)
+					if state != sampleStates[verdict] {
+						t.Errorf("read %q, and Test says %q (%s); the recipe says %s", text, title, detail, verdict)
 					}
 					if reads != "" && text != reads {
 						t.Errorf("read %q, the recipe says it reads %q", text, reads)
@@ -450,5 +468,28 @@ func TestRecipeSamples(t *testing.T) {
 	}
 	if checks < 6 {
 		t.Errorf("only %d sample checks in docs/recipes", checks)
+	}
+}
+
+// The docs say below which confidence the seven-segment decoder gives a
+// digit that may be another digit as '?'. They must say the number the
+// decoder uses (ocr.UnsureDigit), which the Test page's note takes from
+// the same constant.
+func TestDocsQuoteTheUnsureDigitFloor(t *testing.T) {
+	re := regexp.MustCompile(`[Bb]elow ([0-9]+)%`)
+	for _, rel := range []string{"docs/configuration.md", "docs/recipes/lab-instrument-seven-segment.md"} {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ms := re.FindAllStringSubmatch(string(raw), -1)
+		if len(ms) == 0 {
+			t.Errorf("%s doesn't say below which confidence a digit reads as ?", rel)
+		}
+		for _, m := range ms {
+			if m[1] != fmt.Sprint(ocr.UnsureDigit) {
+				t.Errorf("%s says %q, the decoder's floor is %d%% (ocr.UnsureDigit)", rel, m[0], ocr.UnsureDigit)
+			}
+		}
 	}
 }
