@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"runtime/debug"
-	"strings"
+	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/health"
@@ -95,6 +93,22 @@ type Runner struct {
 	// sent is closed when the sender goroutine of the last Run has sent
 	// everything queued to it (see WaitSent). nil if Run started none.
 	sent chan struct{}
+
+	// cond is the watch's condition as of its last poll, for the sender
+	// to check before trying an alert again (retry.go); wake pokes the
+	// sender when it changes, and clock is what the sender waits on.
+	condMu sync.Mutex
+	cond   condition
+	wake   chan struct{}
+	clock  clock
+	// isDown mirrors the health tracker's verdict, for cond.
+	isDown bool
+	// resendTaken is the notify URLs (by urlKey) that took the last
+	// fire's alert before the restart, when the rest hadn't and the
+	// condition still held at the stop: the first fire after the restart
+	// is that alert sent again, and goes to the rest only. It is let go
+	// once the watch sees the condition clear first (Tick).
+	resendTaken map[string]bool
 }
 
 // Delivery is one report on an alert's way out (see OnDelivery).
@@ -104,8 +118,27 @@ type Delivery struct {
 	Pending bool      // handed to the sender; the outcome follows
 	OK      bool      // every notify URL took it
 	Skipped bool      // no notify URLs: nothing to send
-	Err     string    // the failure, scrubbed of credentials (notify.Scrub), at most errMax runes per failed line
+	Err     string    // the failure at the URLs given up on, scrubbed of credentials (notify.Scrub), at most errMax runes per failed line
+	SentAt  time.Time // OK: when the last URL took it
+	// Retrying is the failure at the URLs that will be tried again, in
+	// Err's form with each cause in a few words, NextTry when the next
+	// try is due, and Tries how many tries the alert has had at the URL
+	// that has had most. A report with Retrying set is not the last
+	// word: OK, Err or Dropped follows, unless the watch stops first (see
+	// retry.go).
+	Retrying string
+	NextTry  time.Time
+	Tries    int
+	// Dropped is why the alert was let go before the URLs in Retrying
+	// took it: "the condition cleared", "the camera came back", "the
+	// camera went down again". Nothing tries them any more.
+	Dropped string
 }
+
+// DroppedByRestart is Delivery.Dropped for an alert still being tried
+// when its watch was stopped (a Save & restart): the supervisor marks the
+// last record so, since the stopped run no longer reports.
+const DroppedByRestart = "the watch was restarted"
 
 // errMax caps a delivery error kept for display.
 const errMax = 200
@@ -120,7 +153,8 @@ type alert struct {
 	kind        string
 	title, body string
 	png         []byte
-	fired       time.Time // a fire's time as its trigger state has it (markDelivered)
+	fired       time.Time       // a fire's time as its trigger state has it (markDelivered)
+	skip        map[string]bool // notify URLs (by urlKey) that took it before a restart
 }
 
 func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.Notifier,
@@ -140,9 +174,11 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 	}
 	r := &Runner{watch: w, src: src, engine: engine, notifier: notifier,
 		store: store, eval: eval, logf: logf,
-		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval)}
+		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval),
+		wake: make(chan struct{}, 1), clock: realClock{}}
 	r.restoreState(time.Now())
 	r.restoreHealth()
+	r.noteCondition()
 	return r, nil
 }
 
@@ -153,6 +189,8 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 // called before Run.
 func (r *Runner) SeedDown() {
 	r.health.SeedDown()
+	r.isDown = true
+	r.noteCondition()
 }
 
 // SeedRestoredDown is SeedDown for the verdict the history database kept
@@ -167,6 +205,8 @@ func (r *Runner) SeedDown() {
 // the "healthy" transition says the rest. Must be called before Run.
 func (r *Runner) SeedRestoredDown(reassert func(hev health.Event)) {
 	r.health.SeedDown()
+	r.isDown = true
+	r.noteCondition()
 	if reassert == nil || r.restoredDown == nil {
 		return
 	}
@@ -182,9 +222,10 @@ func (r *Runner) SeedRestoredDown(reassert func(hev health.Event)) {
 // Run polls until ctx is cancelled. Errors are logged, never fatal: a
 // watcher that dies on one bad frame is worse than no watcher. Alerts go out
 // from a goroutine of their own (sendLoop), so a webhook that takes its
-// full 10-15 s to time out delays nothing but itself. Stop doesn't wait for
-// that goroutine: it finishes what was queued and exits (WaitSent waits for
-// that).
+// full 10-15 s to time out delays nothing but itself, and one that didn't
+// take an alert is tried again while the alert's reason holds (retry.go).
+// Stop doesn't wait for that goroutine: it finishes what was queued, drops
+// the tries still due and exits (WaitSent waits for that).
 func (r *Runner) Run(ctx context.Context) {
 	if r.notifier != nil {
 		r.outbox = make(chan alert, outboxSize)
@@ -250,6 +291,14 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 	ev, err := r.tick(ctx)
 	r.endTick()
+	r.noteCondition()
+	if r.resendTaken != nil {
+		// The condition was seen clear before it fired again: the next
+		// fire is news, for every URL.
+		if st := r.eval.State(); st.HasStable && st.Stable != condMet {
+			r.resendTaken = nil
+		}
+	}
 	return ev, err
 }
 
@@ -327,7 +376,8 @@ func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 		// COMPLETE" alone doesn't say which printer.
 		a := alert{ts: at, kind: "fired", title: fmt.Sprintf("watchglass: %s", r.watch.Name),
 			body:  fmt.Sprintf("%s: %s — %s", r.watch.Name, ev.Reason, ev.Reading),
-			fired: r.eval.State().LastFired}
+			fired: r.eval.State().LastFired, skip: r.resendTaken}
+		r.resendTaken = nil
 		if _, ok := r.notifier.(notify.ImageSender); ok {
 			var buf bytes.Buffer
 			if err := png.Encode(&buf, crop); err != nil {
@@ -395,28 +445,6 @@ func (r *Runner) raise(ctx context.Context, a alert) {
 	}
 }
 
-// sendLoop sends queued alerts in order until Run closes box. Sends are
-// cut loose from ctx: an alert raised just before the watch was stopped
-// (a Save & restart) still goes out, bounded by the services' own timeouts.
-// A panic anywhere in a delivery (the notifier has its own recover in
-// send; this covers the store and OnDelivery after it) is logged and
-// fails nothing but that alert's bookkeeping: this goroutine would
-// otherwise take the whole process down.
-func (r *Runner) sendLoop(ctx context.Context, box <-chan alert) {
-	sendCtx := context.WithoutCancel(ctx)
-	for a := range box {
-		err := Contain(func() error {
-			r.deliver(sendCtx, a)
-			return nil
-		})
-		var ce *CrashError
-		if errors.As(err, &ce) {
-			r.logf("watch %s: after sending the %s alert, watchglass crashed; this is a bug, please report it with the log: %s\n%s",
-				r.watch.Name, a.kind, notify.Scrub(ce.Detail(), r.watch.Notify), ce.Stack)
-		}
-	}
-}
-
 // WaitSent waits until the sender goroutine of the Run that has returned
 // has sent everything queued to it, or ctx ends, and reports whether it
 // finished. The supervisor calls it when watchglass is shutting down, so an
@@ -432,48 +460,6 @@ func (r *Runner) WaitSent(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
-}
-
-// deliver sends one alert and reports the outcome. A failure is logged and
-// reported with every URL cut down to scheme://host and every credential
-// masked (notify.Scrub): the report is shown in the web UI.
-func (r *Runner) deliver(ctx context.Context, a alert) {
-	err := r.send(ctx, a)
-	d := Delivery{TS: a.ts, Kind: a.kind, OK: err == nil}
-	if err == nil {
-		r.markDelivered(a.fired)
-	} else {
-		msg := notify.Scrub(err.Error(), r.watch.Notify)
-		r.logf("watch %s: notify (%s): %s", r.watch.Name, a.kind, msg)
-		// Capped per failed line, so a long first error can't push the
-		// second line's cause (its status code) out of the record.
-		parts := strings.Split(msg, "; ")
-		for i, p := range parts {
-			if utf8.RuneCountInString(p) > errMax {
-				parts[i] = string([]rune(p)[:errMax-1]) + "…"
-			}
-		}
-		d.Err = strings.Join(parts, "; ")
-	}
-	r.report(d)
-}
-
-// send hands one alert to the notifier. A panic in it (the notification
-// library meeting an answer it didn't expect) fails this alert only: the
-// sender goroutine would otherwise take the whole process down with it.
-// The panic value is scrubbed before it is logged, like every error from
-// the notifier: shoutrrr's carry the service URL, token and all.
-func (r *Runner) send(ctx context.Context, a alert) (err error) {
-	defer func() {
-		if v := recover(); v != nil {
-			r.logf("watch %s: sending the %s alert crashed; this is a bug, please report it: %s\n%s", r.watch.Name, a.kind, notify.Scrub(fmt.Sprint(v), r.watch.Notify), debug.Stack())
-			err = fmt.Errorf("sending crashed; this is a bug in watchglass, please report it (%v)", v)
-		}
-	}()
-	if is, ok := r.notifier.(notify.ImageSender); ok && a.png != nil {
-		return is.SendImage(ctx, a.title, a.body, a.png)
-	}
-	return r.notifier.Send(ctx, a.title, a.body)
 }
 
 func (r *Runner) report(d Delivery) {
@@ -518,6 +504,7 @@ func (r *Runner) pollSucceeded(ctx context.Context) {
 // regardless.
 func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
 	r.logf("watch %s: %s", r.watch.Name, hev.Message)
+	r.isDown = hev.State == "down"
 	r.saveHealth(hev, time.Now())
 	if r.OnHealth != nil {
 		r.OnHealth(hev)

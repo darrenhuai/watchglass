@@ -355,3 +355,234 @@ func TestDeliveryText(t *testing.T) {
 		}
 	}
 }
+
+// A2: the retrying line names what else ends the tries. A match or
+// number watch's alert is let go when its condition clears; a change
+// watch (pixel_change, ocr_changed) has no condition, so its alert is
+// kept until a newer change replaces it, and the line must not name a
+// condition that doesn't exist.
+func TestRetryingLineNamesWhatEndsTheTries(t *testing.T) {
+	esc := strings.NewReplacer("'", "&#39;", "+", "&#43;").Replace
+	for _, c := range []struct {
+		ttype, pattern, want string
+	}{
+		{"ocr_match", "(?i)print complete", "is kept until it gets through or the condition clears (1 try so far)."},
+		{"numeric", "([0-9.]+)", "is kept until it gets through or the condition clears (1 try so far)."},
+		{"ocr_changed", "", "is kept until it gets through or a newer change replaces it (1 try so far)."},
+		{"pixel_change", "", "is kept until it gets through or a newer change replaces it (1 try so far)."},
+	} {
+		t.Run(c.ttype, func(t *testing.T) {
+			s, _ := newTestServer(t)
+			h := s.Handler()
+			s.sup.NewSource = func(config.Watch) (source.Source, error) { return blockSource{}, nil }
+			form := saveForm("generic+http://h/hook?template=json")
+			form.Set("ttype", c.ttype)
+			form.Set("engine", "sevenseg")
+			if c.pattern != "" {
+				form.Set("pattern", c.pattern)
+			}
+			if c.ttype == "numeric" {
+				form.Set("op", "gt")
+			}
+			if resp, body := postForm(t, h, "/watch/printer/save", form); resp.StatusCode != 303 {
+				t.Fatalf("save: %d %s", resp.StatusCode, body)
+			}
+			t0 := time.Date(2026, 9, 24, 14, 2, 5, 0, time.Local)
+			s.reg.Add("printer", state.Sample{TS: t0, Reading: "PRINT COMPLETE", Fired: true})
+			s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "fired", Tries: 1, NextTry: time.Now().Add(30 * time.Second),
+				Retrying: "line 1 of 1 (generic+http://h): HTTP 503"})
+			_, live := get(t, h, "/watch/printer/live")
+			if !strings.Contains(live, esc(c.want)) {
+				t.Errorf("live lacks %q:\n%s", c.want, live)
+			}
+		})
+	}
+}
+
+// A2: while a notify URL that didn't take the alert is being tried
+// again, the Live panel says why and when, the list marks the watch
+// "retrying alert", and once it is through the line counts the tries.
+func TestDeliveryRetryingOnLiveAndIndex(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+	s.sup.NewSource = func(config.Watch) (source.Source, error) { return blockSource{}, nil }
+	if resp, body := postForm(t, h, "/watch/printer/save", saveForm("ntfy+http://10.0.0.2:81/topic\ngeneric+http://h/hook?template=json")); resp.StatusCode != 303 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	t0 := time.Date(2026, 9, 24, 14, 2, 5, 0, time.Local)
+	s.reg.Add("printer", state.Sample{TS: t0, Reading: "PRINT COMPLETE", Fired: true})
+	s.reg.SetSending("printer", t0)
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "fired", Tries: 2, NextTry: time.Now().Add(30 * time.Second),
+		Retrying: "line 1 of 2 (ntfy+http://10.0.0.2:81): connection refused; line 2 of 2 (generic+http://h): HTTP 503"})
+	// html/template writes ' and + as entities.
+	esc := strings.NewReplacer("'", "&#39;", "+", "&#43;").Replace
+	_, live := get(t, h, "/watch/printer/live")
+	for _, want := range []string{
+		`data-delivery="retrying"`,
+		`<span class="tag tag-fired">fired · retrying</span>`,
+		esc(`<p class="delivery delivery-retrying">Couldn't reach line 1 (ntfy+http://10.0.0.2:81) (connection refused), line 2 (generic+http://h) answered HTTP 503; trying again in 30 s. The alert from <time class="mono" datetime="` + isoTime(t0) + `">14:02:05</time> is kept until it gets through or a newer change replaces it (2 tries so far).</p>`),
+	} {
+		if !strings.Contains(live, want) {
+			t.Errorf("live lacks %q:\n%s", want, live)
+		}
+	}
+	if strings.Contains(live, "Sending the alert") || strings.Contains(live, "could not be delivered") {
+		t.Errorf("a retry is neither sending nor failed:\n%s", live)
+	}
+	_, index := get(t, h, "/")
+	if !strings.Contains(index, esc(`<span class="alerts-failing alerts-retrying" title="Couldn't reach line 1 (ntfy+http://10.0.0.2:81) (connection refused), line 2 (generic+http://h) answered HTTP 503; trying again in 30 s. The alert from 14:02:05 is not delivered yet (2 tries so far).">retrying alert</span>`)) {
+		t.Errorf("index lacks the marker:\n%s", index)
+	}
+
+	// One line took it, one was given up on, one is still being tried:
+	// the line says both, and the wait counts down to "now".
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "fired", Tries: 3, NextTry: time.Now().Add(-time.Second),
+		Retrying: "line 2 of 2 (generic+http://h): HTTP 503", Err: "line 1 of 2 (ntfy+http://10.0.0.2:81): ntfy: status 404"})
+	_, live = get(t, h, "/watch/printer/live")
+	if !strings.Contains(live, esc(`Line 2 (generic+http://h) answered HTTP 503; trying again now. The alert from <time class="mono" datetime="`+isoTime(t0)+`">14:02:05</time> is kept until it gets through or a newer change replaces it (3 tries so far). Line 1 (ntfy+http://10.0.0.2:81) answered HTTP 404: check the topic and the server address.</p>`)) {
+		t.Errorf("live with a line given up on:\n%s", live)
+	}
+
+	// A down alert is kept while the camera is down.
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0.Add(time.Second), Kind: "down", Tries: 1, NextTry: time.Now().Add(100 * time.Second),
+		Retrying: "line 1 of 2 (ntfy+http://10.0.0.2:81): timed out; line 2 of 2 (generic+http://h): timed out"})
+	_, live = get(t, h, "/watch/printer/live")
+	if !strings.Contains(live, esc(`Couldn't reach line 1 (ntfy+http://10.0.0.2:81) (timed out), couldn't reach line 2 (generic+http://h) (timed out); trying again in 1 min 40 s. The alert (stream down) from <time class="mono" datetime="`+isoTime(t0.Add(time.Second))+`">14:02:06</time> is kept until it gets through or the camera comes back (1 try so far).</p>`)) {
+		t.Errorf("live with a down alert waiting:\n%s", live)
+	}
+
+	// Through on the third try: sent, and the line says when it went out
+	// (not when it was raised) and after how many tries.
+	t1 := t0.Add(time.Minute)
+	s.reg.Add("printer", state.Sample{TS: t1, Reading: "PRINT COMPLETE", Fired: true})
+	s.reg.SetDelivery("printer", state.Delivery{TS: t1, Kind: "fired", OK: true, Tries: 3, SentAt: t1.Add(100 * time.Second)})
+	_, live = get(t, h, "/watch/printer/live")
+	if !strings.Contains(live, `fired · sent</span>`) || strings.Contains(live, "delivery-retrying") ||
+		!strings.Contains(live, `Last alert, from <time class="mono" datetime="`+isoTime(t1)+`">14:03:05</time>, went out at <time class="mono" datetime="`+isoTime(t1.Add(100*time.Second))+`">14:04:45</time> after 3 tries.</p>`) {
+		t.Errorf("after the retry got through:\n%s", live)
+	}
+	if _, index = get(t, h, "/"); strings.Contains(index, "retrying alert") || strings.Contains(index, "alerts failing") {
+		t.Error("the marker outlived the delivery")
+	}
+	// A first-try send doesn't count tries.
+	s.reg.SetDelivery("printer", state.Delivery{TS: t1, Kind: "fired", OK: true, Tries: 1})
+	if _, live = get(t, h, "/watch/printer/live"); !strings.Contains(live, `14:03:05</time>.</p>`) || strings.Contains(live, "tries") {
+		t.Errorf("a first-try send:\n%s", live)
+	}
+}
+
+func TestRetryText(t *testing.T) {
+	for _, c := range []struct{ raw, want string }{
+		{"line 1 of 1 (ntfy+http://10.0.0.2:81): connection refused", "Couldn't reach ntfy+http://10.0.0.2:81 (connection refused)"},
+		{"line 1 of 1 (ntfy+http://10.0.0.2:81): HTTP 503", "ntfy+http://10.0.0.2:81 answered HTTP 503"},
+		{"line 1 of 3 (ntfy://ntfy.sh): HTTP 429; line 3 of 3 (generic+http://h): no such host",
+			"Line 1 (ntfy://ntfy.sh) answered HTTP 429, couldn't reach line 3 (generic+http://h) (no such host)"},
+		{"status 502", "The service answered HTTP 502"},
+		{"dial tcp: connection refused", "Couldn't reach the service (connection refused)"},
+	} {
+		if got := retryText(c.raw); got != c.want {
+			t.Errorf("retryText(%q)\n got %q\nwant %q", c.raw, got, c.want)
+		}
+	}
+}
+
+// An alert let go before a URL took it (the condition cleared first)
+// says so in its own words, names the URL once, with its cause and the
+// tries, and gives no advice to check the URL. The list marks the watch.
+func TestDeliveryDropped(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+	s.sup.NewSource = func(config.Watch) (source.Source, error) { return blockSource{}, nil }
+	if resp, body := postForm(t, h, "/watch/printer/save", saveForm("generic+http://127.0.0.1:8726/hook?template=json")); resp.StatusCode != 303 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	t0 := time.Date(2026, 9, 24, 14, 2, 5, 0, time.Local)
+	s.reg.Add("printer", state.Sample{TS: t0, Reading: "PRINT COMPLETE", Fired: true})
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "fired", Tries: 1, Dropped: "the condition cleared",
+		Retrying: "line 1 of 1 (generic+http://127.0.0.1:8726): connection refused"})
+	_, live := get(t, h, "/watch/printer/live")
+	want := `<p class="delivery delivery-failed">Last alert at <time class="mono" datetime="` + isoTime(t0) + `">14:02:05</time> was not sent: the condition cleared before generic&#43;http://127.0.0.1:8726 (connection refused) took it, after 1 try.</p>`
+	if !strings.Contains(live, want) || strings.Contains(live, "Send test notification") || strings.Contains(live, "delivery-retrying") {
+		t.Errorf("live lacks %q:\n%s", want, live)
+	}
+	if !strings.Contains(live, `data-delivery="dropped"`) || !strings.Contains(live, "fired · not delivered") {
+		t.Errorf("live: delivery state or fired tag:\n%s", live)
+	}
+	_, index := get(t, h, "/")
+	if !strings.Contains(index, `title="Last alert at 14:02:05 was not sent: the condition cleared before generic&#43;http://127.0.0.1:8726 (connection refused) took it, after 1 try.">alerts failing</span>`) {
+		t.Errorf("index lacks the marker:\n%s", index)
+	}
+}
+
+// A2: Save & restart while an alert is still being tried. Nothing tries
+// it any more, so the page stops saying "trying again" and the list stops
+// saying "retrying alert"; for a fire of a watch with a condition it says
+// the alert goes out again if the condition still holds (the restarted
+// watch's re-send).
+func TestSaveAndRestartEndsTheRetryingState(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+	s.sup.NewSource = func(config.Watch) (source.Source, error) { return blockSource{}, nil }
+	form := saveForm("ntfy+http://127.0.0.1:8723/topic")
+	form.Set("ttype", "numeric")
+	form.Set("engine", "sevenseg")
+	form.Set("op", "gt")
+	form.Set("tthreshold", "1000")
+	form.Set("pattern", "([0-9.]+)")
+	if resp, body := postForm(t, h, "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	t0 := time.Date(2026, 9, 24, 21, 1, 42, 0, time.Local)
+	s.reg.Add("printer", state.Sample{TS: t0, Reading: "PRINT COMPLETE", Fired: true})
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "fired", Tries: 1, NextTry: time.Now().Add(10 * time.Second),
+		Retrying: "line 1 of 1 (ntfy+http://127.0.0.1:8723): connection refused"})
+	if _, live := get(t, h, "/watch/printer/live"); !strings.Contains(live, "trying again in") {
+		t.Fatalf("before the save: no retrying line:\n%s", live)
+	}
+	// The same URLs, another interval: a plain Save & restart.
+	form.Set("interval", "7s")
+	if resp, body := postForm(t, h, "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	_, live := get(t, h, "/watch/printer/live")
+	if strings.Contains(live, "trying again") || strings.Contains(live, "delivery-retrying") || strings.Contains(live, "is kept until") {
+		t.Errorf("after Save & restart the page still says the alert is being tried:\n%s", live)
+	}
+	want := `was not sent: the watch was restarted before ntfy&#43;http://127.0.0.1:8723 (connection refused) took it, after 1 try. If the condition still holds, it goes out again.</p>`
+	if !strings.Contains(live, want) {
+		t.Errorf("live lacks %q:\n%s", want, live)
+	}
+	if _, index := get(t, h, "/"); strings.Contains(index, "retrying alert") {
+		t.Errorf("the list still says retrying alert:\n%s", index)
+	}
+
+	// A pixel_change watch starts from what it sees after a restart: no
+	// promise that the alert goes out again.
+	s.reg.SetDelivery("printer", state.Delivery{TS: t0.Add(time.Minute), Kind: "fired", Tries: 2, NextTry: time.Now().Add(10 * time.Second),
+		Retrying: "line 1 of 1 (ntfy+http://127.0.0.1:8723): connection refused"})
+	form = saveForm("ntfy+http://127.0.0.1:8723/topic")
+	if resp, body := postForm(t, h, "/watch/printer/save", form); resp.StatusCode != 303 {
+		t.Fatalf("save: %d %s", resp.StatusCode, body)
+	}
+	_, live = get(t, h, "/watch/printer/live")
+	if !strings.Contains(live, "the watch was restarted before ntfy&#43;http://127.0.0.1:8723 (connection refused) took it, after 2 tries.</p>") || strings.Contains(live, "goes out again") {
+		t.Errorf("pixel_change after Save & restart:\n%s", live)
+	}
+}
+
+func TestDroppedText(t *testing.T) {
+	for _, c := range []struct {
+		why, raw string
+		tries    int
+		want     string
+	}{
+		{"the condition cleared", "line 1 of 1 (generic+http://h): HTTP 503", 1, "the condition cleared before generic+http://h (HTTP 503) took it, after 1 try."},
+		{"the camera came back", "line 1 of 3 (ntfy://ntfy.sh): timed out; line 3 of 3 (generic+http://h): connection refused", 4,
+			"the camera came back before ntfy://ntfy.sh (timed out) and generic+http://h (connection refused) took it, after 4 tries."},
+		{"the watch was restarted", "connection refused", 2, "the watch was restarted before the notify URL (connection refused) took it, after 2 tries."},
+	} {
+		if got := droppedText(c.why, c.raw, c.tries); got != c.want {
+			t.Errorf("droppedText(%q, %q)\n got %q\nwant %q", c.why, c.raw, got, c.want)
+		}
+	}
+}

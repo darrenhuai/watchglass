@@ -286,3 +286,43 @@ func TestCrashUntilTheNextReading(t *testing.T) {
 		t.Error("Drop kept it")
 	}
 }
+
+// An older alert still being tried replaces a newer one's settled record
+// (the fire alert waits while a camera blip's alert went through), and
+// its own settled record replaces it in turn; a late plain result for an
+// older alert still doesn't. EndRetrying marks a record still being tried
+// as let go, and leaves any other record alone.
+func TestDeliveryRetryingAndEndRetrying(t *testing.T) {
+	r := New(10)
+	t0 := time.Now()
+	t1 := t0.Add(time.Second)
+	r.SetDelivery("w", Delivery{TS: t1, Kind: "recovered", OK: true})
+	r.SetDelivery("w", Delivery{TS: t0, Kind: "fired", Retrying: "line 1 of 1 (ntfy://h): HTTP 503", Tries: 2, NextTry: t1})
+	if d, _ := r.GetDelivery("w"); d.Kind != "fired" || d.Retrying == "" {
+		t.Fatalf("the waiting fire alert didn't replace the settled stream alert: %+v", d)
+	}
+	r.SetDelivery("w", Delivery{TS: t0, Kind: "fired", OK: true, Tries: 3, SentAt: t1})
+	if d, _ := r.GetDelivery("w"); d.Kind != "fired" || !d.OK || !d.SentAt.Equal(t1) {
+		t.Fatalf("the fire alert's delivery: %+v", d)
+	}
+	r.SetDelivery("w", Delivery{TS: t1, Kind: "down", Err: "x"})
+	r.SetDelivery("w", Delivery{TS: t0, Kind: "fired", Err: "late"})
+	if d, _ := r.GetDelivery("w"); d.Kind != "down" {
+		t.Fatalf("a late plain result replaced a newer record: %+v", d)
+	}
+
+	r.EndRetrying("w", "the watch was restarted")
+	if d, _ := r.GetDelivery("w"); d.Dropped != "" {
+		t.Errorf("EndRetrying changed a record that wasn't being tried: %+v", d)
+	}
+	r.SetDelivery("w", Delivery{TS: t1.Add(time.Second), Kind: "fired", Retrying: "line 1 of 1 (ntfy://h): timed out", Tries: 1, NextTry: t1})
+	r.EndRetrying("w", "the watch was restarted")
+	d, _ := r.GetDelivery("w")
+	if d.Dropped != "the watch was restarted" || !d.NextTry.IsZero() || d.Retrying == "" || d.Tries != 1 {
+		t.Errorf("after EndRetrying: %+v", d)
+	}
+	r.EndRetrying("nobody", "x")
+	if _, ok := r.GetDelivery("nobody"); ok {
+		t.Error("EndRetrying made a record")
+	}
+}

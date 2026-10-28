@@ -51,6 +51,17 @@ type Delivery struct {
 	OK      bool   // every notify URL took it
 	Skipped bool   // the watch has no notify URLs, so nothing was sent
 	Err     string // why it wasn't delivered, when !OK && !Skipped
+	// Retrying is why the URLs still to be tried again didn't take it
+	// (Err's form), NextTry when the next try is due, and Tries how many
+	// tries the alert has had (runner.Delivery). With Retrying set the
+	// alert is still on its way; OK or Err follows. Dropped is why it was
+	// let go before the URLs in Retrying took it (the condition cleared,
+	// the watch was restarted), and SentAt when the last URL took it.
+	Retrying string
+	NextTry  time.Time
+	Tries    int
+	Dropped  string
+	SentAt   time.Time
 }
 
 // Crash is a panic the runner caught in a watch's poll (runner.OnCrash):
@@ -265,15 +276,31 @@ func (r *Registry) Sending(watch string) (time.Time, bool) {
 }
 
 // SetDelivery records how an alert went out. An older alert's result that
-// arrives late never replaces a newer one's.
+// arrives late never replaces a newer one's, except while either is still
+// being tried: the sender reports in order, and the alert it still tries
+// is the one the page should show (an older fire alert waiting while a
+// newer stream alert went through), until it, too, is settled.
 func (r *Registry) SetDelivery(watch string, d Delivery) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cur, ok := r.delivery[watch]; !ok || !d.TS.Before(cur.TS) {
+	retrying := func(d Delivery) bool { return d.Retrying != "" && d.Dropped == "" }
+	if cur, ok := r.delivery[watch]; !ok || !d.TS.Before(cur.TS) || retrying(d) || retrying(cur) {
 		r.delivery[watch] = d
 	}
 	if s, ok := r.sending[watch]; ok && !s.After(d.TS) {
 		delete(r.sending, watch)
+	}
+}
+
+// EndRetrying turns a record of an alert still being tried into one of an
+// alert let go, for why: the run that was trying it has stopped. Nothing
+// else changes.
+func (r *Registry) EndRetrying(watch, why string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if d, ok := r.delivery[watch]; ok && d.Retrying != "" && d.Dropped == "" {
+		d.Dropped, d.NextTry = why, time.Time{}
+		r.delivery[watch] = d
 	}
 }
 

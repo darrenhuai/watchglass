@@ -220,7 +220,8 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			s.reg.SetSending(name, d.TS)
 			return
 		}
-		s.reg.SetDelivery(name, state.Delivery{TS: d.TS, Kind: d.Kind, OK: d.OK, Skipped: d.Skipped, Err: d.Err})
+		s.reg.SetDelivery(name, state.Delivery{TS: d.TS, Kind: d.Kind, OK: d.OK, Skipped: d.Skipped, Err: d.Err,
+			Retrying: d.Retrying, NextTry: d.NextTry, Tries: d.Tries, Dropped: d.Dropped, SentAt: d.SentAt})
 	}
 	wctx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
@@ -253,8 +254,10 @@ func (s *Supervisor) Stop(name string) {
 		delete(s.running, name)
 		// The run's in-flight send (if any) can no longer report, so its
 		// "sending" mark would otherwise stay until the next successful
-		// Start: forever, if that Start fails.
+		// Start: forever, if that Start fails. Nor will it try again an
+		// alert it was still trying, so the page stops saying it will.
 		s.reg.ClearSending(name)
+		s.reg.EndRetrying(name, runner.DroppedByRestart)
 	}
 	s.mu.Unlock()
 	if !ok {

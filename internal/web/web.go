@@ -313,8 +313,10 @@ type indexRow struct {
 	// AlertsFailing is set when the watch's last alert didn't reach its
 	// notify URLs: the sentence the row's "alerts failing" marker carries
 	// as its title (the Live panel shows the same one). A later send that
-	// goes through clears it.
-	AlertsFailing string
+	// goes through clears it. AlertsRetrying is the same while the alert
+	// is still being tried at a URL that didn't take it.
+	AlertsFailing  string
+	AlertsRetrying string
 }
 
 // agoText says how long ago something was, in the same words as app.js's
@@ -427,8 +429,11 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 		if t, ok := s.reg.LastFired(wc.Name); ok && !(has && latest.Fired) {
 			row.FiredAgo = agoText(now.Sub(t))
 		}
-		if dv := s.deliveryFor(wc, latest, has); dv.State == "failed" {
+		switch dv := s.deliveryFor(wc, latest, has); dv.State {
+		case "failed", "dropped":
 			row.AlertsFailing = dv.Sentence()
+		case "retrying":
+			row.AlertsRetrying = dv.Sentence()
 		}
 		rows = append(rows, row)
 	}
@@ -520,19 +525,77 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 
 // deliveryView is what the page says about a watch's alerts. State is
 // "failed" (the last alert didn't get through; it stays until one does),
-// "sending", "sent", "none" (no notify URLs, so fires only show here),
-// "restored" (nothing sent since watchglass started, but the history
-// database knows the last fire from before and whether its alert went
-// out: Sent) or "" (nothing sent yet).
+// "retrying" (a URL didn't take it and will be tried again), "dropped"
+// (it was let go before a URL took it: the condition cleared, the watch
+// was restarted), "sending",
+// "sent", "none" (no notify URLs, so fires only show here), "restored"
+// (nothing sent since watchglass started, but the history database knows
+// the last fire from before and whether its alert went out: Sent) or ""
+// (nothing sent yet).
 type deliveryView struct {
 	State string
 	At    time.Time // when the alert it describes was raised
 	Kind  string    // "fired", "down" or "recovered"
-	Text  string    // "failed": what went wrong, in sentences (deliveryText)
+	Text  string    // "failed": what went wrong, in sentences (deliveryText); "retrying": why it waits (retryText); "dropped": why it was let go (droppedText)
+	More  string    // "retrying", "dropped": the URLs given up on meanwhile, in sentences
 	MQTT  bool      // "none": fires still go out over MQTT
 	Sent  bool      // "restored": the alert went out
+	// NextTry is when the next try is due ("retrying") and Tries how many
+	// tries the alert has had ("retrying"; "sent" when more than one).
+	NextTry time.Time
+	Tries   int
+	// SentAt is when the last URL took it ("sent").
+	SentAt time.Time
+	// Change: the watch fires on a change (ocr_changed, pixel_change),
+	// so a fire alert has no condition to clear; it is kept until it is
+	// delivered or a newer change replaces it.
+	Change bool
+	// Again: "dropped" by a restart, a fire alert of a watch with a
+	// condition (ocr_match, numeric) goes out again if the condition
+	// still holds (the runner's restart re-send). A change alert doesn't:
+	// the restarted watch takes what it sees as its starting point.
+	Again bool
 	// firedTag is the suffix for the newest reading's fired tag.
 	firedTag string
+}
+
+// NextText says when the next try is due: "in 30 s", "in 1 min 40 s",
+// or "now" once it is.
+func (d deliveryView) NextText() string {
+	left := time.Until(d.NextTry).Round(time.Second)
+	switch {
+	case left <= 0:
+		return "now"
+	case left < time.Minute:
+		return fmt.Sprintf("in %d s", int(left/time.Second))
+	case left%time.Minute == 0:
+		return fmt.Sprintf("in %d min", int(left/time.Minute))
+	}
+	return fmt.Sprintf("in %d min %d s", int(left/time.Minute), int(left%time.Minute/time.Second))
+}
+
+// TriesText counts the tries so far: "1 try so far", "3 tries so far".
+func (d deliveryView) TriesText() string {
+	if d.Tries == 1 {
+		return "1 try so far"
+	}
+	return fmt.Sprintf("%d tries so far", d.Tries)
+}
+
+// Gone is what ends the tries besides a delivery: for a fire, the
+// condition clearing, or a newer change for a watch that fires on one;
+// for a stream alert, the stream changing again.
+func (d deliveryView) Gone() string {
+	switch d.Kind {
+	case "down":
+		return "the camera comes back"
+	case "recovered":
+		return "the camera goes down again"
+	}
+	if d.Change {
+		return "a newer change replaces it"
+	}
+	return "the condition clears"
 }
 
 // KindNote names a non-fire alert: "" for a fire, " (stream down)",
@@ -558,9 +621,15 @@ func (d deliveryView) AtText() string {
 	return d.At.Format("Jan 2, 15:04:05")
 }
 
-// Sentence is the failure as one line for a title attribute, the time in
-// the server's zone.
+// Sentence is the failure (or the wait) as one line for a title
+// attribute, the time in the server's zone.
 func (d deliveryView) Sentence() string {
+	switch d.State {
+	case "retrying":
+		return d.Text + "; trying again " + d.NextText() + ". The alert" + d.KindNote() + " from " + d.At.Format("15:04:05") + " is not delivered yet (" + d.TriesText() + ")."
+	case "dropped":
+		return "Last alert" + d.KindNote() + " at " + d.At.Format("15:04:05") + " was not sent: " + d.Text
+	}
 	return "Last alert" + d.KindNote() + " at " + d.At.Format("15:04:05") + " could not be delivered: " + d.Text
 }
 
@@ -578,12 +647,24 @@ func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) del
 	d, done := s.reg.GetDelivery(wc.Name)
 	sendingAt, sending := s.reg.Sending(wc.Name)
 	switch {
+	case done && d.Dropped != "":
+		v = deliveryView{State: "dropped", At: d.TS, Kind: d.Kind, Text: droppedText(d.Dropped, d.Retrying, d.Tries),
+			Again: d.Dropped == runner.DroppedByRestart && d.Kind == "fired" && (wc.Trigger.Type == "ocr_match" || wc.Trigger.Type == "numeric")}
+		if d.Err != "" {
+			v.More = deliveryText(d.Err)
+		}
+	case done && d.Retrying != "":
+		v = deliveryView{State: "retrying", At: d.TS, Kind: d.Kind, Text: retryText(d.Retrying), NextTry: d.NextTry, Tries: d.Tries,
+			Change: wc.Trigger.Type == "ocr_changed" || wc.Trigger.Type == "pixel_change"}
+		if d.Err != "" {
+			v.More = deliveryText(d.Err)
+		}
 	case done && !d.OK && !d.Skipped:
 		v = deliveryView{State: "failed", At: d.TS, Kind: d.Kind, Text: deliveryText(d.Err)}
 	case sending:
 		v = deliveryView{State: "sending", At: sendingAt, Kind: "fired"}
 	case done && d.OK:
-		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind}
+		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind, Tries: d.Tries, SentAt: d.SentAt}
 	default:
 		// Nothing raised since watchglass started: the fire before the
 		// restart, from the saved trigger state.
@@ -595,6 +676,8 @@ func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) del
 		switch {
 		case done && d.TS.Equal(latest.TS) && d.OK:
 			v.firedTag = "sent"
+		case done && d.TS.Equal(latest.TS) && d.Retrying != "" && d.Dropped == "":
+			v.firedTag = "retrying"
 		case done && d.TS.Equal(latest.TS) && !d.Skipped:
 			v.firedTag = "not delivered"
 		case sending && sendingAt.Equal(latest.TS):

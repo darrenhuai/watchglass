@@ -2039,7 +2039,8 @@ fieldset > .field-error { margin-top: var(--space-2); }
 /* ---- Alerts: delivery status and the Notify section ----------------------
    Whether a watch's alerts get out. The Live panel says so under the
    readout (.delivery, live.html): a failure is an amber status line with
-   the reason until a later alert goes through; a success and "no URLs" are
+   the reason until a later alert goes through, and so is an alert still
+   being tried at a URL that didn't take it; a success and "no URLs" are
    quiet text. Amber, not red: the watch itself is fine, its alerts need
    attention. Credentials never reach any of this (notify.Label/Scrub). */
 .delivery {
@@ -2058,7 +2059,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .delivery .mono { font-size: var(--fs-sm); }
 .delivery a { color: inherit; text-decoration: underline; text-decoration-color: var(--border-control); text-underline-offset: 2px; }
 .delivery a:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
-.delivery-failed {
+.delivery-failed, .delivery-retrying {
   width: fit-content;
   max-width: min(100%, 72ch);
   padding: 6px 10px;
@@ -2067,7 +2068,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   background: var(--amber-a15);
   color: var(--text);
 }
-.delivery-failed::before, .alerts-failing::before {
+.delivery-failed::before, .delivery-retrying::before, .alerts-failing::before {
   content: "";
   display: inline-block;
   width: 6px; height: 6px;
@@ -2079,7 +2080,8 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .delivery-sending { color: var(--text-dim); }
 .delivery-mark { margin-right: 6px; color: var(--accent); font-weight: var(--fw-strong); }
 /* The list's marker, beside "fired 12 s ago": the last alert didn't reach
-   its URLs. The dot and the words carry it, not the colour alone. */
+   its URLs, or is still being tried (.alerts-retrying, the same look).
+   The dot and the words carry it, not the colour alone. */
 .reading-body > .alerts-failing, .reading-error > .alerts-failing {
   flex: none;
   color: var(--amber);

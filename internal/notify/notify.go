@@ -28,6 +28,19 @@ type ImageSender interface {
 	SendImage(ctx context.Context, title, body string, png []byte) error
 }
 
+// LineSender is a Notifier whose notify URLs can be sent to one at a
+// time, so the runner can try again at the one that didn't take an alert
+// without sending it twice to the ones that did. Lines are the URLs as
+// Label shows them (scheme://host), in list order; SendLine sends to the
+// one at index line, with the png where that line can carry it (ntfy)
+// and as text elsewhere. Its error is scrubbed of the URL and any
+// credential, ready to show, without the "line N of M" prefix SendError
+// adds.
+type LineSender interface {
+	Lines() []string
+	SendLine(ctx context.Context, line int, title, body string, png []byte) error
+}
+
 // target is one line of a watch's notify list. ntfy URLs are delivered by
 // direct HTTP (so they can carry the crop as an attachment); every other
 // URL gets a shoutrrr router of its own, so each line's failure is its own
@@ -136,12 +149,7 @@ func (s *Shoutrrr) send(ctx context.Context, title, body string, png []byte) err
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			t := s.targets[i]
-			if t.ntfy != "" {
-				errs[i] = ntfySend(ctx, t.ntfy, title, body, png)
-				return
-			}
-			errs[i] = errors.Join(t.sender.Send(body, &types.Params{"title": title})...)
+			errs[i] = s.SendLine(ctx, i, title, body, png)
 		}(i)
 	}
 	wg.Wait()
@@ -151,10 +159,39 @@ func (s *Shoutrrr) send(ctx context.Context, title, body string, png []byte) err
 			continue
 		}
 		t := s.targets[i]
-		fails = append(fails, Failure{Line: t.line, Label: t.label, Msg: Scrub(err.Error(), []string{t.url})})
+		fails = append(fails, Failure{Line: t.line, Label: t.label, Msg: err.Error()})
 	}
 	if len(fails) == 0 {
 		return nil
 	}
 	return &SendError{Total: len(s.targets), Failures: fails}
+}
+
+// Lines is each notify URL as scheme://host, in list order (LineSender).
+func (s *Shoutrrr) Lines() []string {
+	labels := make([]string, len(s.targets))
+	for i, t := range s.targets {
+		labels[i] = t.label
+	}
+	return labels
+}
+
+// SendLine delivers to the URL at index line only (LineSender): by direct
+// HTTP with the png as an attachment for ntfy, as text through shoutrrr
+// for the rest. The error is scrubbed of that URL and its credential.
+func (s *Shoutrrr) SendLine(ctx context.Context, line int, title, body string, png []byte) error {
+	if line < 0 || line >= len(s.targets) {
+		return fmt.Errorf("no notify URL at line %d", line+1)
+	}
+	t := s.targets[line]
+	var err error
+	if t.ntfy != "" {
+		err = ntfySend(ctx, t.ntfy, title, body, png)
+	} else {
+		err = errors.Join(t.sender.Send(body, &types.Params{"title": title})...)
+	}
+	if err == nil {
+		return nil
+	}
+	return errors.New(Scrub(err.Error(), []string{t.url}))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -220,6 +221,84 @@ func TestTriggerStateDelivered(t *testing.T) {
 	save(TriggerState{Fingerprint: "f", LastFired: t2, Delivered: true})
 	if !delivered() {
 		t.Error("Delivered: true wasn't saved")
+	}
+}
+
+// MarkTaken records the notify URLs that took a fire's alert while another
+// hadn't. Saving a new settled state for the same fire keeps them; a new
+// fire starts with none, and a late mark for the old fire changes nothing.
+func TestTriggerStateTaken(t *testing.T) {
+	s, _ := openTemp(t)
+	save := func(st TriggerState) {
+		t.Helper()
+		if err := s.SaveTriggerState("printer", st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taken := func() string {
+		t.Helper()
+		st, ok, err := s.LoadTriggerState("printer")
+		if err != nil || !ok {
+			t.Fatalf("Load: ok=%v err=%v", ok, err)
+		}
+		return strings.Join(st.Taken, ",")
+	}
+	t1 := time.Now()
+	save(TriggerState{Fingerprint: "f", LastFired: t1, Stable: "cond:true", HasStable: true})
+	if got := taken(); got != "" {
+		t.Errorf("a fire just saved: taken %q, want none", got)
+	}
+	if err := s.MarkTaken("printer", t1, []string{"aa", "bb"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := taken(); got != "aa,bb" {
+		t.Errorf("after MarkTaken: %q", got)
+	}
+	save(TriggerState{Fingerprint: "f", LastFired: t1, Stable: "cond:false", HasStable: true})
+	if got := taken(); got != "aa,bb" {
+		t.Errorf("a new settled state for the same fire: %q, want the marks kept", got)
+	}
+	t2 := t1.Add(time.Minute)
+	save(TriggerState{Fingerprint: "f", LastFired: t2, Stable: "cond:true", HasStable: true})
+	if got := taken(); got != "" {
+		t.Errorf("a new fire kept the old fire's marks: %q", got)
+	}
+	if err := s.MarkTaken("printer", t1, []string{"cc"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := taken(); got != "" {
+		t.Errorf("a late mark for the old fire marked the new one: %q", got)
+	}
+}
+
+// A trigger_state table from before the taken column gets one, empty, and
+// its rows are kept as they were.
+func TestOpenAddsTheTakenColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b2.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE trigger_state (watch TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, last_fired INTEGER NOT NULL, has_stable INTEGER NOT NULL, stable TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 1, updated INTEGER NOT NULL)`,
+		`INSERT INTO trigger_state VALUES ('printer', 'f', 1700000000000000000, 1, 'cond:true', 0, 1700000000)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	st, ok, err := s.LoadTriggerState("printer")
+	if err != nil || !ok || st.Delivered || st.Stable != "cond:true" || len(st.Taken) != 0 {
+		t.Errorf("old row = %+v ok=%v err=%v, want it kept, not delivered, nothing taken", st, ok, err)
+	}
+	if err := s.MarkTaken("printer", time.Unix(0, 1700000000000000000), []string{"aa"}); err != nil {
+		t.Errorf("MarkTaken after adding the column: %v", err)
 	}
 }
 

@@ -1293,6 +1293,10 @@
     } else if (now.delivery === "failed" && heard.delivery !== "failed") {
       // The send finishes after the fire was announced (it runs on its own).
       announce("The last alert could not be delivered.");
+    } else if (now.delivery === "dropped" && heard.delivery !== "dropped") {
+      announce("The last alert was not sent.");
+    } else if (now.delivery === "retrying" && heard.delivery !== "retrying") {
+      announce("The last alert is not delivered yet; watchglass keeps trying.");
     }
     heard = now;
     return newFire;
