@@ -64,7 +64,7 @@ type stripTile struct {
 func collapseSamples(recent []state.Sample) []stripTile {
 	var tiles []stripTile
 	for _, s := range recent {
-		if n := len(tiles); n > 0 && tiles[n-1].Reading == s.Reading && tiles[n-1].Fired == s.Fired && tiles[n-1].Pending == s.Pending {
+		if n := len(tiles); n > 0 && tiles[n-1].Reading == s.Reading && tiles[n-1].Fired == s.Fired && tiles[n-1].Pending == s.Pending && tiles[n-1].Unsure == s.Unsure {
 			tiles[n-1].Count++
 			continue
 		}

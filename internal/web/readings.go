@@ -52,19 +52,21 @@ const matchedNote = "The pattern matches the ? itself, so the watch acts on this
 // watch's '?' reading; blankSkippedNote the same for a blank reading, and
 // Live's hint on it.
 const (
-	skippedNote      = "A digit wasn't read, so the watch skips this reading and keeps its last state."
+	skippedNote      = "A digit wasn't read for sure, so the watch skips this reading and keeps its last state."
 	blankSkippedNote = "Nothing was read, so the watch skips this reading and keeps its last state."
 )
 
 // viewReadingFor is viewReading for a watch with trigger trig: it also
 // says what the running watch does with a '?' or blank reading (Skipped,
-// Matched), judged by trigger.CheckEngine as the runner judges it.
-func viewReadingFor(trig config.Trigger, engine, reading string) readingView {
+// Matched), judged by trigger.CheckRead as the runner judges it. unsure
+// says a '?' is a digit the decoder wasn't sure of (ocr.HasUnsureDigit),
+// which the watch skips whatever its pattern says.
+func viewReadingFor(trig config.Trigger, engine, reading string, unsure bool) readingView {
 	v := viewReading(engine, reading)
 	if !v.Partial && !v.Unreadable && reading != "" {
 		return v
 	}
-	cond, err := trigger.CheckEngine(trig, engine, reading)
+	cond, err := trigger.CheckRead(trig, engine, reading, unsure)
 	if err != nil {
 		return v
 	}

@@ -171,8 +171,9 @@ func TestSteadyDisplayReadPartlyAlertsOnce(t *testing.T) {
 	}
 
 	// A real crossing still alerts again: the display falls below 20 and
-	// comes back, partial readings in between.
-	if got := feed(e, "19.5", b, "19.5", "?9.5", a, b, a); !got[6] {
+	// stays there (twice Confirm clean readings leave the condition, see
+	// leaveFactor), then comes back, partial readings in between.
+	if got := feed(e, "19.5", b, "19.5", "?9.5", "19.5", "19.5", a, b, a); !got[8] {
 		t.Errorf("falling to 19.5 and back to 22.5 should alert again: %v", got)
 	}
 
@@ -199,7 +200,7 @@ func TestPartlyReadNumberKeepsCooldown(t *testing.T) {
 		t.Fatalf("first crossing should fire: %v", got)
 	}
 	*now = now.Add(10 * time.Second)
-	feed(e, "19.5", "19.5")
+	feed(e, "19.5", "19.5", "19.5", "19.5")
 	if got := feed(e, "22.5", "?2.5", "22.5"); got[0] || got[1] || got[2] {
 		t.Errorf("a second crossing inside Cooldown fired: %v", got)
 	}
@@ -226,8 +227,8 @@ func TestCheckEngineAgreesWithTheWatch(t *testing.T) {
 		{"washer End", washer, "sevenseg", "?", true, false, "The text matches the pattern", true},
 		{"boiler E4", boiler, "sevenseg", "?4", true, false, "The text matches the pattern", true},
 		{"boiler 35", boiler, "sevenseg", "35", false, false, "The text doesn't match the pattern", false},
-		{"partial number", num, "sevenseg", "?5.5", false, true, "A digit wasn't read, so this reading is skipped and the watch keeps its last state", false},
-		{"no digit", num, "sevenseg", "?.?", false, true, "A digit wasn't read, so this reading is skipped and the watch keeps its last state", false},
+		{"partial number", num, "sevenseg", "?5.5", false, true, "A digit wasn't read for sure, so this reading is skipped and the watch keeps its last state", false},
+		{"no digit", num, "sevenseg", "?.?", false, true, "A digit wasn't read for sure, so this reading is skipped and the watch keeps its last state", false},
 		{"clean number", num, "sevenseg", "5.5", true, false, "5.5 is below 10", true},
 		{"text engine", num, "tesseract", "?5.5", true, false, "5.5 is below 10", true},
 	} {
@@ -277,7 +278,7 @@ func TestSkippedReadingKeepsTheProgressShown(t *testing.T) {
 		t.Errorf("after the fire nothing is in progress, got %d of %d", ev.Pending, ev.Need)
 	}
 	*now = now.Add(10 * time.Second)
-	feed(e, "19.5", "19.5", "19.5", "22.5", "22.5", "22.5")
+	feed(e, "19.5", "19.5", "19.5", "19.5", "19.5", "19.5", "22.5", "22.5", "22.5")
 	ev := e.ObserveText("?2.5")
 	if ev.Pending != 3 || ev.Need != 3 || ev.CooldownEnds.IsZero() {
 		t.Errorf("a crossing held by Cooldown should stay held on a skipped reading: %d of %d, ends %v", ev.Pending, ev.Need, ev.CooldownEnds)
@@ -289,7 +290,7 @@ func TestSkippedReadingKeepsTheProgressShown(t *testing.T) {
 // numeric watch skips it like a '?' reading: 22.5, a blank, 22.5 is two
 // readings in a row above 20, not a count started over. A text engine's
 // blank reading still resets the count: it read the box and found nothing
-// to say the condition holds.
+// to say the condition holds (a status line that clears reads blank).
 func TestBlankSevenSegReadingIsSkipped(t *testing.T) {
 	cfg := config.Trigger{Type: "numeric", Op: "gt", Threshold: 20, Confirm: 2}
 	e := sevenseg(t, cfg)
@@ -312,7 +313,7 @@ func TestBlankSevenSegReadingIsSkipped(t *testing.T) {
 	if st := e.State(); !st.HasStable || st.Stable != condMet {
 		t.Errorf("blank frames changed the settled state: %+v", st)
 	}
-	if got := feed(e, "19.0", "", "19.0", "", "22.5", "22.5"); !got[5] {
+	if got := feed(e, "19.0", "", "19.0", "", "19.0", "19.0", "22.5", "22.5"); !got[7] {
 		t.Errorf("after a blank-interrupted run below, a clean run above should fire again: %v", got)
 	}
 
@@ -327,6 +328,10 @@ func TestBlankSevenSegReadingIsSkipped(t *testing.T) {
 	text, _ := mk(t, cfg)
 	if got := feed(text, "22.5", "", "22.5"); got[2] {
 		t.Errorf("a text engine's blank reading should still reset the count: %v", got)
+	}
+	text2, _ := mk(t, cfg)
+	if got := feed(text2, "22.5", "Err", "22.5", "22.5"); got[2] || !got[3] {
+		t.Errorf("text with no number still starts the count over: %v", got)
 	}
 	cond, _ = CheckEngine(cfg, "tesseract", "")
 	if cond.Skipped {

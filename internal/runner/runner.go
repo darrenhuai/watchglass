@@ -118,6 +118,7 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		return nil, fmt.Errorf("watch %q: %w", w.Name, err)
 	}
 	eval.SevenSeg = w.Engine == "sevenseg"
+	eval.StaleAfter = restoreWindow(w)
 	if w.Trigger.Type != "pixel_change" && engine == nil {
 		return nil, fmt.Errorf("watch %q: trigger %q requires an OCR engine", w.Name, w.Trigger.Type)
 	}
@@ -246,7 +247,20 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 		crop = imgproc.Rotate(crop, pp.Rotate)
 		pp.Rotate = 0 // already turned
 		prepped := imgproc.Apply(crop, pp)
-		text, err := r.engine.Recognize(ctx, prepped)
+		// The seven-segment decoder's Words say which '?' is a digit it
+		// wasn't sure of, which no pattern may match (ObserveRead).
+		var (
+			text   string
+			unsure bool
+			err    error
+		)
+		if d, ok := r.engine.(ocr.DetailedEngine); ok && r.watch.Engine == "sevenseg" {
+			var words []ocr.Word
+			text, words, err = d.RecognizeWords(ctx, prepped)
+			unsure = ocr.HasUnsureDigit(text, words)
+		} else {
+			text, err = r.engine.Recognize(ctx, prepped)
+		}
 		if err != nil {
 			// A frame that arrives but can't be read is still a poll with
 			// no reading: it counts toward the health threshold exactly like
@@ -256,7 +270,7 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 			return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("ocr: %w", err))
 		}
 		r.pollSucceeded(ctx)
-		ev = r.eval.ObserveText(text)
+		ev = r.eval.ObserveRead(text, unsure)
 	}
 
 	if r.store != nil {

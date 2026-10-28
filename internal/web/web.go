@@ -160,6 +160,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"blankSkippedNote": func() string { return blankSkippedNote },
 		"pct":              confidencePct,
 		"lowConf":          func(c float64) bool { return c < lowConfidence },
+		"unsureDigit":      func() int { return ocr.UnsureDigit },
 		"isoTime":          isoTime,
 		"ppSet":            preprocessSet,
 		"ppSummary":        preprocessSummary,
@@ -510,7 +511,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		Status:   s.statusFor(name, s.isRunning(name)),
 		Delivery: dv,
 		FiredTag: dv.firedTag,
-		Progress: confirmProgress(wc.Trigger, latest, viewReadingFor(wc.Trigger, wc.Engine, latest.Reading).Skipped),
+		Progress: confirmProgress(wc.Trigger, latest, viewReadingFor(wc.Trigger, wc.Engine, latest.Reading, latest.Unsure).Skipped),
 	})
 }
 
@@ -1218,7 +1219,7 @@ type testVerdict struct {
 // verdictFor checks trig against the test's reading. It says "condition
 // met", never "will notify": edges, Confirm and Cooldown depend on the
 // readings around this one.
-func verdictFor(trig config.Trigger, engine, reading string, errs []fieldError) *testVerdict {
+func verdictFor(trig config.Trigger, engine, reading string, unsure bool, errs []fieldError) *testVerdict {
 	// Only a request without ttype on a saved pixel_change watch gets here
 	// with that type (curl, an older client): the engine read the crop, and
 	// one frame says nothing about a change, so there is no verdict. The
@@ -1233,7 +1234,7 @@ func verdictFor(trig config.Trigger, engine, reading string, errs []fieldError) 
 			return &testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: e.Msg}
 		}
 	}
-	v := readingVerdict(trig, engine, reading)
+	v := readingVerdict(trig, engine, reading, unsure)
 	return &v
 }
 
@@ -1242,27 +1243,31 @@ func verdictFor(trig config.Trigger, engine, reading string, errs []fieldError) 
 // Detail. internal/docscheck checks each recipe's stated result with it,
 // so a recipe can't promise a result Test doesn't show.
 func Verdict(trig config.Trigger, engine, reading string) (state, title, detail string) {
-	v := readingVerdict(trig, engine, reading)
+	return VerdictRead(trig, engine, reading, false)
+}
+
+// VerdictRead is Verdict for a reading that comes with unsure, as
+// trigger.Evaluator.ObserveRead takes it: a '?' in reading is a digit the
+// seven-segment decoder wasn't sure of (ocr.HasUnsureDigit).
+func VerdictRead(trig config.Trigger, engine, reading string, unsure bool) (state, title, detail string) {
+	v := readingVerdict(trig, engine, reading, unsure)
 	return v.State, v.Title, v.Detail
 }
 
 // readingVerdict is the verdict for one reading, judged as a running
-// watch with that engine judges it (trigger.CheckEngine). A seven-segment
+// watch with that engine judges it (trigger.CheckRead; unsure as there). A seven-segment
 // '?' is a digit the decoder couldn't read: a numeric watch skips the
 // reading, and the page says so instead of answering for the digits that
 // were read. ocr_match judges the text as read, '?' included, because the
 // watch does: the washer recipe's pattern catches "?", the End screen.
-func readingVerdict(trig config.Trigger, engine, reading string) testVerdict {
-	cond, err := trigger.CheckEngine(trig, engine, reading)
+func readingVerdict(trig config.Trigger, engine, reading string, unsure bool) testVerdict {
+	cond, err := trigger.CheckRead(trig, engine, reading, unsure)
 	if err != nil {
 		return testVerdict{State: "invalid", Title: "Can't check the trigger", Detail: friendlyConfigError(fmt.Errorf("trigger: %w", err)).Msg}
 	}
 	detail := cond.Detail
-	if trig.Type == "ocr_match" && engine == "sevenseg" && strings.Contains(reading, "?") {
+	if trig.Type == "ocr_match" && engine == "sevenseg" && strings.Contains(reading, "?") && cond.Met {
 		detail = "The text as read, ? included, matches the pattern"
-		if !cond.Met {
-			detail = "The text as read, ? included, doesn't match the pattern"
-		}
 	}
 	switch {
 	case !cond.Evaluable:
@@ -1414,8 +1419,9 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		res.Read = true
-		res.Reading = viewReadingFor(trig, res.Engine, res.Text)
-		res.Verdict = verdictFor(trig, res.Engine, res.Text, trigErrs)
+		unsure := ocr.HasUnsureDigit(res.Text, res.Words)
+		res.Reading = viewReadingFor(trig, res.Engine, res.Text, unsure)
+		res.Verdict = verdictFor(trig, res.Engine, res.Text, unsure, trigErrs)
 	}
 	s.render(w, "testresult.html", res)
 }

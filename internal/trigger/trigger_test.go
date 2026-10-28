@@ -54,9 +54,10 @@ func TestOCRMatchFiresOnceOnEdge(t *testing.T) {
 
 func TestNumericCrossing(t *testing.T) {
 	e, _ := mk(t, config.Trigger{Type: "numeric", Op: "gt", Threshold: 200, Confirm: 1})
-	got := feed(e, "180", "250", "260", "150", "250")
-	// fires entering >200; stays true 250->260 without re-firing; re-arms below; fires again.
-	want := []bool{false, true, false, false, true}
+	got := feed(e, "180", "250", "260", "150", "150", "250")
+	// fires entering >200; stays true 250->260 without re-firing; re-arms
+	// after two readings below (leaveFactor times Confirm); fires again.
+	want := []bool{false, true, false, false, false, true}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("reading %d: fired=%v, want %v", i, got[i], want[i])
@@ -119,7 +120,7 @@ func TestCooldownDelaysPersistingErrorRatherThanDropping(t *testing.T) {
 		t.Fatal("first error should fire")
 	}
 	*now = now.Add(2 * time.Minute)
-	if e.ObserveText("OK").Fired {
+	if got := feed(e, "OK", "OK"); got[0] || got[1] {
 		t.Fatal("clearing must not fire")
 	}
 	*now = now.Add(3 * time.Minute) // t+5m, still within 15m cooldown
@@ -143,7 +144,7 @@ func TestNumericCooldownDelaysPersistingCrossing(t *testing.T) {
 		t.Fatal("first crossing should fire")
 	}
 	*now = now.Add(2 * time.Minute)
-	if e.ObserveText("150").Fired {
+	if got := feed(e, "150", "150"); got[0] || got[1] {
 		t.Fatal("dropping back below threshold must not fire")
 	}
 	*now = now.Add(3 * time.Minute) // t+5m, still within cooldown
@@ -275,8 +276,8 @@ func TestNumericConfirmCountsTheCondition(t *testing.T) {
 // a jittering fall and fires again on the next climb.
 func TestNumericRearmsOnAJitteringFall(t *testing.T) {
 	e, _ := mk(t, config.Trigger{Type: "numeric", Op: "gt", Threshold: 25, Confirm: 2})
-	got := feed(e, "25.5", "25.6", "24.1", "23.9", "25.2", "25.8")
-	want := []bool{false, true, false, false, false, true}
+	got := feed(e, "25.5", "25.6", "24.1", "23.9", "24.3", "24.0", "25.2", "25.8")
+	want := []bool{false, true, false, false, false, false, false, true}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("reading %d: fired=%v, want %v", i, got[i], want[i])
@@ -304,7 +305,7 @@ func TestNumericConditionConfirmStillDelaysInCooldown(t *testing.T) {
 	if got := feed(e, "25.1", "25.2"); !got[1] {
 		t.Fatalf("first crossing should fire: %v", got)
 	}
-	feed(e, "24.0", "24.1") // re-armed, inside the cooldown
+	feed(e, "24.0", "24.1", "24.2", "24.1") // re-armed, inside the cooldown
 	if got := feed(e, "25.5", "25.6", "25.7"); got[0] || got[1] || got[2] {
 		t.Fatalf("a crossing inside the cooldown fired: %v", got)
 	}
@@ -358,7 +359,7 @@ func TestConfirmProgressDuringCooldownSaysItIsHeld(t *testing.T) {
 		t.Fatal("setup: the first run should fire")
 	}
 	ends := e.lastFired.Add(5 * time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 6; i++ {
 		*now = now.Add(time.Second)
 		if ev := e.ObserveText("PRINTING"); ev.Pending != 0 || !ev.CooldownEnds.IsZero() {
 			t.Fatalf("an unmet reading has no progress: %+v", ev)

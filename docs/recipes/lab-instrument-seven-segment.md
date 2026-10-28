@@ -25,7 +25,10 @@ preprocessing to tune. This recipe is that setup.
 - **Test this region** shows one chip per glyph with its confidence (how
   far every segment sat from the on/off line): a clean read scores near
   100, a glyph with a half-lit or half-hidden bar scores low. Anything
-  below 60 shows red: that's the digit to worry about.
+  below 60 shows red: that's the digit to worry about. Below 40%, when the
+  half-lit bar would make another digit (a 0 or an 8, a 1 or a 7), the
+  reading itself shows `?` in that place, and the chip shows what the
+  decoder saw.
 
 ## Set it up in the web UI
 
@@ -85,7 +88,8 @@ tesseract installed.
 `pattern: "([0-9.]+)"` takes the digits and decimal point and ignores a
 leading `-`. If you need the sign, use `"(-?[0-9.]+)"`.
 
-A `?` in the reading is a glyph the decoder couldn't make a digit of. A
+A `?` in the reading is a glyph the decoder couldn't make a digit of, or
+a digit it read below 40% confidence that could be another digit. A
 `numeric` watch on `sevenseg` skips every reading with a `?` in it,
 wherever the `?` is: `?2.5`, `2?.5` and `??.0` might be 22.5, 23.5 and
 71.0, so none of them counts towards `confirm` on either side of the
@@ -95,7 +99,10 @@ reading. A frame with no digits on it at all (the display caught dark
 between refreshes, or behind a glare) is skipped the same way. Test this
 region says "Reading skipped" for such a reading, and the watch list and
 Live mark it skipped. If it says that every time, the box or Binarize
-needs work: a watch that only ever reads a `?` never fires.
+needs work: a watch that only ever reads a `?` never fires. Once the
+watch is above (or below) the threshold, it takes twice `confirm` whole
+readings in a row on the other side to bring it back, so a run of
+misread frames doesn't send the same alert twice.
 
 `confirm: 2` is a reasonable default here where the printed-text recipes
 go higher: the decoder is deterministic, so a display that isn't changing

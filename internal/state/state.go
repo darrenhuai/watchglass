@@ -26,6 +26,9 @@ type Sample struct {
 	// CooldownEnds: Cooldown holds the alert this progress leads to until
 	// then (trigger.Event). Zero when no cooldown is running.
 	CooldownEnds time.Time
+	// Unsure: a '?' in Reading is a digit the seven-segment decoder saw
+	// and wasn't sure of, which the watch skips (trigger.Event).
+	Unsure bool
 }
 
 // Health is a watch's most recent stream health verdict, mirrored from

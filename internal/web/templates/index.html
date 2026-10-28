@@ -41,7 +41,7 @@
         {{else if eq .Status.State "error"}}
           <span class="led led-error" aria-hidden="true"></span>
           <span class="reading-error"><span class="tag tag-error">error</span><span class="reading-error-msg" title="{{.Status.Message}}">{{shortErr .Status.Message}}</span>{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}}<span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}</span>
-        {{else if .Has}}{{$r := readingFor .Watch.Trigger .Watch.Engine .Latest.Reading}}
+        {{else if .Has}}{{$r := readingFor .Watch.Trigger .Watch.Engine .Latest.Reading .Latest.Unsure}}
           {{/* Fired stays first: an alert is never hidden behind "unreadable". */}}
           {{/* An earlier fire, once newer readings came in: "fired 12 s ago". */}}
           {{/* A numeric watch skips a '?' or blank reading (viewReadingFor):

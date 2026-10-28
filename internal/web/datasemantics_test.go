@@ -360,7 +360,7 @@ func TestTestResultExplainsUndecodedDigits(t *testing.T) {
 		`<p class="test-meta mono"><span>sevenseg</span>`,
 		// "?4" of what may be 24.5 isn't "not met": the watch skips it.
 		`<p class="verdict verdict-skipped">`,
-		`<strong class="verdict-title">Reading skipped</strong> <span class="verdict-detail">A digit wasn&#39;t read, so this reading is skipped and the watch keeps its last state.</span>`,
+		`<strong class="verdict-title">Reading skipped</strong> <span class="verdict-detail">A digit wasn&#39;t read for sure, so this reading is skipped and the watch keeps its last state.</span>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sevenseg partial read: missing %s; body:\n%s", want, body)
@@ -382,10 +382,12 @@ func TestTestResultExplainsUndecodedDigits(t *testing.T) {
 	if !strings.Contains(body, `<p class="verdict verdict-met">`) || !strings.Contains(body, "The text as read, ? included, matches the pattern. The watch fires") {
 		t.Errorf("ocr_match on a partial read; body:\n%s", body)
 	}
+	// A '?' reading the pattern doesn't match says nothing about the
+	// condition, so the watch skips it, and Test says so.
 	form.Set("pattern", "^[0-9]+$")
 	_, body = postForm(t, s.Handler(), "/watch/printer/test", form)
-	if !strings.Contains(body, `<p class="verdict verdict-unmet">`) || !strings.Contains(body, "The text as read, ? included, doesn&#39;t match the pattern.") {
-		t.Errorf("ocr_match not met on a partial read; body:\n%s", body)
+	if !strings.Contains(body, `<p class="verdict verdict-skipped">`) || !strings.Contains(body, "The pattern doesn&#39;t match it, and a digit wasn&#39;t read for sure, so this reading is skipped and the watch keeps its last state.") {
+		t.Errorf("ocr_match skipped on a partial read; body:\n%s", body)
 	}
 
 	// A text engine's '?' is just text, so its verdict stands.

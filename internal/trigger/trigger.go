@@ -57,6 +57,9 @@ type Event struct {
 	// type.
 	Value    float64
 	HasValue bool
+	// Unsure is ObserveRead's unsure: a '?' in Reading is a digit the
+	// decoder saw and wasn't sure of, which no pattern matches.
+	Unsure bool
 }
 
 // numRead is one number a numeric watch read, with the text it came from.
@@ -110,9 +113,36 @@ type Evaluator struct {
 	// such reading (see unread): it counts toward Confirm in neither
 	// direction, leaves the settled state alone and never reaches Value.
 	// ocr_match still judges the text as read, '?' included, so a pattern
-	// can catch a '?' on purpose ("End" reads as "?").
+	// can catch a '?' on purpose ("End" reads as "?"); a '?' reading the
+	// pattern doesn't match, or one with a digit the decoder wasn't sure
+	// of (ObserveRead), is skipped the same way.
 	SevenSeg bool
+	// StaleAfter bounds how long a run of skipped readings may keep a
+	// settled condition. A display that goes dark for a minute between
+	// two frames of the same text is one event; one that has shown
+	// nothing readable for longer than this may have been through
+	// anything, so the watch forgets what it had settled on (the fire
+	// time stays, so a running cooldown still holds) and a condition that
+	// holds when the display comes back is reported again. The runner
+	// sets it to the window a restart trusts a saved state for (15
+	// minutes, or twice the slowest poll interval); zero never forgets.
+	StaleAfter time.Duration
+	// lastRead is when the last reading that wasn't skipped came in, or,
+	// when none has since the start, a restore or a forget, the first
+	// skipped one.
+	lastRead time.Time
 }
+
+// leaveFactor is how many times Confirm it takes to leave a condition
+// that has been met, against Confirm to enter it (hysteresis). A filmed
+// screen that still shows the condition is misread now and then, two or
+// three frames in a row on a bad night: round 6's two-hour recording has
+// runs of two garbled "Kernel panic" lines and three bare '?' readings of
+// a boiler's E4, each of which left the condition at Confirm 2 or 3 and
+// sent the same alert again minutes later, once the cooldown ended. A
+// display that really changed reads the new text on every frame, so
+// leaving at twice Confirm costs a few seconds and nothing else.
+const leaveFactor = 2
 
 func New(cfg config.Trigger) (*Evaluator, error) {
 	e := &Evaluator{cfg: cfg, Now: time.Now}
@@ -188,9 +218,14 @@ func (e *Evaluator) State() State {
 // again, and a cooldown that was running ends when it was going to. The
 // caller decides whether s still applies (same trigger, recent enough); a
 // settled state this trigger type could not have produced is dropped, the
-// fire time is kept. Call it before the first reading.
+// fire time is kept. Call it before the first reading. The saved state
+// doesn't say when the display was last read, so StaleAfter counts from
+// the first reading after the restore (see skipped): a dark spell that
+// goes on after the restart forgets the state as one that began there
+// would.
 func (e *Evaluator) Restore(s State) {
 	e.lastFired = s.LastFired
+	e.lastRead = time.Time{}
 	e.stable, e.hasStable, e.numCond = "", false, false
 	if !s.HasStable {
 		return
@@ -232,17 +267,40 @@ func (e *Evaluator) fire(reading, reason string) Event {
 // itself for ocr_changed (it fires on the text settling on a new value), and
 // whether the condition holds for ocr_match and numeric (condKey). A numeric
 // reading with no number in it says nothing either way, so it resets the
-// count rather than counting as "below". A numeric reading with a digit
-// the seven-segment decoder couldn't read, or with no digit at all
-// (unread), is skipped outright: it neither counts nor resets, so "22.5,
-// ?2.5, 22.5" is two readings in a row above 20, and so is "22.5, , 22.5",
-// and a steady display read now whole, now partly or not at all, never
-// looks like it left the condition and came back.
+// count rather than counting as "below". A reading that says nothing about
+// the condition (unread: a seven-segment frame with nothing lit, or a
+// digit the decoder couldn't read, unless the pattern matches it) is skipped
+// outright: it neither counts nor resets, so "22.5, ?2.5, 22.5" is two
+// readings in a row above 20, and so is "22.5, , 22.5", and a steady
+// display read now whole, now partly or not at all, never looks like it
+// left the condition and came back. Once the condition has been met it
+// takes leaveFactor times Confirm readings in a row that don't meet it to
+// leave (need), so a couple of misread frames don't re-arm the watch. A
+// run of skipped readings longer than StaleAfter forgets the settled
+// state instead (see skipped).
 func (e *Evaluator) ObserveText(s string) Event {
-	ev := e.observeText(s)
-	if e.cfg.Type == "numeric" {
+	return e.ObserveRead(s, false)
+}
+
+// ObserveRead is ObserveText for a seven-segment reading that comes with
+// what the decoder knew about its '?': unsure says one of them is a digit
+// it saw and wasn't sure of (ocr.HasUnsureDigit), not a glyph that spells
+// no digit. A pattern that catches a '?' is written for the second kind
+// (a boiler's E4 reads "?4"), so ocr_match skips an unsure reading
+// whatever the pattern says, as numeric does: a 52 whose 5 is half lit by
+// glare reads "?2", and that is not a fault code.
+func (e *Evaluator) ObserveRead(s string, unsure bool) Event {
+	ev, quiet := e.observeText(s, unsure)
+	ev.Unsure = unsure
+	switch {
+	case e.cfg.Type == "numeric":
 		e.settleNumber(&ev, s)
-	} else {
+	case quiet:
+		// A '?' reading the watch skipped, or took as its stable text
+		// read partly, says nothing about the display: it neither
+		// settles nor breaks the run of the text that did, so Home
+		// Assistant's Reading keeps the last text read whole.
+	default:
 		e.settleText(&ev, s)
 	}
 	return ev
@@ -296,42 +354,55 @@ func (e *Evaluator) settleNumber(ev *Event, s string) {
 	ev.Settled, ev.HasSettled = mid.text, true
 }
 
-// observeText is ObserveText's confirm, edge and cooldown logic.
-func (e *Evaluator) observeText(s string) Event {
+// observeText is ObserveText's confirm, edge and cooldown logic. quiet
+// reports a seven-segment '?' reading the watch skipped or took as its
+// stable text read partly, which ObserveText then doesn't settle.
+func (e *Evaluator) observeText(s string, unsure bool) (ev Event, quiet bool) {
 	key, met := s, false
+	partial := e.SevenSeg && strings.Contains(s, "?")
 	switch e.cfg.Type {
+	case "ocr_changed":
+		if e.partlyRead(s) {
+			key = e.stable
+			quiet = true
+		}
 	case "ocr_match":
-		met = e.re.MatchString(s)
+		met = !unsure && e.re.MatchString(s)
+		if !met && (unsure || e.unread(s)) {
+			return e.skipped(s), partial
+		}
 		key = condKey(met)
 	case "numeric":
 		if e.unread(s) {
-			return e.skipped(s)
+			return e.skipped(s), partial
 		}
 		v, ok := e.extract(s)
 		if !ok {
 			e.candidate, e.candCount = "", 0
-			return Event{Reading: s}
+			e.lastRead = e.Now()
+			return Event{Reading: s}, false
 		}
 		met = (e.cfg.Op == "gt" && v > e.cfg.Threshold) ||
 			(e.cfg.Op == "lt" && v < e.cfg.Threshold)
 		key = condKey(met)
 	}
+	e.lastRead = e.Now()
 	if e.candCount > 0 && key == e.candidate {
 		e.candCount++
 	} else {
 		e.candidate = key
 		e.candCount = 1
 	}
-	if e.candCount < e.cfg.Confirm {
+	if e.candCount < e.need(key) {
 		ev := Event{Reading: s}
 		if e.edge(key, met) {
 			ev.Pending, ev.Need = e.candCount, e.cfg.Confirm
 			ev.CooldownEnds = e.cooldownEnds()
 		}
-		return ev
+		return ev, quiet
 	}
 	if e.hasStable && e.stable == key {
-		return Event{Reading: s} // no transition
+		return Event{Reading: s}, quiet // no transition
 	}
 
 	// A cooldown DELAYS notification of a persisting new state rather than
@@ -344,32 +415,96 @@ func (e *Evaluator) observeText(s string) Event {
 	// fires — it resolved on its own.
 	wouldFire := e.edge(key, met)
 	if wouldFire && e.coolingDown() {
-		return Event{Reading: s, Pending: e.cfg.Confirm, Need: e.cfg.Confirm, CooldownEnds: e.cooldownEnds()}
+		return Event{Reading: s, Pending: e.cfg.Confirm, Need: e.cfg.Confirm, CooldownEnds: e.cooldownEnds()}, quiet
 	}
 	e.stable, e.hasStable = key, true
 	if e.cfg.Type == "numeric" {
 		e.numCond = met
 	}
 	if !wouldFire {
-		return Event{Reading: s}
+		return Event{Reading: s}, quiet
 	}
 	switch e.cfg.Type {
 	case "ocr_changed":
-		return e.fire(s, "text changed")
+		return e.fire(s, "text changed"), false
 	case "ocr_match":
-		return e.fire(s, "pattern matched")
+		return e.fire(s, "pattern matched"), false
 	}
 	v, _ := e.extract(s)
-	return e.fire(s, fmt.Sprintf("value %v crossed threshold", v))
+	return e.fire(s, fmt.Sprintf("value %v crossed threshold", v)), false
 }
 
-// skipped is the Event for a numeric reading the watch skips (unread).
-// The count in progress is left as it is, and the event carries it, so
-// the Live tile for the skipped frame still says "1 of 3 needed to fire"
-// or "held by Cooldown" instead of dropping the line until the next clean
-// reading.
+// partlyRead reports whether s is the text an ocr_changed watch settled
+// on, read partly: a seven-segment reading with a '?' in it that fits the
+// stable text (fits). "?2.5" after "22.5" is the same display with a digit
+// lost to a shake or a glare, not a change, and it counts as the stable
+// text: a steady display read whole on one frame and partly on the next
+// never fires "text changed". "?" after "0:04" (a washer's End) and a
+// blank frame don't fit and still count as changes.
+//
+// The other way round, a whole reading that fits a partly read stable
+// text ("22.5" after "?2.5", at start-up or after a change the camera
+// first caught partly) is a new candidate that commits without firing
+// (edge): the watch moves on to the text it can trust, and a change that
+// read "?3.5" twice and then "23.5" fires once, not twice. A real change
+// fires once the new text has been read whole Confirm times; a digit that
+// never reads cleanly keeps the old text, the same cost a numeric watch
+// pays for skipping every '?'. A fault code that shares its digits with
+// the number it replaces ("E4" reads "?4", which fits "54") is the known
+// cost; the boiler recipe's ocr_match watch catches that.
+func (e *Evaluator) partlyRead(s string) bool {
+	return e.hasStable && s != e.stable && strings.Contains(s, "?") && e.fits(s, e.stable)
+}
+
+// fits reports whether two seven-segment readings may be one display, one
+// or both of them read partly: the same length, and at every position the
+// same glyph or a '?' on either side.
+func (e *Evaluator) fits(a, b string) bool {
+	if !e.SevenSeg || len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] && a[i] != '?' && b[i] != '?' {
+			return false
+		}
+	}
+	return true
+}
+
+// need is how many readings in a row with candidate key it takes to
+// believe it: Confirm, or leaveFactor times that to leave a condition
+// that has been met and fired (hysteresis). A met edge the cooldown is
+// holding hasn't committed, so readings against it need only Confirm, and
+// the edge is dropped as before if they get there.
+func (e *Evaluator) need(key string) int {
+	if key == condUnmet && e.hasStable && e.stable == condMet {
+		return leaveFactor * e.cfg.Confirm
+	}
+	return e.cfg.Confirm
+}
+
+// skipped is the Event for a reading the watch skips (unread). The count
+// in progress is left as it is, and the event carries it, so the Live
+// tile for the skipped frame still says "1 of 3 needed to fire" or "held
+// by Cooldown" instead of dropping the line until the next clean reading.
+//
+// Once the watch has read nothing for StaleAfter, though, it starts
+// fresh: the settled state, the count and the numeric window go, the fire
+// time stays. A text that is still there when the display comes back is
+// then news, held back by a running cooldown as any fire is. A run of
+// skipped readings with no reading before it (after a restore) is timed
+// from its first.
 func (e *Evaluator) skipped(s string) Event {
 	ev := Event{Reading: s}
+	if e.lastRead.IsZero() {
+		e.lastRead = e.Now()
+	}
+	if e.StaleAfter > 0 && e.Now().Sub(e.lastRead) > e.StaleAfter {
+		e.stable, e.hasStable, e.numCond = "", false, false
+		e.candidate, e.candCount = "", 0
+		e.nums, e.lastText, e.textRun = nil, "", 0
+		e.lastRead = time.Time{}
+	}
 	if e.candCount == 0 {
 		return ev
 	}
@@ -390,12 +525,14 @@ func (e *Evaluator) skipped(s string) Event {
 
 // edge reports whether a reading with candidate key (and, for the
 // condition types, met) would fire once confirmed, cooldown aside: the
-// text moved off a stable value (ocr_changed), or the condition turned
-// true from false or from nothing yet (ocr_match, numeric).
+// text moved off a stable value (ocr_changed; a whole reading of a text
+// the watch settled on partly isn't a move, see partlyRead), or the
+// condition turned true from false or from nothing yet (ocr_match,
+// numeric).
 func (e *Evaluator) edge(key string, met bool) bool {
 	switch e.cfg.Type {
 	case "ocr_changed":
-		return e.hasStable && e.stable != key
+		return e.hasStable && e.stable != key && !e.fits(e.stable, key)
 	case "ocr_match":
 		return met && !(e.hasStable && e.stable == condMet)
 	case "numeric":
@@ -445,9 +582,11 @@ type Condition struct {
 	// reading with the previous stable one.
 	Evaluable bool
 	Met       bool
-	// Skipped is a numeric watch's seven-segment reading with a digit the
-	// decoder couldn't read, or with no digit at all: the watch ignores it
-	// (Met is false, and it doesn't count as "not met" either).
+	// Skipped is a reading the watch ignores (Met is false, and it doesn't
+	// count as "not met" either): a seven-segment reading with nothing
+	// lit or with a digit the decoder couldn't read that the pattern
+	// (ocr_match) doesn't match, or one with a digit it wasn't sure of
+	// (CheckRead).
 	Skipped bool
 	// Detail says why, in a short sentence without a trailing period.
 	Detail string
@@ -461,9 +600,17 @@ func Check(cfg config.Trigger, reading string) (Condition, error) {
 }
 
 // CheckEngine is Check for a reading from engine, judged exactly as a
-// running watch with that engine judges it: a numeric watch on the
-// seven-segment decoder skips a reading with a '?' in it (Skipped).
+// running watch with that engine judges it: on the seven-segment decoder a
+// watch skips a blank reading and one with a '?' in it, unless its
+// ocr_match pattern matches that (Skipped).
 func CheckEngine(cfg config.Trigger, engine, reading string) (Condition, error) {
+	return CheckRead(cfg, engine, reading, false)
+}
+
+// CheckRead is CheckEngine for a reading that comes with ObserveRead's
+// unsure: an ocr_match pattern doesn't get to match a digit the decoder
+// wasn't sure of, so the reading is skipped.
+func CheckRead(cfg config.Trigger, engine, reading string, unsure bool) (Condition, error) {
 	e, err := New(cfg)
 	if err != nil {
 		return Condition{}, err
@@ -471,13 +618,23 @@ func CheckEngine(cfg config.Trigger, engine, reading string) (Condition, error) 
 	e.SevenSeg = engine == "sevenseg"
 	switch cfg.Type {
 	case "ocr_match":
+		if unsure {
+			return Condition{Evaluable: true, Skipped: true, Detail: "A digit wasn't read for sure, so the pattern isn't checked: this reading is skipped and the watch keeps its last state"}, nil
+		}
 		if e.re.MatchString(reading) {
 			return Condition{Evaluable: true, Met: true, Detail: "The text matches the pattern"}, nil
+		}
+		if e.unread(reading) {
+			detail := "The pattern doesn't match it, and a digit wasn't read for sure, so this reading is skipped and the watch keeps its last state"
+			if reading == "" {
+				detail = "Nothing was read, so this reading is skipped and the watch keeps its last state"
+			}
+			return Condition{Evaluable: true, Skipped: true, Detail: detail}, nil
 		}
 		return Condition{Evaluable: true, Detail: "The text doesn't match the pattern"}, nil
 	case "numeric":
 		if e.unread(reading) {
-			detail := "A digit wasn't read, so this reading is skipped and the watch keeps its last state"
+			detail := "A digit wasn't read for sure, so this reading is skipped and the watch keeps its last state"
 			if reading == "" {
 				detail = "Nothing was read, so this reading is skipped and the watch keeps its last state"
 			}
@@ -518,9 +675,12 @@ func (e *Evaluator) extract(s string) (float64, bool) {
 	return f, err == nil
 }
 
-// unread reports whether s is a seven-segment reading that says nothing
-// about the number: a digit the decoder saw but couldn't read (any '?' at
-// all), or no digits at all (""). A numeric watch skips it.
+// unread reports whether s is a reading that says nothing about the
+// condition: nothing read at all (""), or a seven-segment reading with a
+// digit the decoder saw but couldn't read (any '?' at all). A numeric
+// watch skips it, and so does ocr_match when its pattern doesn't match
+// the reading as it is (the caller checks that first: a pattern can catch
+// a '?' or a blank on purpose).
 //
 // Not just a '?' inside or next to the number the pattern picks: the
 // default pattern finds "0" in "??.0" (71.0 on the display), "5.5" in
@@ -531,11 +691,17 @@ func (e *Evaluator) extract(s string) (float64, bool) {
 // skipped, so a box that always catches an unreadable glyph is noticed and
 // tightened rather than read wrong.
 //
-// A blank reading is a frame with no digit on it: a display caught dark
-// between refreshes, a glare, a backlight that went off. It isn't "Err" or
-// "OFF" (text a panel shows instead of a number, which a text engine
-// reads and which does reset the count): the display said nothing, so the
-// count in progress stands, as it does across a '?'.
+// A blank seven-segment reading is a frame with no digit lit: a display
+// caught dark between refreshes, a glare, a backlight that went off. It
+// isn't "Err" or "OFF" (text a panel shows instead of a number, which does
+// reset a numeric count): the display said nothing, so the count in
+// progress stands, as it does across a '?'. A text engine's blank is
+// different: a status line that clears when the fault does reads blank,
+// and that is how the watch sees the fault end, so it counts as not
+// meeting an ocr_match pattern. A frame tesseract makes nothing of now and
+// then (round 6's heat-pump panel read "" and "." between frames of its
+// fault code) can't re-arm the watch on its own, since leaving takes
+// leaveFactor times Confirm readings in a row.
 func (e *Evaluator) unread(s string) bool {
 	return e.SevenSeg && (s == "" || strings.Contains(s, "?"))
 }

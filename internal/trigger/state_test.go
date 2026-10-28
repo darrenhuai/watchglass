@@ -67,11 +67,13 @@ func TestRestoredStateDoesNotFireAgainOnTheSameDisplay(t *testing.T) {
 				t.Errorf("State after the restart = %+v, want it unchanged: %+v", got, saved)
 			}
 
-			// The display leaves the condition and comes back while the
-			// cooldown from the fire before the restart is still running:
-			// the alert is held until the same moment it would have been.
+			// The display leaves the condition (for the condition types,
+			// twice Confirm readings away: leaveFactor) and comes back
+			// while the cooldown from the fire before the restart is still
+			// running: the alert is held until the same moment it would
+			// have been.
 			if c.away != "" {
-				feed(e2, c.away, c.away)
+				feed(e2, c.away, c.away, c.away, c.away)
 			}
 			ends := firedAt.Add(time.Duration(cooldown))
 			var ev Event
@@ -113,7 +115,7 @@ func TestRestoredStateKeepsAHeldAlert(t *testing.T) {
 	}
 	firedAt := *now
 	*now = now.Add(2 * time.Minute)
-	feed(e, "OK")
+	feed(e, "OK", "OK")
 	*now = now.Add(3 * time.Minute)
 	if ev := e.ObserveText("ERROR: jam again"); ev.Fired || ev.Pending != 1 {
 		t.Fatalf("re-error inside the cooldown: %+v, want it held", ev)

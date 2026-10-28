@@ -62,7 +62,7 @@ func TestTestAgreesWithTheRunningWatch(t *testing.T) {
 			"met", "Condition met", wantMatchedNote},
 		{"boiler-temp E4", "boiler-seven-segment-fault.jpg", boiler, config.Trigger{Type: "numeric", Pattern: `^([0-9]{1,3})$`, Op: "lt", Threshold: 40, Confirm: 3},
 			`<span class="digit-unknown" title="Digit not read">?</span>4<span class="sr-only"> (some digits not read)</span></span>`,
-			"skipped", "Reading skipped", "marks a digit the seven-segment decoder couldn't read. Tighten the region around the digits or adjust Binarize."},
+			"skipped", "Reading skipped", fmt.Sprintf("marks a digit the seven-segment decoder couldn't read, or read below %d%% confidence when it could be another digit (its chip shows the digit it saw). Tighten the region around the digits or adjust Binarize.", ocr.UnsureDigit)},
 		{"boiler-temp 52", "boiler-seven-segment-temp.jpg", boiler, config.Trigger{Type: "numeric", Pattern: `^([0-9]{1,3})$`, Op: "lt", Threshold: 40, Confirm: 3},
 			`52</span>`, "unmet", "Condition not met", ""},
 	} {
@@ -137,12 +137,12 @@ func TestDashboardAndLiveSayWhatTheWatchDoesWithAQuestionMark(t *testing.T) {
 	_, index := get(t, h, "/")
 	row := index[strings.Index(index, `data-label="Last reading"`):]
 	if !strings.Contains(row, "led-unsure") || strings.Contains(row, "led-green") ||
-		!strings.Contains(row, `<span class="mono"><span class="digit-unknown" title="Digit not read">??</span>.0<span class="sr-only"> (some digits not read)</span></span> <span class="reading-sub" title="A digit wasn&#39;t read, so the watch skips this reading and keeps its last state.">skipped</span>`) {
+		!strings.Contains(row, `<span class="mono"><span class="digit-unknown" title="Digit not read">??</span>.0<span class="sr-only"> (some digits not read)</span></span> <span class="reading-sub" title="A digit wasn&#39;t read for sure, so the watch skips this reading and keeps its last state.">skipped</span>`) {
 		t.Errorf("a numeric watch's partial reading should say the watch skips it; row:\n%s", row)
 	}
 	_, live := get(t, h, "/watch/printer/live")
 	if !strings.Contains(live, "led-unsure") || strings.Contains(live, "led-green") ||
-		!strings.Contains(live, "marks a digit the seven-segment decoder couldn't read, so the watch skips this reading and keeps its last state. Tighten the region") ||
+		!strings.Contains(live, "marks a digit the seven-segment decoder couldn't read or wasn't sure of, so the watch skips this reading and keeps its last state. Tighten the region") ||
 		!strings.Contains(live, `<figcaption title="??.0 (skipped)">`) {
 		t.Errorf("Live should say the watch skips a partial reading; body:\n%s", live)
 	}
@@ -150,7 +150,7 @@ func TestDashboardAndLiveSayWhatTheWatchDoesWithAQuestionMark(t *testing.T) {
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?", PNG: pngBytes(t)})
 	_, index = get(t, h, "/")
 	row = index[strings.Index(index, `data-label="Last reading"`):]
-	if !strings.Contains(row, `<span class="reading-sub" title="A digit wasn&#39;t read, so the watch skips this reading and keeps its last state."><span aria-hidden="true">no digits read, </span>skipped</span>`) {
+	if !strings.Contains(row, `<span class="reading-sub" title="A digit wasn&#39;t read for sure, so the watch skips this reading and keeps its last state."><span aria-hidden="true">no digits read, </span>skipped</span>`) {
 		t.Errorf("an all-? reading on a numeric watch is unread and skipped; row:\n%s", row)
 	}
 	_, live = get(t, h, "/watch/printer/live")
@@ -178,11 +178,11 @@ func TestDashboardAndLiveSayWhatTheWatchDoesWithAQuestionMark(t *testing.T) {
 		!strings.Contains(live, `<span class="led led-green"`) || strings.Contains(live, "led-unsure") {
 		t.Errorf("a ? the pattern matches is the box working, not an unsure reading; row:\n%s\nlive:\n%s", row, live)
 	}
-	// A '?' the pattern doesn't match is still a box to look at.
+	// A '?' the pattern doesn't match is skipped, and still a box to look at.
 	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?4", PNG: pngBytes(t)})
 	_, live = get(t, h, "/watch/printer/live")
-	if !strings.Contains(live, "marks a digit the seven-segment decoder couldn't read. Tighten the region") || strings.Contains(live, wantMatchedNote) {
-		t.Errorf("a ? the pattern doesn't match keeps the advice; body:\n%s", live)
+	if !strings.Contains(live, "marks a digit the seven-segment decoder couldn't read or wasn't sure of, so the watch skips this reading and keeps its last state. Tighten the region") || strings.Contains(live, wantMatchedNote) {
+		t.Errorf("a ? the pattern doesn't match is skipped and keeps the advice; body:\n%s", live)
 	}
 }
 
@@ -245,8 +245,9 @@ func TestLiveProgressOnASkippedReadingSaysTheCountStays(t *testing.T) {
 // A frame with no digit on it reads as "" from the seven-segment decoder,
 // and a numeric watch skips it like a '?' reading (trigger.Evaluator.unread):
 // the count in progress stands. Test, the watch list and Live say so, the
-// same way they do for a '?'; a text engine's blank reading is still just
-// "Nothing read".
+// same way they do for a '?', by ocr_match as well unless its pattern
+// matches the blank. A text engine's blank reading is a line with nothing
+// on it, which doesn't meet the condition: "Nothing read", not met.
 func TestNumericWatchSkipsABlankSevenSegReading(t *testing.T) {
 	num := config.Trigger{Type: "numeric", Op: "gt", Threshold: 24, Confirm: 3}
 	if st, title, detail := Verdict(num, "sevenseg", ""); st != "skipped" || title != "Reading skipped" ||
@@ -254,7 +255,13 @@ func TestNumericWatchSkipsABlankSevenSegReading(t *testing.T) {
 		t.Errorf("Test on a blank sevenseg reading: %s %q %q", st, title, detail)
 	}
 	if st, _, _ := Verdict(num, "tesseract", ""); st != "unmet" {
-		t.Errorf("Test on a blank tesseract reading should stay %q, got %q", "unmet", st)
+		t.Errorf("Test on a blank tesseract reading should be %q, got %q", "unmet", st)
+	}
+	if st, _, _ := Verdict(config.Trigger{Type: "ocr_match", Pattern: `E0[0-9]`, Confirm: 2}, "tesseract", ""); st != "unmet" {
+		t.Errorf("a blank status line doesn't match a fault pattern: want %q, got %q", "unmet", st)
+	}
+	if st, _, _ := Verdict(config.Trigger{Type: "ocr_match", Pattern: `^$`, Confirm: 2}, "tesseract", ""); st != "met" {
+		t.Errorf("a pattern that matches the blank on purpose: want %q, got %q", "met", st)
 	}
 
 	s, _ := newTestServer(t)
@@ -287,17 +294,139 @@ func TestNumericWatchSkipsABlankSevenSegReading(t *testing.T) {
 		t.Errorf("Live should mark a blank reading unsure and not as if it counted; body:\n%s", live)
 	}
 
-	// ocr_match judges the blank as text (it may match ^$ on purpose), so
-	// nothing is called skipped.
+	// An ocr_match watch whose pattern doesn't match the blank skips it
+	// too; one that matches it on purpose (^$) acts on it.
 	s.mu.Lock()
 	s.cfg.Watches[0].Trigger = config.Trigger{Type: "ocr_match", Pattern: `^[0-9]+$`, Confirm: 2}
 	s.mu.Unlock()
 	_, index = get(t, h, "/")
 	row = index[strings.Index(index, `data-label="Last reading"`):]
-	if strings.Contains(row, "skipped") || !strings.Contains(row, "led-green") {
-		t.Errorf("an ocr_match watch's blank reading isn't skipped; row:\n%s", row)
+	if !strings.Contains(row, `">skipped</span>`) || strings.Contains(row, "led-green") {
+		t.Errorf("an ocr_match watch's blank reading is skipped; row:\n%s", row)
 	}
-	if _, live = get(t, h, "/watch/printer/live"); strings.Contains(live, "skipped") {
-		t.Errorf("Live shouldn't call an ocr_match watch's blank reading skipped; body:\n%s", live)
+	if _, live = get(t, h, "/watch/printer/live"); !strings.Contains(live, blankSkippedNote) {
+		t.Errorf("Live should say an ocr_match watch skips a blank reading; body:\n%s", live)
+	}
+	s.mu.Lock()
+	s.cfg.Watches[0].Trigger = config.Trigger{Type: "ocr_match", Pattern: `^$`, Confirm: 2}
+	s.mu.Unlock()
+	_, index = get(t, h, "/")
+	row = index[strings.Index(index, `data-label="Last reading"`):]
+	if strings.Contains(row, "skipped") || !strings.Contains(row, "led-green") {
+		t.Errorf("a blank the pattern matches isn't skipped; row:\n%s", row)
+	}
+}
+
+// A digit the decoder read below ocr.UnsureDigit (40%) that may be another digit
+// (round 6's clock at 5:50, its last 0 read as an 8 at 11% with the middle
+// bar nearly lit) reaches the reading as '?': Test shows the reading the
+// watch acts on ("5:5?", skipped) and the chip shows what the decoder saw
+// (8, 11%), and the running watch doesn't act on 58.
+func TestTestShowsAnUnsureDigitAsAQuestionMark(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "trigger", "testdata", "partial", "casio-5-50.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trig := config.Trigger{Type: "numeric", Pattern: `:([0-9]+)$`, Op: "gt", Threshold: 55, Confirm: 1}
+	s, _ := newTestServerWith(t, ocr.Engines{SevenSeg: ocr.NewSevenSeg()})
+	s.NewSource = func(config.Watch) (source.Source, error) { return &fakeSource{img: img}, nil }
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "engine": {"sevenseg"}, "ttype": {trig.Type},
+		"pattern": {trig.Pattern}, "op": {trig.Op}, "tthreshold": {"55"}, "confirm": {"1"}, "cooldown": {"0s"}}
+	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, `<span class="mono test-reading">5:5<span class="digit-unknown" title="Digit not read">?</span><span class="sr-only"> (some digits not read)</span></span>`) {
+		t.Errorf("Read should show 5:5?; body:\n%s", body)
+	}
+	if !strings.Contains(body, `<span class="word-chip conf-low"><span class="sr-only">Low confidence: </span>8<span class="conf">11%</span></span>`) {
+		t.Errorf("the chip should show the 8 the decoder saw at 11%%; body:\n%s", body)
+	}
+	if !strings.Contains(body, `<p class="verdict verdict-skipped">`) || !strings.Contains(body, "A digit wasn&#39;t read for sure, so this reading is skipped") {
+		t.Errorf("the verdict should say the reading is skipped; body:\n%s", body)
+	}
+	if !strings.Contains(body, fmt.Sprintf("read below %d%% confidence when it could be another digit", ocr.UnsureDigit)) {
+		t.Errorf("the note should explain the ? on a digit the chip shows, at the decoder's own floor; body:\n%s", body)
+	}
+
+	w := config.Watch{Name: "w", Source: "unused", Engine: "sevenseg", Region: config.Region{W: 1, H: 1}, Trigger: trig}
+	r, err := runner.New(w, &fakeSource{img: img}, ocr.NewSevenSeg(), nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := r.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Fired || ev.HasValue || ev.Reading != "5:5?" {
+		t.Errorf("the running watch acted on the unsure digit: %+v", ev)
+	}
+}
+
+// A '?' a digit display's pattern catches on purpose is a glyph that
+// spells no digit (the boiler recipe's E4 reads "?4"). A digit the decoder
+// saw and wasn't sure of also reads '?', and no pattern may catch that: a
+// 52 whose 5 is half lit by glare reads "?2", which the boiler's fault
+// pattern would take for a fault code. Test, the running watch, the watch
+// list and Live all skip it.
+func TestAFaultPatternSkipsAnUnsureDigit(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "trigger", "testdata", "partial", "glare-52.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trig := config.Trigger{Type: "ocr_match", Pattern: `^\?[0-9]+$`, Confirm: 3}
+	s, _ := newTestServerWith(t, ocr.Engines{SevenSeg: ocr.NewSevenSeg()})
+	s.NewSource = func(config.Watch) (source.Source, error) { return &fakeSource{img: img}, nil }
+	form := url.Values{"x": {"0"}, "y": {"0"}, "w": {"1"}, "h": {"1"}, "engine": {"sevenseg"}, "ttype": {trig.Type},
+		"pattern": {trig.Pattern}, "confirm": {"3"}, "cooldown": {"0s"}}
+	_, body := postForm(t, s.Handler(), "/watch/printer/test", form)
+	if !strings.Contains(body, `<span class="mono test-reading"><span class="digit-unknown" title="Digit not read">?</span>2<span class="sr-only"> (some digits not read)</span></span>`) ||
+		!strings.Contains(body, `<p class="verdict verdict-skipped">`) ||
+		!strings.Contains(body, "A digit wasn&#39;t read for sure, so the pattern isn&#39;t checked: this reading is skipped and the watch keeps its last state.") ||
+		strings.Contains(body, wantMatchedNote) {
+		t.Errorf("Test on the glared 52 should read ?2 and skip it; body:\n%s", body)
+	}
+
+	w := config.Watch{Name: "w", Source: "unused", Engine: "sevenseg", Region: config.Region{W: 1, H: 1}, Trigger: trig}
+	r, err := runner.New(w, &fakeSource{img: img}, ocr.NewSevenSeg(), nil, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		ev, err := r.Tick(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Fired || ev.Reading != "?2" || !ev.Unsure {
+			t.Fatalf("poll %d: the running watch acted on the unsure digit: %+v", i+1, ev)
+		}
+	}
+
+	startBlocked(t, s, "sevenseg")
+	s.mu.Lock()
+	s.cfg.Watches[0].Trigger = trig
+	s.mu.Unlock()
+	h := s.Handler()
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?2", Unsure: true, PNG: pngBytes(t)})
+	_, index := get(t, h, "/")
+	row := index[strings.Index(index, `data-label="Last reading"`):]
+	if !strings.Contains(row, `">skipped</span>`) || strings.Contains(row, "led-green") || strings.Contains(row, wantMatchedNote) {
+		t.Errorf("the watch list should say the unsure ?2 is skipped; row:\n%s", row)
+	}
+	_, live := get(t, h, "/watch/printer/live")
+	if !strings.Contains(live, "marks a digit the seven-segment decoder couldn't read or wasn't sure of, so the watch skips this reading") || strings.Contains(live, wantMatchedNote) {
+		t.Errorf("Live should say the unsure ?2 is skipped; body:\n%s", live)
+	}
+	// The same text from a glyph that spells no digit is the fault code.
+	s.reg.Add("printer", state.Sample{TS: time.Now(), Reading: "?2", PNG: pngBytes(t)})
+	if _, live = get(t, h, "/watch/printer/live"); !strings.Contains(live, wantMatchedNote) {
+		t.Errorf("a ?2 whose ? spells no digit is what the pattern catches; body:\n%s", live)
 	}
 }

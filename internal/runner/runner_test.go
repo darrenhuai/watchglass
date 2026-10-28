@@ -664,8 +664,11 @@ func TestDeliveryIsReportedPerAlert(t *testing.T) {
 	if n := len([]rune(got[0].Err)); n > errMax {
 		t.Errorf("Err is %d runes, want at most %d", n, errMax)
 	}
-	// It stops firing (idle), fires again, and this time it goes through.
+	// It stops firing (idle, read twice: leaving takes twice Confirm),
+	// fires again, and this time it goes through.
 	n.err = nil
+	engine.texts = []string{"idle"}
+	r.Tick(ctx)
 	r.Tick(ctx)
 	engine.texts = []string{"PRINT COMPLETE"}
 	r.Tick(ctx)
