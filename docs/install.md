@@ -6,6 +6,7 @@ watchglass is one program with a web UI. Run it in Docker, as the Home Assistant
 - [docker run](#docker-run)
 - [Home Assistant add-on](#home-assistant-add-on)
 - [Binaries](#binaries)
+  - [Checking the download](#checking-the-download)
 - [What to install for reading text and streams](#what-to-install-for-reading-text-and-streams)
 - [Run it as a service (systemd)](#run-it-as-a-service-systemd)
 - [go install and building from source](#go-install-and-building-from-source)
@@ -23,9 +24,9 @@ Open http://127.0.0.1:8080 and add a watch.
 
 This needs Docker's Compose plugin. If `docker compose version` says `unknown command` (and `docker compose up -d` complains about an unknown flag `-d`), install it: Ubuntu's own `docker.io` package leaves it out, so `sudo apt install docker-compose-v2`; Docker's own packages call it `docker-compose-plugin`.
 
-- **The image** is `ghcr.io/darrenhuai/watchglass`, built for linux/amd64, linux/arm64 and linux/arm/v7 (a 236 MB download on amd64, 230 MB on arm64 and 207 MB on arm/v7; about 610 MB of files once unpacked; `docker images` can report more, because Docker's image store keeps the download as well). It includes ffmpeg and tesseract. It doesn't include Python, so `engine: rapidocr` isn't available in it. `:latest` is the newest release, and every release also has its own tag (`:0.1.10`).
+- **The image** is `ghcr.io/darrenhuai/watchglass`, built for linux/amd64, linux/arm64 and linux/arm/v7 (a 236 MB download on amd64, 230 MB on arm64 and 207 MB on arm/v7; about 610 MB of files once unpacked; `docker images` can report more, because Docker's image store keeps the download as well). It includes ffmpeg and tesseract. It doesn't include Python, so `engine: rapidocr` isn't available in it. `:latest` is the newest release, and every release also has its own tag: the version number from the [releases page](https://github.com/darrenhuai/watchglass/releases) without the `v`. Pin one of those if you'd rather update on purpose.
 - **Your files** live in `./config`: `config.yaml` and the history database `watchglass.db`. A missing `config.yaml` is created on first start, with no watches.
-- **PUID and PGID** make the container run as you, so it can write to `./config`. Without them it runs as uid 1000, which is fine if that's you. On a NAS (Synology, Unraid, TrueNAS) your uid is often something else, and you'd get a "permission denied" naming the uid it runs as.
+- **PUID and PGID** make the container run as you, so it can write to `./config`. Without them it runs as uid 1000, which is fine if that's you. On a NAS (Synology, Unraid, TrueNAS) your uid is often something else, and you'd get a "permission denied" naming the uid it runs as. `docker compose up -d` still says Started when that happens, so if the page doesn't open, run `docker compose logs`.
 - **The port** is bound to `127.0.0.1` only. Before you change the `ports:` line to reach it from other machines, add an [`auth:` block](security.md).
 - **A camera on the Docker host itself**: inside the container, `127.0.0.1` is the container. Use `http://host.docker.internal:<port>/...` instead. The compose file maps that name on Linux too.
 - **Try the demo** in the same setup: uncomment the `WATCHGLASS_DEMO=1` lines in the compose file. The demo keeps its files in the container's `/tmp` and leaves `./config` alone.
@@ -71,7 +72,7 @@ Each release has an archive per system. The names don't change between releases,
 | macOS Intel | [watchglass_darwin_amd64.tar.gz](https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_darwin_amd64.tar.gz) |
 | Windows x86-64 | [watchglass_windows_amd64.zip](https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_windows_amd64.zip) |
 
-Each unpacks into a folder of the same name, holding the binary, `LICENSE` and `README.md` (and `watchglass.service` on Linux). `checksums.txt` on the release page has their SHA-256 sums.
+Each unpacks into a folder of the same name, holding the binary, `LICENSE` and `README.md` (and `watchglass.service` on Linux).
 
 On Linux, in one line:
 
@@ -79,7 +80,29 @@ On Linux, in one line:
 curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass
 ```
 
-On first run watchglass creates an empty `config.yaml` in the current folder, then logs a line like `watchglass 0.1.10 ready: open http://127.0.0.1:8080/`. Add `-demo` to try it on the built-in cameras first; the demo keeps its own config in the temp folder and never touches `config.yaml`.
+That needs curl. Minimal systems such as the `ubuntu` container image have neither curl nor wget, and the line then fails with `curl: command not found` followed by `gzip: stdin: unexpected end of file`. Install curl (`sudo apt install curl`; in a container, `apt update && apt install curl`), or use wget if you have it:
+
+```bash
+wget -qO- https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz | tar xz && ./watchglass_linux_amd64/watchglass
+```
+
+On first run watchglass creates an empty `config.yaml` in the current folder, then logs a line like `watchglass <version> ready: open http://127.0.0.1:8080/`. Add `-demo` to try it on the built-in cameras first; the demo keeps its own config in the temp folder and never touches `config.yaml`.
+
+### Checking the download
+
+`checksums.txt` on the release page has the SHA-256 sum of every archive. The one-line install doesn't keep the archive, so to check it, download both into one folder and run `sha256sum`:
+
+```bash
+curl -fsSLO https://github.com/darrenhuai/watchglass/releases/latest/download/watchglass_linux_amd64.tar.gz
+curl -fsSLO https://github.com/darrenhuai/watchglass/releases/latest/download/checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+```
+
+It prints `watchglass_linux_amd64.tar.gz: OK` for the archive you have and skips the ones you don't. macOS has no `sha256sum`; run `shasum -a 256 --ignore-missing -c checksums.txt` instead. On Windows, in PowerShell, with both files in the current folder, this prints `True` when the sums match:
+
+```powershell
+(Get-FileHash watchglass_windows_amd64.zip).Hash -eq (-split (Select-String -SimpleMatch watchglass_windows_amd64.zip checksums.txt).Line)[0]
+```
 
 **Windows.** Double-click `watchglass.exe`. It creates `config.yaml` next to itself and opens the web UI in your browser; closing its window stops it. Double-click it again while it runs and it just opens the browser. If Windows says "Windows protected your PC", that's because the exe isn't code-signed: click **More info → Run anyway**. From a terminal, stop it with Ctrl+C. Task Manager and `taskkill /F` end it without a clean shutdown (the history database and the MQTT "offline" message aren't closed properly).
 

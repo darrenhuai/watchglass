@@ -1,5 +1,7 @@
 # watchglass Home Assistant add-on
 
+watchglass reads the digits or the status text on a screen that has no API, through a camera you point at it, and tells you when they show what you're waiting for, straight to your phone over ntfy, Telegram, Discord or email, or as a Home Assistant sensor over MQTT.
+
 ## Experimental
 
 The main repository doubles as an add-on repository: `repository.yaml` at its root, this directory as the add-on. It runs on amd64 and aarch64, the two architectures the Supervisor allows. It hasn't been submitted to the official store, so expect rough edges and please [report them](https://github.com/darrenhuai/watchglass/issues/new?template=bug.yml). The plain Docker route in the [install guide](https://github.com/darrenhuai/watchglass/blob/master/docs/install.md) is the better-trodden path.
