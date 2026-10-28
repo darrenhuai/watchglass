@@ -88,6 +88,8 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// "sending" mark too; this covers a first Start after a boot or a
 	// Start that failed before the watch ever ran.
 	s.reg.ClearSending(w.Name)
+	// Nor has it crashed on a frame yet (OnCrash below).
+	s.reg.ClearCrash(w.Name)
 	var notifier notify.Notifier
 	if len(w.Notify) > 0 {
 		n, err := notify.NewShoutrrr(w.Notify)
@@ -195,6 +197,12 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			onHealth(name, hev)
 		}
 	}
+	// A panic in the poll was contained (runner Contain); the page shows
+	// the watch in error, with words for where it crashed, until it reads
+	// again. Since is the runner's: the first crash of the current run.
+	r.OnCrash = func(ce *runner.CrashError) {
+		s.reg.SetCrash(name, state.Crash{Message: ce.Error(), Since: ce.First})
+	}
 	// Delivery reports come from the runner's sender goroutine, which may
 	// still be finishing an alert after Stop. Only the watch's current run
 	// reports: a straggler from before a Save & restart (possibly about
@@ -212,7 +220,8 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			s.reg.SetSending(name, d.TS)
 			return
 		}
-		s.reg.SetDelivery(name, state.Delivery{TS: d.TS, Kind: d.Kind, OK: d.OK, Skipped: d.Skipped, Err: d.Err})
+		s.reg.SetDelivery(name, state.Delivery{TS: d.TS, Kind: d.Kind, OK: d.OK, Skipped: d.Skipped, Err: d.Err,
+			Retrying: d.Retrying, NextTry: d.NextTry, Tries: d.Tries, Dropped: d.Dropped, SentAt: d.SentAt})
 	}
 	wctx, cancel := context.WithCancel(ctx)
 	h.cancel = cancel
@@ -245,8 +254,10 @@ func (s *Supervisor) Stop(name string) {
 		delete(s.running, name)
 		// The run's in-flight send (if any) can no longer report, so its
 		// "sending" mark would otherwise stay until the next successful
-		// Start: forever, if that Start fails.
+		// Start: forever, if that Start fails. Nor will it try again an
+		// alert it was still trying, so the page stops saying it will.
 		s.reg.ClearSending(name)
+		s.reg.EndRetrying(name, runner.DroppedByRestart)
 	}
 	s.mu.Unlock()
 	if !ok {

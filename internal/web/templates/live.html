@@ -39,12 +39,16 @@
 {{end}}
 {{/* Whether alerts are getting out (deliveryFor in web.go). A failure
      stays until a later alert goes through or the URLs are changed; the
-     error names each URL by scheme://host only. After a restart, until
+     error names each URL by scheme://host only. While a URL that didn't
+     take the alert is still to be tried again, the line says so and when
+     (the fragment is re-fetched, so the wait counts down). After a restart, until
      the watch raises an alert, the line is about the fire before it
      ("restored", from the history database). */}}
 {{with .Delivery}}{{if eq .State "failed"}}<p class="delivery delivery-failed">Last alert{{.KindNote}} at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time> could not be delivered: {{.Text}} Use <a href="#notify-test">Send test notification</a> to check the URL.</p>
+{{else if eq .State "dropped"}}<p class="delivery delivery-failed">Last alert{{.KindNote}} at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time> was not sent: {{.Text}}{{if .Again}} If the condition still holds, it goes out again.{{end}}{{with .More}} {{.}}{{end}}</p>
+{{else if eq .State "retrying"}}<p class="delivery delivery-retrying">{{.Text}}; trying again {{.NextText}}. The alert{{.KindNote}} from <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time> is kept until it gets through or {{.Gone}} ({{.TriesText}}).{{with .More}} {{.}}{{end}}</p>
 {{else if eq .State "sending"}}<p class="delivery delivery-sending">Sending the alert from <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>…</p>
-{{else if eq .State "sent"}}<p class="delivery delivery-sent"><span class="delivery-mark" aria-hidden="true">✓</span>Last alert{{.KindNote}} sent at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>.</p>
+{{else if eq .State "sent"}}<p class="delivery delivery-sent"><span class="delivery-mark" aria-hidden="true">✓</span>{{if and (gt .Tries 1) (not .SentAt.IsZero)}}Last alert{{.KindNote}}, from <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>, went out at <time class="mono" datetime="{{isoTime .SentAt}}">{{.SentAt.Format "15:04:05"}}</time> after {{.Tries}} tries.{{else}}Last alert{{.KindNote}} sent at <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time>.{{end}}</p>
 {{else if eq .State "restored"}}<p class="delivery delivery-restored">{{if .Sent}}<span class="delivery-mark" aria-hidden="true">✓</span>Last alert sent at <time class="mono" datetime="{{isoTime .At}}">{{.AtText}}</time>, before watchglass restarted.{{else}}Last fired at <time class="mono" datetime="{{isoTime .At}}">{{.AtText}}</time>, before watchglass restarted. That alert may not have gone out, so it goes out again if the condition still holds.{{end}}</p>
 {{else if eq .State "none"}}<p class="delivery delivery-none">No notification URLs: fires are only shown here{{if .MQTT}} and sent to MQTT{{end}}. <a href="#f-notify">Add one under Notify</a>.</p>
 {{end}}{{end}}

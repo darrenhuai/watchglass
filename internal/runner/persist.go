@@ -145,6 +145,15 @@ func (r *Runner) restoreState(now time.Time) {
 		// The registry still hears of the fire: it happened.
 		r.restoredFire = row.LastFired
 		r.logf("watch %s: its last alert (%s) may not have gone out, so a condition that still holds is reported again", name, row.LastFired.Format("2006-01-02 15:04:05"))
+		// The URLs that took it are not sent it again, while it is the
+		// same alert: the condition held when the state was last saved,
+		// and holds until the watch sees otherwise (Tick).
+		if len(row.Taken) > 0 && row.HasStable && row.Stable == condMet {
+			r.resendTaken = map[string]bool{}
+			for _, k := range row.Taken {
+				r.resendTaken[k] = true
+			}
+		}
 		r.saved = rowState
 		r.persist(trigger.State{})
 		return
@@ -224,6 +233,18 @@ func (r *Runner) markDelivered(fired time.Time) {
 		return
 	}
 	if err := r.store.MarkDelivered(r.watch.Name, fired); err != nil {
+		r.logf("watch %s: save trigger state: %v", r.watch.Name, err)
+	}
+}
+
+// markTaken records which notify URLs (by urlKey) took the alert of the
+// fire at fired while another still hadn't, so the restart re-send skips
+// them. It runs on the sender goroutine, like markDelivered.
+func (r *Runner) markTaken(fired time.Time, keys []string) {
+	if r.store == nil || fired.IsZero() || len(keys) == 0 {
+		return
+	}
+	if err := r.store.MarkTaken(r.watch.Name, fired, keys); err != nil {
 		r.logf("watch %s: save trigger state: %v", r.watch.Name, err)
 	}
 }

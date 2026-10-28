@@ -264,14 +264,21 @@ func openTriggerState(db *sql.DB) error {
 		has_stable  INTEGER NOT NULL,
 		stable      TEXT    NOT NULL,
 		delivered   INTEGER NOT NULL DEFAULT 1,
-		updated     INTEGER NOT NULL
+		updated     INTEGER NOT NULL,
+		taken       TEXT    NOT NULL DEFAULT ''
 	)`); err != nil {
 		return err
 	}
-	// The table's first version had no delivered column.
-	if _, err := db.Exec(`SELECT delivered FROM trigger_state LIMIT 0`); err != nil {
-		if _, err := db.Exec(`ALTER TABLE trigger_state ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1`); err != nil {
-			return err
+	// The table's first version had no delivered column, and the second
+	// no taken column.
+	for _, col := range []struct{ name, def string }{
+		{"delivered", "INTEGER NOT NULL DEFAULT 1"},
+		{"taken", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if _, err := db.Exec(`SELECT ` + col.name + ` FROM trigger_state LIMIT 0`); err != nil {
+			if _, err := db.Exec(`ALTER TABLE trigger_state ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -304,6 +311,11 @@ type TriggerState struct {
 	// saved before its alert is sent, so it starts out false, and
 	// MarkDelivered sets it once the send succeeds.
 	Delivered bool
+	// Taken names the notify URLs that took that alert while another
+	// still hadn't (MarkTaken), by the runner's key for each URL, so the
+	// alert sent again after a restart goes only to the ones that didn't.
+	// A new fire time starts it empty.
+	Taken []string
 }
 
 // SaveTriggerState stores watch's trigger state, replacing what was there.
@@ -324,8 +336,26 @@ func (s *Store) SaveTriggerState(watch string, st TriggerState) error {
 			has_stable = excluded.has_stable, stable = excluded.stable,
 			delivered = CASE WHEN trigger_state.last_fired = excluded.last_fired
 				THEN max(trigger_state.delivered, excluded.delivered) ELSE excluded.delivered END,
+			taken = CASE WHEN trigger_state.last_fired = excluded.last_fired
+				THEN trigger_state.taken ELSE excluded.taken END,
 			updated = excluded.updated`,
 		watch, st.Fingerprint, fired, boolInt(st.HasStable), st.Stable, boolInt(st.Delivered), time.Now().Unix())
+	return err
+}
+
+// MarkTaken records which notify URLs (by the runner's keys) took the
+// alert of watch's fire at fired, while another still hadn't. Like
+// MarkDelivered, it changes nothing if the saved state is about another
+// fire by now.
+func (s *Store) MarkTaken(watch string, fired time.Time, keys []string) error {
+	if fired.IsZero() {
+		return nil
+	}
+	if ok, err := s.tables(); !ok {
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE trigger_state SET taken = ?, updated = ? WHERE watch = ? AND last_fired = ?`,
+		strings.Join(keys, ","), time.Now().Unix(), watch, fired.UnixNano())
 	return err
 }
 
@@ -359,8 +389,9 @@ func (s *Store) LoadTriggerState(watch string) (TriggerState, bool, error) {
 	var st TriggerState
 	var fired int64
 	var has, delivered int
-	err := s.db.QueryRow(`SELECT fingerprint, last_fired, has_stable, stable, delivered FROM trigger_state WHERE watch = ?`, watch).
-		Scan(&st.Fingerprint, &fired, &has, &st.Stable, &delivered)
+	var taken string
+	err := s.db.QueryRow(`SELECT fingerprint, last_fired, has_stable, stable, delivered, taken FROM trigger_state WHERE watch = ?`, watch).
+		Scan(&st.Fingerprint, &fired, &has, &st.Stable, &delivered, &taken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TriggerState{}, false, nil
 	}
@@ -372,6 +403,9 @@ func (s *Store) LoadTriggerState(watch string) (TriggerState, bool, error) {
 	}
 	st.HasStable = has == 1
 	st.Delivered = delivered == 1
+	if taken != "" {
+		st.Taken = strings.Split(taken, ",")
+	}
 	return st, true, nil
 }
 

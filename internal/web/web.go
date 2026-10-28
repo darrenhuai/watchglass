@@ -30,6 +30,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/notify"
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
 	"github.com/darrenhuai/watchglass/internal/source"
 	"github.com/darrenhuai/watchglass/internal/state"
 	"github.com/darrenhuai/watchglass/internal/supervisor"
@@ -312,8 +313,10 @@ type indexRow struct {
 	// AlertsFailing is set when the watch's last alert didn't reach its
 	// notify URLs: the sentence the row's "alerts failing" marker carries
 	// as its title (the Live panel shows the same one). A later send that
-	// goes through clears it.
-	AlertsFailing string
+	// goes through clears it. AlertsRetrying is the same while the alert
+	// is still being tried at a URL that didn't take it.
+	AlertsFailing  string
+	AlertsRetrying string
 }
 
 // agoText says how long ago something was, in the same words as app.js's
@@ -343,7 +346,7 @@ func agoText(d time.Duration) string {
 // genuinely healthy one in any of the three places.
 type watchStatus struct {
 	State   string // "running" | "stopped" | "error"
-	Message string // set only for "error": health.Event.Message
+	Message string // set only for "error": health.Event.Message, or a crash's (state.Crash)
 	Since   time.Time
 }
 
@@ -361,14 +364,25 @@ func (s *Server) isRunning(name string) bool {
 // all (e.g. config.yaml still lists it, but a "Save & restart" failed to
 // actually restart it — must_fix 1 case 1) always reads as "stopped",
 // regardless of any stale health verdict left over from before. A running
-// watch whose source has been failing reads as "error" (must_fix 1 case 2);
-// everything else reads as "running".
+// watch whose source has been failing reads as "error" (must_fix 1 case 2),
+// and so does one whose last frame crashed the reader (a contained panic,
+// state.Crash) until it reads again; everything else reads as "running".
 func (s *Server) statusFor(name string, running bool) watchStatus {
 	if !running {
 		return watchStatus{State: "stopped"}
 	}
+	c, crashed := s.reg.GetCrash(name)
 	if h, ok := s.reg.GetHealth(name); ok && h.Down {
-		return watchStatus{State: "error", Message: h.Message, Since: h.Since}
+		// A run of crashes that turned into down is one failure: it has
+		// been failing since the first crash, with no reading since.
+		since := h.Since
+		if crashed && c.Since.Before(since) {
+			since = c.Since
+		}
+		return watchStatus{State: "error", Message: h.Message, Since: since}
+	}
+	if crashed {
+		return watchStatus{State: "error", Message: c.Message, Since: c.Since}
 	}
 	return watchStatus{State: "running"}
 }
@@ -415,8 +429,11 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 		if t, ok := s.reg.LastFired(wc.Name); ok && !(has && latest.Fired) {
 			row.FiredAgo = agoText(now.Sub(t))
 		}
-		if dv := s.deliveryFor(wc, latest, has); dv.State == "failed" {
+		switch dv := s.deliveryFor(wc, latest, has); dv.State {
+		case "failed", "dropped":
 			row.AlertsFailing = dv.Sentence()
+		case "retrying":
+			row.AlertsRetrying = dv.Sentence()
 		}
 		rows = append(rows, row)
 	}
@@ -508,19 +525,77 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 
 // deliveryView is what the page says about a watch's alerts. State is
 // "failed" (the last alert didn't get through; it stays until one does),
-// "sending", "sent", "none" (no notify URLs, so fires only show here),
-// "restored" (nothing sent since watchglass started, but the history
-// database knows the last fire from before and whether its alert went
-// out: Sent) or "" (nothing sent yet).
+// "retrying" (a URL didn't take it and will be tried again), "dropped"
+// (it was let go before a URL took it: the condition cleared, the watch
+// was restarted), "sending",
+// "sent", "none" (no notify URLs, so fires only show here), "restored"
+// (nothing sent since watchglass started, but the history database knows
+// the last fire from before and whether its alert went out: Sent) or ""
+// (nothing sent yet).
 type deliveryView struct {
 	State string
 	At    time.Time // when the alert it describes was raised
 	Kind  string    // "fired", "down" or "recovered"
-	Text  string    // "failed": what went wrong, in sentences (deliveryText)
+	Text  string    // "failed": what went wrong, in sentences (deliveryText); "retrying": why it waits (retryText); "dropped": why it was let go (droppedText)
+	More  string    // "retrying", "dropped": the URLs given up on meanwhile, in sentences
 	MQTT  bool      // "none": fires still go out over MQTT
 	Sent  bool      // "restored": the alert went out
+	// NextTry is when the next try is due ("retrying") and Tries how many
+	// tries the alert has had ("retrying"; "sent" when more than one).
+	NextTry time.Time
+	Tries   int
+	// SentAt is when the last URL took it ("sent").
+	SentAt time.Time
+	// Change: the watch fires on a change (ocr_changed, pixel_change),
+	// so a fire alert has no condition to clear; it is kept until it is
+	// delivered or a newer change replaces it.
+	Change bool
+	// Again: "dropped" by a restart, a fire alert of a watch with a
+	// condition (ocr_match, numeric) goes out again if the condition
+	// still holds (the runner's restart re-send). A change alert doesn't:
+	// the restarted watch takes what it sees as its starting point.
+	Again bool
 	// firedTag is the suffix for the newest reading's fired tag.
 	firedTag string
+}
+
+// NextText says when the next try is due: "in 30 s", "in 1 min 40 s",
+// or "now" once it is.
+func (d deliveryView) NextText() string {
+	left := time.Until(d.NextTry).Round(time.Second)
+	switch {
+	case left <= 0:
+		return "now"
+	case left < time.Minute:
+		return fmt.Sprintf("in %d s", int(left/time.Second))
+	case left%time.Minute == 0:
+		return fmt.Sprintf("in %d min", int(left/time.Minute))
+	}
+	return fmt.Sprintf("in %d min %d s", int(left/time.Minute), int(left%time.Minute/time.Second))
+}
+
+// TriesText counts the tries so far: "1 try so far", "3 tries so far".
+func (d deliveryView) TriesText() string {
+	if d.Tries == 1 {
+		return "1 try so far"
+	}
+	return fmt.Sprintf("%d tries so far", d.Tries)
+}
+
+// Gone is what ends the tries besides a delivery: for a fire, the
+// condition clearing, or a newer change for a watch that fires on one;
+// for a stream alert, the stream changing again.
+func (d deliveryView) Gone() string {
+	switch d.Kind {
+	case "down":
+		return "the camera comes back"
+	case "recovered":
+		return "the camera goes down again"
+	}
+	if d.Change {
+		return "a newer change replaces it"
+	}
+	return "the condition clears"
 }
 
 // KindNote names a non-fire alert: "" for a fire, " (stream down)",
@@ -546,9 +621,15 @@ func (d deliveryView) AtText() string {
 	return d.At.Format("Jan 2, 15:04:05")
 }
 
-// Sentence is the failure as one line for a title attribute, the time in
-// the server's zone.
+// Sentence is the failure (or the wait) as one line for a title
+// attribute, the time in the server's zone.
 func (d deliveryView) Sentence() string {
+	switch d.State {
+	case "retrying":
+		return d.Text + "; trying again " + d.NextText() + ". The alert" + d.KindNote() + " from " + d.At.Format("15:04:05") + " is not delivered yet (" + d.TriesText() + ")."
+	case "dropped":
+		return "Last alert" + d.KindNote() + " at " + d.At.Format("15:04:05") + " was not sent: " + d.Text
+	}
 	return "Last alert" + d.KindNote() + " at " + d.At.Format("15:04:05") + " could not be delivered: " + d.Text
 }
 
@@ -566,12 +647,24 @@ func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) del
 	d, done := s.reg.GetDelivery(wc.Name)
 	sendingAt, sending := s.reg.Sending(wc.Name)
 	switch {
+	case done && d.Dropped != "":
+		v = deliveryView{State: "dropped", At: d.TS, Kind: d.Kind, Text: droppedText(d.Dropped, d.Retrying, d.Tries),
+			Again: d.Dropped == runner.DroppedByRestart && d.Kind == "fired" && (wc.Trigger.Type == "ocr_match" || wc.Trigger.Type == "numeric")}
+		if d.Err != "" {
+			v.More = deliveryText(d.Err)
+		}
+	case done && d.Retrying != "":
+		v = deliveryView{State: "retrying", At: d.TS, Kind: d.Kind, Text: retryText(d.Retrying), NextTry: d.NextTry, Tries: d.Tries,
+			Change: wc.Trigger.Type == "ocr_changed" || wc.Trigger.Type == "pixel_change"}
+		if d.Err != "" {
+			v.More = deliveryText(d.Err)
+		}
 	case done && !d.OK && !d.Skipped:
 		v = deliveryView{State: "failed", At: d.TS, Kind: d.Kind, Text: deliveryText(d.Err)}
 	case sending:
 		v = deliveryView{State: "sending", At: sendingAt, Kind: "fired"}
 	case done && d.OK:
-		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind}
+		v = deliveryView{State: "sent", At: d.TS, Kind: d.Kind, Tries: d.Tries, SentAt: d.SentAt}
 	default:
 		// Nothing raised since watchglass started: the fire before the
 		// restart, from the saved trigger state.
@@ -583,6 +676,8 @@ func (s *Server) deliveryFor(wc config.Watch, latest state.Sample, has bool) del
 		switch {
 		case done && d.TS.Equal(latest.TS) && d.OK:
 			v.firedTag = "sent"
+		case done && d.TS.Equal(latest.TS) && d.Retrying != "" && d.Dropped == "":
+			v.firedTag = "retrying"
 		case done && d.TS.Equal(latest.TS) && !d.Skipped:
 			v.firedTag = "not delivered"
 		case sending && sendingAt.Equal(latest.TS):
@@ -1182,6 +1277,10 @@ type testResult struct {
 	// Pixel is set for a pixel_change Test, which compares two frames:
 	// Crop is then the region in the first one.
 	Pixel *pixelTest
+	// Crashed: the Test panicked (testCrashed). Crop is then the region
+	// as the camera sent it, before any preprocessing, or empty when the
+	// panic came before there was a frame; Note says where it crashed.
+	Crashed bool
 }
 
 // pixelTest is the second half of a pixel_change Test: the region in the
@@ -1292,22 +1391,43 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	grabCtx, cancelGrab := context.WithTimeout(r.Context(), grabTimeout)
 	defer cancelGrab()
-	// A person asking: tried even while a refused login is waiting (at
-	// most once every source.ForcedTryGap).
-	img, err := src.Grab(source.Forced(grabCtx))
-	cancelGrab()
-	if err != nil {
-		testGrabError(w, err)
-		return
+	// A panic anywhere from here on (the source fetching the frame, the
+	// crop, the preprocessing, the engine, the trigger check) is a bug in
+	// watchglass. It fails this Test with words, and the crop to report
+	// it with when there is one, where net/http would drop the connection.
+	// step says how far the Test got, for the words.
+	var crop *image.RGBA
+	step := runner.StepGrab
+	if err := runner.Contain(func() error {
+		// A person asking: tried even while a refused login is waiting
+		// (at most once every source.ForcedTryGap).
+		img, err := src.Grab(source.Forced(grabCtx))
+		cancelGrab()
+		if err != nil {
+			testGrabError(w, err)
+			return nil
+		}
+		step = runner.StepRead
+		// The fractions are checked in parseRegion, but only the frame
+		// says how many pixels they cover: a box that rounds to no pixel
+		// at all has nothing to read or show (png.Encode refuses an
+		// empty image).
+		var frame image.Rectangle
+		crop, frame = imgproc.Crop(img, region), img.Bounds()
+		if crop.Bounds().Empty() {
+			http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
+			return nil
+		}
+		s.testCrop(w, r, wc, src, crop, frame, region, prep)
+		return nil
+	}); err != nil {
+		s.testCrashed(w, r, wc, step, crop, err)
 	}
-	// The fractions are checked in parseRegion, but only the frame says
-	// how many pixels they cover: a box that rounds to no pixel at all
-	// has nothing to read or show (png.Encode refuses an empty image).
-	crop, frame := imgproc.Crop(img, region), img.Bounds()
-	if crop.Bounds().Empty() {
-		http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
-		return
-	}
+}
+
+// testCrop is the Test of one region after the grab: crop is the region
+// in the frame (frame is its size) and prep the form's preprocessing.
+func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, crop *image.RGBA, frame image.Rectangle, region config.Region, prep config.Preprocess) {
 	// pixel_change reads no text: its Test grabs a second frame and
 	// measures what the watch would. (Only when the form says so: a request
 	// without ttype, from curl or an older client, is read by the engine as
@@ -1387,6 +1507,42 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 		res.Read = true
 		res.Reading = viewReading(engName, res.Text)
 		res.Verdict = verdictFor(trig, res.Text, res.Reading, trigErrs)
+	}
+	s.render(w, "testresult.html", res)
+}
+
+// testCrashed answers a Test that panicked (testRegion) with the plain
+// sentence for the step it got to, the crop as the camera sent it when
+// the panic came after one was made (crop is nil before that: the source
+// crashed, and there is no frame to report), and the panic value under
+// Technical detail; the panic goes to the log with its stack. Nothing has
+// been written to w yet: the reading code writes only once it is done.
+func (s *Server) testCrashed(w http.ResponseWriter, r *http.Request, wc config.Watch, step runner.Step, crop *image.RGBA, err error) {
+	detail := err.Error()
+	var ce *runner.CrashError
+	if errors.As(err, &ce) {
+		ce.Step = step
+		detail = ce.Detail()
+		s.logf("watch %s: Test: %v\n%s", wc.Name, ce, ce.Stack)
+	} else {
+		s.logf("watch %s: Test: %v", wc.Name, err)
+	}
+	res := testResult{At: time.Now(), Crashed: true,
+		Note:       upperFirst(step.Sentence()) + ".",
+		NoteDetail: detail}
+	if r.FormValue("ttype") != "pixel_change" {
+		res.Engine = r.FormValue("engine")
+		if res.Engine == "" {
+			res.Engine = wc.Engine
+		}
+		if res.Engine == "" {
+			res.Engine = "tesseract"
+		}
+	}
+	if crop != nil {
+		if u, perr := pngDataURL(crop); perr == nil {
+			res.Crop = u
+		}
 	}
 	s.render(w, "testresult.html", res)
 }

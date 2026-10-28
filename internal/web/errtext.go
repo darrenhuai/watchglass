@@ -13,7 +13,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/darrenhuai/watchglass/internal/notify"
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
 	"github.com/darrenhuai/watchglass/internal/source"
 )
 
@@ -47,6 +49,14 @@ func summarizeErr(msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return ""
+	}
+	// A panic the runner contained in a poll: a bug in watchglass,
+	// whatever the rest of the message says. The sentence names where it
+	// crashed (the source, the reader, after the reading).
+	for _, st := range runner.Steps {
+		if strings.Contains(msg, st.Sentence()) {
+			return upperFirst(st.Sentence())
+		}
 	}
 	low := strings.ToLower(msg)
 	host := errHost(msg)
@@ -542,6 +552,64 @@ func deliveryText(raw string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+// retryText says why an alert is still waiting at the URLs that will be
+// tried again, short enough for a status line: "Couldn't reach
+// ntfy+http://10.0.0.2:81 (connection refused)", or for several lines
+// "Couldn't reach line 1 (ntfy+http://h) (connection refused), line 2
+// (generic://h) answered HTTP 503". raw is the runner's record, in
+// deliveryText's form (the cause in notify.ShortCause's words). A text
+// that starts with the URL itself keeps its spelling.
+func retryText(raw string) string {
+	var out []string
+	for _, part := range strings.Split(strings.TrimSpace(raw), "; ") {
+		m := deliveryPartRe.FindStringSubmatch(part)
+		switch {
+		case m == nil:
+			out = append(out, notify.Describe("", part))
+		case m[2] == "1":
+			out = append(out, notify.Describe(m[3], m[4]))
+		default:
+			out = append(out, notify.Describe("line "+m[1]+" ("+m[3]+")", m[4]))
+		}
+	}
+	text := strings.Join(out, ", ")
+	if strings.HasPrefix(text, "couldn't ") || strings.HasPrefix(text, "the service ") || strings.HasPrefix(text, "line ") {
+		return upperFirst(text)
+	}
+	return text
+}
+
+// droppedText says why an alert was let go before some URLs took it, as
+// the rest of "was not sent: ": "the condition cleared before
+// generic+http://h (connection refused) took it, after 1 try." why is
+// the runner's (Delivery.Dropped), raw the URLs that hadn't taken it, in
+// retryText's form.
+func droppedText(why, raw string, tries int) string {
+	var who []string
+	for _, part := range strings.Split(strings.TrimSpace(raw), "; ") {
+		if part == "" {
+			continue
+		}
+		if m := deliveryPartRe.FindStringSubmatch(part); m != nil {
+			who = append(who, m[3]+" ("+m[4]+")")
+		} else {
+			who = append(who, "the notify URL ("+part+")")
+		}
+	}
+	list := "every notify URL"
+	switch n := len(who); {
+	case n == 1:
+		list = who[0]
+	case n > 1:
+		list = strings.Join(who[:n-1], ", ") + " and " + who[n-1]
+	}
+	count := "1 try"
+	if tries != 1 {
+		count = fmt.Sprintf("%d tries", tries)
+	}
+	return why + " before " + list + " took it, after " + count + "."
 }
 
 // deliveryCause says what went wrong sending to one notify URL, as the
