@@ -1,5 +1,5 @@
 name: watchglass
-version: "0.1.11"
+version: "0.1.12"
 slug: watchglass
 description: Point a camera at a screen with no API, read its digits or status text, and get an alert when they show what you're waiting for
 url: https://github.com/darrenhuai/watchglass
