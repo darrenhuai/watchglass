@@ -75,6 +75,7 @@ var triggerLabels = map[string]string{
 	"ocr_match":    "text matches pattern",
 	"ocr_changed":  "text changes",
 	"numeric":      "number vs threshold",
+	"value":        "records a number",
 }
 
 func triggerLabel(t string) string { return triggerLabels[t] }
@@ -170,16 +171,18 @@ var confirmHelps = map[string]string{
 	"ocr_match":   "Readings in a row that must match Pattern before it fires. Blank means 3.",
 	"ocr_changed": "Readings in a row that must show the same new text before it counts. Blank means 3.",
 	"numeric":     "Readings in a row that must be on the same side of the threshold. Blank means 3.",
+	"value":       "The value is the middle of the last 2 × Confirm − 1 numbers read, so Confirm readings must agree before it moves. Blank means 3.",
 }
 
 func confirmHelp(t string) string { return confirmHelps[t] }
 
 // patternHelps are the hints under Pattern (app.js PATTERN_HELP holds the
-// same text). The row only shows for ocr_match and numeric. A `quoted`
+// same text). The row only shows for ocr_match, numeric and value. A `quoted`
 // stretch is a machine token, set in monospace like the pattern itself.
 var patternHelps = map[string]string{
 	"ocr_match": "Plain words work; `(?i)` ignores case; `a|b` matches either.",
 	"numeric":   "Leave it empty to use the first number read.",
+	"value":     "Leave it empty to use the first number read.",
 }
 
 // patternHelp is patternHelps[t] as markup: the text escaped, each

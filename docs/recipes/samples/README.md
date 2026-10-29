@@ -1,6 +1,6 @@
 # Recipe sample frames
 
-The frames the recipes are tested against. Each was drawn with Pillow for this repo: the panels, digits and text are synthetic, not photos of real devices. The camera-view ones have a little blur, sensor noise and vignetting so they read like what a cheap camera sends, and are JPEGs, as most cameras send. The console screens are 720x400 PNGs, like a KVM's capture of a text console.
+The frames the recipes are tested against. Most were drawn with Pillow for this repo: the panels, digits and text are synthetic, not photos of real devices. The meter is a crop of a real photo (credit below). The camera-view ones have a little blur, sensor noise and vignetting so they read like what a cheap camera sends, and are JPEGs, as most cameras send. The console screens are 720x400 PNGs, like a KVM's capture of a text console.
 
 | Frame | Shows | Used by |
 |---|---|---|
@@ -15,6 +15,9 @@ The frames the recipes are tested against. Each was drawn with Pillow for this r
 | [washer-end.jpg](washer-end.jpg) | finished, showing End | [appliance-time-remaining.md](../appliance-time-remaining.md) |
 | [console-kernel-panic.png](console-kernel-panic.png) | a Linux console after a kernel panic | [server-console-ipmi.md](../server-console-ipmi.md) |
 | [console-grub-rescue.png](console-grub-rescue.png) | GRUB's rescue prompt | [server-console-ipmi.md](../server-console-ipmi.md) |
+| [meter-logarex.jpg](meter-logarex.jpg) | a Logarex household electricity meter at 000000 kWh (a real photo) | [meter-energy-dashboard.md](../meter-energy-dashboard.md) |
+
+meter-logarex.jpg is cropped from [Logarex smart household electricity meter build year 2023](https://commons.wikimedia.org/wiki/File:Logarex_smart_household_electricity_meter_build_year_2023.jpg) by RobbieIanMorrison, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), via Wikimedia Commons.
 
 `go test ./internal/docscheck` reads every frame with its recipe's watch and checks the result the recipe states. To try a recipe on its frame in the web UI, give a watch the source `ffmpeg:-i docs/recipes/samples/<frame>` (run watchglass from the repository folder; it needs ffmpeg) and press **Test this region**.
 

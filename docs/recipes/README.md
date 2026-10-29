@@ -9,6 +9,7 @@ Configs for specific screens that you can copy and adjust. Each one says what it
 
 ## By screen
 
+- [Electricity or water meter into the Energy dashboard](meter-energy-dashboard.md): a meter's total as a Home Assistant counter, kept from going down or jumping on a misread digit, and a CSV of readings without Home Assistant. Tested on a real meter photo.
 - [Heat pump or boiler panel](heat-pump-boiler-panel.md): a temperature as a Home Assistant sensor, and fault codes like `E04` to your phone, on a text LCD or a seven-segment display. Tested on 4 frames.
 - [Appliance time remaining](appliance-time-remaining.md): a washer's `0:04` countdown, "5 minutes left", and pairing it with a smart plug. Tested on 4 frames.
 - [Moving over from seven_segments / ssocr](from-seven-segments.md): Home Assistant's seven_segments settings mapped to a watch, side by side. Tested on 1 frame.

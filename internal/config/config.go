@@ -131,8 +131,8 @@ func (r Region) Clamp() Region {
 }
 
 type Trigger struct {
-	Type      string  `yaml:"type"`      // pixel_change | ocr_match | ocr_changed | numeric
-	Pattern   string  `yaml:"pattern"`   // regex for ocr_match / numeric extraction
+	Type      string  `yaml:"type"`      // pixel_change | ocr_match | ocr_changed | numeric | value
+	Pattern   string  `yaml:"pattern"`   // regex for ocr_match / numeric and value extraction
 	Op        string  `yaml:"op"`        // numeric: gt | lt
 	Threshold float64 `yaml:"threshold"` // pixel_change: percent 0-100; numeric: compare value
 	// Confirm is how many readings in a row must agree before a new state
@@ -194,13 +194,19 @@ type Watch struct {
 	// the unit is free text ("rpm", "L").
 	Unit        string `yaml:"unit,omitempty"`
 	DeviceClass string `yaml:"device_class,omitempty"`
+	// Counter and MaxRise are for a number that only goes up, like a
+	// meter's total (see meter.go): never down, a rise limit, and
+	// state_class total_increasing in Home Assistant.
+	Counter bool    `yaml:"counter,omitempty"`
+	MaxRise float64 `yaml:"max_rise,omitempty"`
 }
 
-// DeviceClasses are the Home Assistant sensor device classes a numeric
-// watch can take, in the order the web UI offers them. Each is a
-// "measurement" in HA's terms: a reading at a point in time, not a
-// running total.
-var DeviceClasses = []string{"temperature", "humidity", "pressure", "power", "voltage", "current", "weight", "duration"}
+// DeviceClasses are the Home Assistant sensor device classes a numeric or
+// value watch can take, in the order the web UI offers them. Most are a
+// "measurement" in HA's terms: a reading at a point in time. energy,
+// water, gas and volume are running totals, so a watch with one of them
+// is always a counter (CounterClasses, meter.go).
+var DeviceClasses = []string{"temperature", "humidity", "pressure", "power", "energy", "voltage", "current", "battery", "water", "gas", "volume", "weight", "duration", "ph"}
 
 // DeviceClassUnits are the units Home Assistant accepts for each device
 // class (https://www.home-assistant.io/integrations/sensor/), spelled
@@ -214,12 +220,19 @@ var DeviceClasses = []string{"temperature", "humidity", "pressure", "power", "vo
 var DeviceClassUnits = map[string][]string{
 	"temperature": {"°C", "°F", "K"},
 	"humidity":    {"%"},
-	"pressure":    {"hPa", "kPa", "Pa", "mPa", "bar", "cbar", "mbar", "psi", "mmHg", "inHg", "inH₂O"},
+	"pressure":    {"hPa", "kPa", "Pa", "mPa", "bar", "cbar", "mbar", "psi", "mmHg", "inHg", "inH₂O", "atm"},
 	"power":       {"W", "kW", "mW", "MW", "GW", "TW"},
 	"voltage":     {"V", "mV", "μV", "kV", "MV"},
 	"current":     {"A", "mA", "μA"},
 	"weight":      {"kg", "g", "mg", "μg", "lb", "oz", "st"},
 	"duration":    {"s", "min", "h", "d", "ms", "μs"},
+	"energy":      {"kWh", "Wh", "MWh", "GWh", "TWh", "mWh", "J", "kJ", "MJ", "GJ", "cal", "kcal", "Mcal", "Gcal", "thm"},
+	"water":       {"m³", "L", "gal", "ft³", "CCF", "MCF"},
+	"gas":         {"m³", "L", "ft³", "CCF", "MCF"},
+	"volume":      {"L", "mL", "m³", "gal", "fl. oz.", "ft³", "CCF", "MCF"},
+	"battery":     {"%"},
+	// pH has no unit in Home Assistant: the unit stays empty.
+	"ph": {},
 }
 
 // maxUnitLen caps a free-text unit; HA shows it after every value.
@@ -240,6 +253,12 @@ func CheckUnit(unit, class string) error {
 		units, ok := DeviceClassUnits[class]
 		if !ok {
 			return fmt.Errorf("device_class %q isn't one watchglass sends; use one of %s, or leave it out", class, strings.Join(DeviceClasses, ", "))
+		}
+		if len(units) == 0 {
+			if unit != "" {
+				return fmt.Errorf("device_class %s has no unit in Home Assistant; leave unit out", class)
+			}
+			return nil
 		}
 		if unit == "" {
 			return fmt.Errorf("device_class %s needs a unit: %s", class, strings.Join(units, ", "))
@@ -296,7 +315,7 @@ type Config struct {
 }
 
 var validTypes = map[string]bool{
-	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true,
+	"pixel_change": true, "ocr_match": true, "ocr_changed": true, "numeric": true, "value": true,
 }
 
 // validEngines are the Watch.Engine spellings; "" is tesseract.
@@ -499,12 +518,14 @@ func (c *Config) Validate() error {
 			if _, err := regexp.Compile(w.Trigger.Pattern); err != nil {
 				return fmt.Errorf("watch %q: trigger: pattern: %w", w.Name, err)
 			}
-		case "numeric":
-			if w.Trigger.Op != "gt" && w.Trigger.Op != "lt" {
-				return fmt.Errorf("watch %q: trigger: numeric needs Compare set to above (gt) or below (lt), got %q", w.Name, w.Trigger.Op)
+		case "numeric", "value":
+			if w.Trigger.Type == "numeric" && w.Trigger.Op != "gt" && w.Trigger.Op != "lt" {
+				return fmt.Errorf("watch %q: trigger: numeric needs Compare set to above (gt) or below (lt), got %q; to record the number without an alert, use type value", w.Name, w.Trigger.Op)
 			}
-			// Pattern is optional for numeric (trigger.New falls back to a
-			// generic number pattern); only validate it when set.
+			// Pattern is optional for numeric and value (trigger.New falls
+			// back to a generic number pattern); only validate it when set.
+			// A value watch has no op or threshold: they are ignored, as
+			// ocr_match ignores them.
 			if w.Trigger.Pattern != "" {
 				if _, err := regexp.Compile(w.Trigger.Pattern); err != nil {
 					return fmt.Errorf("watch %q: trigger: pattern: %w", w.Name, err)
@@ -520,11 +541,14 @@ func (c *Config) Validate() error {
 		}
 		// Like tls_insecure on a non-http source: set on another type they
 		// would be silently ignored, which reads as "set but not working".
-		if (w.Unit != "" || w.DeviceClass != "") && w.Trigger.Type != "numeric" {
-			return fmt.Errorf("watch %q: unit and device_class only apply to numeric watches", w.Name)
+		if (w.Unit != "" || w.DeviceClass != "") && !HasValue(w.Trigger.Type) {
+			return fmt.Errorf("watch %q: unit and device_class only apply to numeric and value watches", w.Name)
 		}
 		w.Unit = NormalizeUnit(w.Unit)
 		if err := CheckUnit(w.Unit, w.DeviceClass); err != nil {
+			return fmt.Errorf("watch %q: %w", w.Name, err)
+		}
+		if err := checkCounter(*w); err != nil {
 			return fmt.Errorf("watch %q: %w", w.Name, err)
 		}
 		if w.Preprocess.Threshold < 0 || w.Preprocess.Threshold > 255 {

@@ -41,6 +41,10 @@ type Store struct {
 	stateRead bool
 	// healthRead says the watch_health table is there (see HealthState).
 	healthRead bool
+	// meterRead says the counter_state table is there, and valueCol that
+	// the readings table has its value column (meter.go).
+	meterRead bool
+	valueCol  bool
 	// lockErr is set while a table Open had to make met another
 	// connection's write lock (a v0.1.9 database has no watch_health yet,
 	// and a DB browser or backup may be writing it at that first start).
@@ -93,8 +97,11 @@ func Open(path string) (*Store, error) {
 func (s *Store) openTables() {
 	tableErr := openTriggerState(s.db)
 	healthErr := openHealth(s.db)
+	meterErr := openMeter(s.db)
 	s.stateRead = s.stateRead || tableErr == nil
 	s.healthRead = s.healthRead || healthErr == nil
+	s.meterRead = s.meterRead || meterErr == nil
+	s.valueCol = s.valueCol || hasValueColumn(s.db)
 	s.lockErr = nil
 	switch {
 	case s.writeErr != nil:
@@ -103,10 +110,14 @@ func (s *Store) openTables() {
 		s.stateErr = tableErr
 	case healthErr != nil && !lockedByAnother(healthErr):
 		s.stateErr = healthErr
+	case meterErr != nil && !lockedByAnother(meterErr):
+		s.stateErr = meterErr
 	case tableErr != nil:
 		s.lockErr = tableErr
 	case healthErr != nil:
 		s.lockErr = healthErr
+	case meterErr != nil:
+		s.lockErr = meterErr
 	}
 }
 
@@ -409,8 +420,8 @@ func (s *Store) LoadTriggerState(watch string) (TriggerState, bool, error) {
 	return st, true, nil
 }
 
-// KeepTriggerState deletes the trigger state and the health verdict of
-// every watch not named in watches (a deleted or renamed watch's),
+// KeepTriggerState deletes the trigger state, the health verdict and the
+// counter state of every watch not named in watches (a deleted or renamed watch's),
 // returning how many rows went.
 func (s *Store) KeepTriggerState(watches []string) (int64, error) {
 	if ok, err := s.tables(); !ok {
@@ -425,7 +436,7 @@ func (s *Store) KeepTriggerState(watches []string) (int64, error) {
 		}
 	}
 	var gone int64
-	for _, table := range []string{"trigger_state", "watch_health"} {
+	for _, table := range []string{"trigger_state", "watch_health", "counter_state"} {
 		res, err := s.db.Exec(`DELETE FROM `+table+where, args...)
 		if err != nil {
 			return gone, err

@@ -1580,6 +1580,7 @@
   var patternHelp = document.getElementById("pattern-help");
   var fsPreprocess = document.getElementById("fs-preprocess");
   var fsHA = document.getElementById("fs-ha");
+  var fsMeter = document.getElementById("fs-meter");
   var ttypeHelp = document.getElementById("ttype-help");
   var thresholdHelp = document.getElementById("threshold-help");
   var engineNote = document.getElementById("engine-note");
@@ -1592,7 +1593,8 @@
     pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares the pixels as the camera sends them, so Engine and Preprocess (Rotate included) aren't used.",
     ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
     ocr_changed: "Fires each time the text read from the region settles on a new value.",
-    numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
+    numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number.",
+    value: "Reads a number from the region and records it: Home Assistant's Value, the history and its CSV. It never sends an alert. Pattern is optional; its first capture group picks the number."
   };
   // What Confirm counts per type (trigger.go counts readings that meet the
   // condition, or the same text for ocr_changed); the same sentences as
@@ -1600,13 +1602,15 @@
   var CONFIRM_HELP = {
     ocr_match: "Readings in a row that must match Pattern before it fires. Blank means 3.",
     ocr_changed: "Readings in a row that must show the same new text before it counts. Blank means 3.",
-    numeric: "Readings in a row that must be on the same side of the threshold. Blank means 3."
+    numeric: "Readings in a row that must be on the same side of the threshold. Blank means 3.",
+    value: "The value is the middle of the last 2 × Confirm − 1 numbers read, so Confirm readings must agree before it moves. Blank means 3."
   };
   // patternHelps in formview.go: a `quoted` stretch is a machine token,
   // shown in monospace (setPatternHelp).
   var PATTERN_HELP = {
     ocr_match: "Plain words work; `(?i)` ignores case; `a|b` matches either.",
-    numeric: "Leave it empty to use the first number read."
+    numeric: "Leave it empty to use the first number read.",
+    value: "Leave it empty to use the first number read."
   };
   // config.go rejects a pixel_change threshold of 0, hence "above 0".
   var THRESHOLD_HELP = {
@@ -1707,10 +1711,12 @@
   function updateTriggerFields() {
     if (!ttypeSel) return;
     var t = ttypeSel.value;
-    if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
+    if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric" || t === "value");
     if (rowOp) rowOp.hidden = t !== "numeric";
     if (rowThreshold) rowThreshold.hidden = !(t === "pixel_change" || t === "numeric");
     if (rowConfirm) rowConfirm.hidden = t === "pixel_change";
+    var rowCooldown = document.getElementById("row-cooldown");
+    if (rowCooldown) rowCooldown.hidden = t === "value";
     if (confirmHelp) confirmHelp.textContent = CONFIRM_HELP[t] || "";
     if (patternHelp) {
       patternHelp.textContent = "";
@@ -1719,7 +1725,10 @@
       });
     }
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
-    if (fsHA) fsHA.hidden = t !== "numeric";
+    // A number (numeric, value): Home Assistant's unit and class, and
+    // whether it is a counter.
+    if (fsHA) fsHA.hidden = !(t === "numeric" || t === "value");
+    if (fsMeter) fsMeter.hidden = !(t === "numeric" || t === "value");
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
     if (thresholdHelp) thresholdHelp.textContent = THRESHOLD_HELP[t] || "";
     // Compare: the validator only takes gt or lt for numeric, so a type
@@ -1777,6 +1786,8 @@
         note: "Filled in for status text. Change Pattern to the words your screen shows, then press Test this region." },
       digits: { engine: "sevenseg", ttype: "numeric", confirm: "2", op: "gt",
         note: "Filled in for a digit display. Set Threshold to the number that should fire it, then press Test this region." },
+      meter: { engine: "sevenseg", ttype: "value", confirm: "3",
+        note: "Filled in to record the number on a digit display. Pick a Device class and Unit below (energy and kWh for an electricity meter), then press Test this region." },
       change: { engine: "tesseract", ttype: "pixel_change", tthreshold: "20",
         note: "Filled in: fires when a fifth of the box changes. Press Save to keep it." }
     };
@@ -1918,16 +1929,26 @@
       units.forEach(function (u) { var o = document.createElement("option"); o.value = u; unitList.appendChild(o); });
     }
     if (dclassHelp) {
-      dclassHelp.textContent = cls ? "Home Assistant takes " + spellUnits(units) + " for " + cls + "." :
-        "What the number measures. Home Assistant uses it for the icon and unit conversion.";
+      dclassHelp.textContent = !cls ? "What the number measures. Home Assistant uses it for the icon and unit conversion." :
+        units.length ? "Home Assistant takes " + spellUnits(units) + " for " + cls + "." :
+        "Home Assistant gives " + cls + " no unit: leave Unit empty.";
     }
     // A device class makes the unit required (Save refuses one without),
-    // so the hint stops calling it optional (detail.html mirrors this).
+    // so the hint stops calling it optional (detail.html mirrors this);
+    // a class with no unit (ph) wants it empty.
     if (unitHelp) {
-      unitHelp.textContent = cls ? "Shown after the number. Needed for " + cls + "." :
-        "Shown after the number, like °C or rpm. Optional.";
+      unitHelp.textContent = !cls ? "Shown after the number, like °C or rpm. Optional." :
+        units.length ? "Shown after the number. Needed for " + cls + "." : "No unit for " + cls + ".";
     }
+    syncCounterUI();
     if (!fill || !cls || units.indexOf(unitIn.value) >= 0) return;
+    if (!units.length) {
+      // ph: a unit of another class goes; one typed by hand is left for
+      // Save to explain.
+      var other = Object.keys(UNITS).some(function (k) { return k && UNITS[k].indexOf(unitIn.value) >= 0; });
+      if (other) { unitIn.value = ""; unitIn.dispatchEvent(new Event("input", { bubbles: true })); }
+      return;
+    }
     var classed = Object.keys(UNITS).some(function (k) { return k && UNITS[k].indexOf(unitIn.value) >= 0; });
     if (unitIn.value === "" || classed) {
       unitIn.value = units[0];
@@ -1935,6 +1956,28 @@
     }
   }
   if (dclassSel) dclassSel.addEventListener("change", function () { syncUnitUI(true); });
+  // Counter (detail.html #fs-meter): energy, water, gas and volume are
+  // always counters (data-counter-classes mirrors config.CounterClasses),
+  // so the box is ticked and locked for them; Max rise only shows on a
+  // counter. When the class changes again, the box goes back to what the
+  // user had ticked.
+  var counterBox = document.getElementById("f-counter");
+  var rowMaxRise = document.getElementById("row-maxrise");
+  var counterHelp = document.getElementById("counter-help");
+  var COUNTER_CLASSES = counterBox ? (counterBox.getAttribute("data-counter-classes") || "").split(" ") : [];
+  var counterOwn = counterBox ? (counterBox.disabled ? false : counterBox.checked) : false;
+  var COUNTER_HELP = "A reading lower than the last value is held back, not published, and Home Assistant gets a total it can use in the Energy dashboard.";
+  function syncCounterUI() {
+    if (!counterBox) return;
+    var cls = dclassSel ? dclassSel.value : "";
+    var forced = cls !== "" && COUNTER_CLASSES.indexOf(cls) >= 0;
+    if (forced && !counterBox.disabled) counterOwn = counterBox.checked;
+    counterBox.checked = forced ? true : counterOwn;
+    counterBox.disabled = forced;
+    if (counterHelp) counterHelp.textContent = (forced ? "The " + cls + " class is always a counter. " : "") + COUNTER_HELP;
+    if (rowMaxRise) rowMaxRise.hidden = !counterBox.checked;
+  }
+  if (counterBox) counterBox.addEventListener("change", function () { counterOwn = counterBox.checked; syncCounterUI(); });
 
   function resyncFromForm() {
     updateTriggerFields();

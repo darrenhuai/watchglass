@@ -108,6 +108,9 @@ type Runner struct {
 	clock  clock
 	// isDown mirrors the health tracker's verdict, for cond.
 	isDown bool
+	// meter is the published number's bookkeeping (meter.go).
+	meter meter
+
 	// resendTaken is the notify URLs (by urlKey) that took the last
 	// fire's alert before the restart, when the rest hadn't and the
 	// condition still held at the stop: the first fire after the restart
@@ -184,6 +187,7 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		wake: make(chan struct{}, 1), clock: realClock{}}
 	r.restoreState(time.Now())
 	r.restoreHealth()
+	r.restoreCounter()
 	r.noteCondition()
 	return r, nil
 }
@@ -309,6 +313,7 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 }
 
 func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
+	r.takeAccept()
 	at := time.Now()
 	var img image.Image
 	err := Contain(func() error {
@@ -358,10 +363,17 @@ func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 	}
 
 	if r.store != nil {
-		if err := r.store.Record(r.watch.Name, time.Now(), ev.Reading, ev.Fired); err != nil {
+		var err error
+		if ev.HasValue {
+			err = r.store.RecordValue(r.watch.Name, time.Now(), ev.Reading, ev.Value, ev.Fired)
+		} else {
+			err = r.store.Record(r.watch.Name, time.Now(), ev.Reading, ev.Fired)
+		}
+		if err != nil {
 			r.logf("watch %s: history: %v", r.watch.Name, err)
 		}
 	}
+	r.noteValue(ev, at)
 	// Before the alert is raised: a fire is remembered from the moment it
 	// is decided, so a restart right after it can't send it twice.
 	r.saveState()

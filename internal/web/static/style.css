@@ -746,7 +746,7 @@ select.needs-engine option { color: var(--text); }
    under it what it's for; the chosen one takes the selection mint. */
 .presets { margin: 0 0 var(--space-3); }
 .presets-title { margin: 0 0 var(--space-2); font-size: var(--fs-sm); color: var(--text-dim); }
-.preset-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+.preset-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
 .preset {
   display: flex;
   flex-direction: column;
@@ -2093,6 +2093,40 @@ fieldset > .field-error { margin-top: var(--space-2); }
   white-space: nowrap;
 }
 .reading-error > .alerts-failing { display: block; margin-top: 2px; }
+
+/* A numeric or value watch's published number under the Live readout
+   (live.html .value-status), and what a counter holds back: the same amber
+   box as an alert that didn't get out, since a held reading is the watch
+   refusing to pass something on, with the accept form under it for a
+   replaced meter. */
+.value-status { margin: 0 0 var(--space-4); }
+.value-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: var(--fs-sm); }
+.value-now { font-size: var(--fs-base); color: var(--text); }
+.value-held {
+  width: fit-content;
+  max-width: min(100%, 72ch);
+  margin: 0 0 var(--space-2);
+  padding: 6px 10px;
+  border: 1px solid var(--amber-a55);
+  border-radius: var(--radius-sm);
+  background: var(--amber-a15);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+.value-accepting { border-color: var(--border-control); background: var(--surface-2); }
+.accept-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.accept-form .field-hint { margin: 0; flex: 1 1 24ch; }
+/* The list's number beside the reading, and its held marker. */
+.reading-body > .reading-value { flex: none; font-size: var(--fs-sm); color: var(--text-dim); white-space: nowrap; }
+.reading-value-label { color: var(--text-faint); }
+/* Its own class, not .mono: .reading-wrap .mono is the reading's clamp and
+   big type, which would put the number on a line of its own. */
+.reading-value-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tag-held { color: var(--amber); border-color: var(--amber-a55); }
+/* The CSV link under Live. */
+.live-export { margin: var(--space-3) 0 0; font-size: var(--fs-sm); }
+.live-export .muted { margin-left: var(--space-1); }
 
 /* The Notify section: the box, then Send test notification with its
    hint, the test's answer, and the common formats folded away. */

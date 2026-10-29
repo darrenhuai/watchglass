@@ -49,9 +49,10 @@ type Publisher struct {
 	//
 	// watches is the list the last Sync saw, which resync republishes.
 	// want is each slug's desired retained state, by topic suffix; sent is
-	// what the broker has been sent since the last connect. valueCfg says
-	// whether a slug's value entity config is published (true) or cleared
-	// (false); a slug not in it may have one left from an earlier run.
+	// what the broker has been sent since the last connect. optCfg says,
+	// for each slug and entity a watch may not have (optionalEntities),
+	// whether its config is published (true) or cleared (false); one not
+	// in it may have a config left from an earlier run or type.
 	// pendingClear holds vanished slugs whose topics couldn't be cleared
 	// while the broker was away. listed says Sync has been given a watch
 	// list (at startup the first connect can come before it), so the stray
@@ -62,7 +63,7 @@ type Publisher struct {
 	watches      []config.Watch
 	want         map[string]map[string][]byte
 	sent         map[string]map[string][]byte
-	valueCfg     map[string]bool
+	optCfg       map[string]map[string]bool
 	pendingClear map[string]bool
 	listed       bool
 	swept        map[string]bool
@@ -166,7 +167,7 @@ func newPublisher(cfg config.MQTT, logf func(string, ...any)) *Publisher {
 		cfg: cfg, logf: logf,
 		slugs: map[string]string{}, skipped: map[string]bool{}, healthKnown: map[string]bool{},
 		want: map[string]map[string][]byte{}, sent: map[string]map[string][]byte{},
-		valueCfg: map[string]bool{}, pendingClear: map[string]bool{}, swept: map[string]bool{},
+		optCfg: map[string]map[string]bool{}, pendingClear: map[string]bool{}, swept: map[string]bool{},
 		lastCfg: map[string]map[string][]byte{}, cleared: map[string]map[string][]byte{},
 		sweepSettle: straySettle, warned: map[string]bool{}, run: newRunID(),
 		strays:  map[string]map[string][]byte{},
@@ -275,9 +276,11 @@ type discoveryEntity struct {
 // device plus the entity's own name, so the entity names are just the
 // part ("Reading"): "watchglass printer Reading", not the old doubled
 // "watchglass printer printer reading". Entity IDs come from unique_id and
-// don't change. A numeric watch also gets its number as a sensor HA can
-// graph (value): state_class measurement, with the watch's unit and device
-// class when it has them.
+// don't change. A numeric or value watch also gets its number as a sensor
+// HA can graph (value), with the watch's unit and device class when it has
+// them: state_class total_increasing for a counter (a meter's total, which
+// HA sums and the Energy dashboard reads), measurement otherwise
+// (config.Watch.StateClass).
 func (p *Publisher) entities(w config.Watch, slug string) []discoveryEntity {
 	base := p.cfg.BaseTopic + "/" + slug
 	device := map[string]any{
@@ -314,13 +317,15 @@ func (p *Publisher) entities(w config.Watch, slug string) []discoveryEntity {
 	out := []discoveryEntity{
 		{"sensor", "reading", reading},
 		{"binary_sensor", "health", healthCfg},
-		{"binary_sensor", "motion", motion},
-		{"camera", "snapshot", camera},
 	}
-	if w.Trigger.Type == "numeric" {
+	if hasEntity(w, "motion") {
+		out = append(out, discoveryEntity{"binary_sensor", "motion", motion})
+	}
+	out = append(out, discoveryEntity{"camera", "snapshot", camera})
+	if hasEntity(w, "value") {
 		value := common("value", "Value")
 		value["state_topic"] = base + "/value"
-		value["state_class"] = "measurement"
+		value["state_class"] = w.StateClass()
 		if w.Unit != "" {
 			value["unit_of_measurement"] = config.NormalizeUnit(w.Unit)
 		}
@@ -330,6 +335,29 @@ func (p *Publisher) entities(w config.Watch, slug string) []discoveryEntity {
 		out = append(out, discoveryEntity{"sensor", "value", value})
 	}
 	return out
+}
+
+// optionalEntities are the entities a watch may not have (hasEntity),
+// and whether each has a retained state topic to clear with it.
+var optionalEntities = []struct {
+	component, object string
+	state             bool
+}{
+	{"sensor", "value", true},
+	{"binary_sensor", "motion", false},
+}
+
+// hasEntity reports whether watch w has the entity object: a value only
+// on a watch with a number, and motion, which pulses when the trigger
+// fires, not on a value watch, which never fires.
+func hasEntity(w config.Watch, object string) bool {
+	switch object {
+	case "value":
+		return config.HasValue(w.Trigger.Type)
+	case "motion":
+		return w.Trigger.Type != "value"
+	}
+	return true
 }
 
 func (p *Publisher) discoveryTopic(component, slug, object string) string {
@@ -434,7 +462,7 @@ func (p *Publisher) flushPendingClear(claimed map[string]bool, connected bool) {
 		}
 		if connected && p.clearSlug(slug) {
 			delete(p.pendingClear, slug)
-			delete(p.valueCfg, slug)
+			delete(p.optCfg, slug)
 			if p.haUp {
 				delete(p.cleared, slug)
 			} else {
@@ -788,9 +816,11 @@ func (p *Publisher) retireOwner(key string, rec ownerRecord) {
 	}
 }
 
-// publishDiscovery sends one watch's entity configs. A watch that isn't
-// numeric has no value entity, so one left by an earlier type (in this run
-// or, once per run, possibly an earlier one) is cleared with its number.
+// publishDiscovery sends one watch's entity configs. An entity the watch
+// doesn't have (hasEntity), such as a value entity on a watch without a
+// number or motion on a value watch, is cleared if an earlier type left
+// it (in this run or, once per run, possibly an earlier one), with its
+// retained state.
 func (p *Publisher) publishDiscovery(w config.Watch, slug string) {
 	for _, e := range p.entities(w, slug) {
 		raw, err := json.Marshal(e.payload)
@@ -798,21 +828,42 @@ func (p *Publisher) publishDiscovery(w config.Watch, slug string) {
 			p.logf("mqtt: marshal discovery for %q: %v", w.Name, err)
 			continue
 		}
-		if p.publish(p.discoveryTopic(e.component, slug, e.object), true, raw) && e.object == "value" {
-			p.valueCfg[slug] = true
+		if p.publish(p.discoveryTopic(e.component, slug, e.object), true, raw) {
+			p.setOptCfg(slug, e.object, true)
 		}
 	}
-	if w.Trigger.Type == "numeric" {
-		return
+	for _, o := range optionalEntities {
+		if hasEntity(w, o.object) {
+			continue
+		}
+		if published, known := p.optCfg[slug][o.object]; known && !published {
+			continue
+		}
+		if !p.publish(p.discoveryTopic(o.component, slug, o.object), true, nil) {
+			continue
+		}
+		if o.state && !p.publish(p.cfg.BaseTopic+"/"+slug+"/"+o.object, true, nil) {
+			continue
+		}
+		p.setOptCfg(slug, o.object, false)
+		if o.state {
+			delete(p.want[slug], o.object)
+			delete(p.sent[slug], o.object)
+		}
 	}
-	if published, known := p.valueCfg[slug]; known && !published {
-		return
-	}
-	if p.publish(p.discoveryTopic("sensor", slug, "value"), true, nil) &&
-		p.publish(p.cfg.BaseTopic+"/"+slug+"/value", true, nil) {
-		p.valueCfg[slug] = false
-		delete(p.want[slug], "value")
-		delete(p.sent[slug], "value")
+}
+
+// setOptCfg records that slug's entity object, if it is an optional one,
+// has its config published (true) or cleared (false).
+func (p *Publisher) setOptCfg(slug, object string, published bool) {
+	for _, o := range optionalEntities {
+		if o.object != object {
+			continue
+		}
+		if p.optCfg[slug] == nil {
+			p.optCfg[slug] = map[string]bool{}
+		}
+		p.optCfg[slug][object] = published
 	}
 }
 

@@ -68,12 +68,13 @@ func TestUnitAndDeviceClassAreChecked(t *testing.T) {
 		{"free unit", func(w *Watch) { w.Unit = "rpm" }, ""},
 		{"class and its unit", func(w *Watch) { w.Unit, w.DeviceClass = "%", "humidity" }, ""},
 		{"every listed unit", func(w *Watch) { w.Unit, w.DeviceClass = "inH₂O", "pressure" }, ""},
-		{"unknown class", func(w *Watch) { w.Unit, w.DeviceClass = "kWh", "energy" }, `device_class "energy" isn't one watchglass sends`},
+		{"pressure in atm, as HA 2026.10 takes it", func(w *Watch) { w.Unit, w.DeviceClass = "atm", "pressure" }, ""},
+		{"unknown class", func(w *Watch) { w.Unit, w.DeviceClass = "lx", "illuminance" }, `device_class "illuminance" isn't one watchglass sends`},
 		{"class without unit", func(w *Watch) { w.DeviceClass = "temperature" }, "device_class temperature needs a unit: °C, °F, K"},
 		{"wrong unit for class", func(w *Watch) { w.Unit, w.DeviceClass = "C", "temperature" }, `unit "C" doesn't go with device_class temperature`},
 		{"unit too long", func(w *Watch) { w.Unit = strings.Repeat("x", 17) }, "longer than 16"},
 		{"control character", func(w *Watch) { w.Unit = "k\ng" }, "control character"},
-		{"on a text watch", func(w *Watch) { w.Trigger = Trigger{Type: "ocr_changed"}; w.Unit = "°C" }, "only apply to numeric watches"},
+		{"on a text watch", func(w *Watch) { w.Trigger = Trigger{Type: "ocr_changed"}; w.Unit = "°C" }, "only apply to numeric and value watches"},
 	} {
 		cfg := base()
 		c.mod(&cfg.Watches[0])
