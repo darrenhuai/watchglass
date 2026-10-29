@@ -17,7 +17,9 @@ import (
 // A reading also means the stream is up: the first one seeds the health
 // topic "online", since the stream's health only reports changes (down,
 // and up again) and HA's connectivity sensor would otherwise stay unknown
-// until the first of those.
+// until the first of those. A gated watch's poll whose gate was closed
+// comes as the zero Event (supervisor gateClosedHook): it seeds health
+// and publishes nothing else.
 //
 // Called from the watch's own poll goroutine, it only resolves the slug and
 // hands the whole batch to the background worker as one job — see enqueue

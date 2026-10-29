@@ -41,6 +41,10 @@
 {{else}}
 <p class="muted">No readings yet</p>
 {{end}}
+{{/* A gated watch's gate on the last poll (gate.go gateFor): open, shut
+     for a frame or a few (the value was skipped), or shut long enough to
+     say so plainly. */}}
+{{with .Gate}}<p class="gate-status{{if .Long}} gate-status-long{{else if not .Open}} gate-status-closed{{end}}"><span class="gate-swatch" aria-hidden="true"></span><span>{{.Text}}{{if and (not .Open) (not .Long) $.Recent}} The latest reading above is from the last open frame.{{end}}</span></p>{{end}}
 {{/* The number a numeric or value watch publishes (valueFor in meter.go),
      and what a counter is holding back, with the accept button for a
      lower value after a meter was replaced. */}}

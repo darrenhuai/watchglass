@@ -165,9 +165,13 @@ type Watch struct {
 	MaxInterval Duration `yaml:"max_interval,omitempty"`
 	// HealthAfter is how many consecutive grab failures mark a stream down
 	// (and send one notification). Defaults to 3.
-	HealthAfter int        `yaml:"health_after,omitempty"`
-	Region      Region     `yaml:"region"`
-	Preprocess  Preprocess `yaml:"preprocess,omitempty"`
+	HealthAfter int    `yaml:"health_after,omitempty"`
+	Region      Region `yaml:"region"`
+	// Gate, when set, reads the value only on frames where a second box
+	// (a code like 1.8.0) matches a pattern (see gate.go). After Region,
+	// so a UI save writes a new gate right under the region.
+	Gate       *Gate      `yaml:"gate,omitempty"`
+	Preprocess Preprocess `yaml:"preprocess,omitempty"`
 	// Engine picks which text recognizer the OCR trigger types read the
 	// crop with: "tesseract" (the default, also spelled "") for text,
 	// "sevenseg" for the built-in seven-segment digit decoder, which needs
@@ -551,14 +555,11 @@ func (c *Config) Validate() error {
 		if err := checkCounter(*w); err != nil {
 			return fmt.Errorf("watch %q: %w", w.Name, err)
 		}
-		if w.Preprocess.Threshold < 0 || w.Preprocess.Threshold > 255 {
-			return fmt.Errorf("watch %q: preprocess threshold must be 0-255", w.Name)
+		if err := checkPreprocess(w.Preprocess, "preprocess"); err != nil {
+			return fmt.Errorf("watch %q: %w", w.Name, err)
 		}
-		if w.Preprocess.Upscale < 0 || w.Preprocess.Upscale > 4 {
-			return fmt.Errorf("watch %q: preprocess upscale must be 0-4", w.Name)
-		}
-		if !ValidRotate(w.Preprocess.Rotate) {
-			return fmt.Errorf("watch %q: preprocess rotate must be 0, 90, 180 or 270 (degrees clockwise), got %d", w.Name, w.Preprocess.Rotate)
+		if err := checkGate(w); err != nil {
+			return fmt.Errorf("watch %q: %w", w.Name, err)
 		}
 		// Notify URLs: cheap sanity via url.Parse + a non-empty scheme.
 		// Deliberately does NOT call shoutrrr.CreateSender here (that's a

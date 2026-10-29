@@ -56,6 +56,9 @@ img { max-width: 100%; }
   --accent-dim:   #3e6f57;
   --accent-ink:   #08150f; /* text-on-accent */
   --amber:        #ffb454; /* fired */
+  --gate:         #8ab4ff; /* a gated watch's gate box: the code it waits for */
+  --gate-a15:     rgba(138, 180, 255, 0.15);
+  --gate-a55:     rgba(138, 180, 255, 0.55);
   --red:          #ff6b6b; /* error / destructive */
   --red-dim:      #5c2b2b;
 
@@ -1449,6 +1452,34 @@ fieldset > .field-error { margin-top: var(--space-2); }
   details.region-manual > summary { min-height: 44px; padding-block: 0; }
 }
 .region-edit[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-a15); }
+/* A gated watch's two boxes (detail.html #box-switch): which one the drag,
+   the arrow keys and the manual fields move. Each carries the swatch of
+   its outline on the stage: solid accent for the value, dashed blue for
+   the gate. */
+.box-switch { display: inline-flex; flex: none; border: 1px solid var(--border-control); border-radius: var(--radius-md); overflow: hidden; }
+.box-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.box-btn + .box-btn { border-left: 1px solid var(--border-control); }
+.box-btn:hover { background: var(--surface-2); color: var(--text); }
+.box-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.box-btn[aria-pressed="true"] { background: var(--surface-2); color: var(--text); font-weight: var(--fw-strong); }
+.box-swatch { display: inline-block; width: 14px; height: 10px; border: 2px solid var(--accent); border-radius: 2px; }
+.box-btn-gate .box-swatch { border-color: var(--gate); border-style: dashed; }
+.box-btn-gate[aria-pressed="true"] { color: var(--gate); }
+.box-btn-value[aria-pressed="true"] { color: var(--accent); }
+@media (any-pointer: coarse) { .box-btn { min-height: 44px; } }
+.manual-box { color: var(--text-faint); }
 
 /* ---- Stage: snapshot + canvas overlay -----------------------------------
    #stage/#snap/#overlay geometry is load-bearing for app.js (the canvas is
@@ -1732,6 +1763,29 @@ fieldset > .field-error { margin-top: var(--space-2); }
   text-wrap: pretty;
 }
 .verdict .led { position: relative; top: -2px; }
+/* A gated watch's Test: the gate box's reading above the verdict, its crop
+   small beside the sentence, in the gate's blue when it opened. */
+.gate-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  max-width: 72ch;
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px;
+  border: 1px dashed var(--border-control);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.gate-test-open { border-color: var(--gate-a55); background: var(--gate-a15); }
+.gate-test .gate-crop { margin: 0; flex: none; }
+.gate-test .gate-crop img { max-height: 48px; max-width: 10rem; }
+.gate-line { margin: 0; flex: 1 1 20ch; min-width: 0; overflow-wrap: anywhere; }
+.gate-state { color: var(--text); margin-right: var(--space-1); }
+.gate-test-open .gate-state { color: var(--gate); }
+.gate-read { color: var(--text); }
+.crop-label { margin: 0 0 var(--space-1); font-size: var(--fs-xs); color: var(--text-faint); }
 /* Title on its own line, the reason under it: "Condition met" is the
    answer and must not run into the sentence that explains it. */
 .verdict-title { display: block; color: var(--text); font-weight: var(--fw-strong); font-size: var(--fs-base); }
@@ -2124,6 +2178,27 @@ fieldset > .field-error { margin-top: var(--space-2); }
    big type, which would put the number on a line of its own. */
 .reading-value-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .tag-held { color: var(--amber); border-color: var(--amber-a55); }
+.tag-gate { color: var(--gate); border-color: var(--gate-a55); }
+/* Live's line about a gated watch's gate (live.html .gate-status). */
+.gate-status {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: 72ch;
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+.gate-swatch { flex: none; width: 12px; height: 8px; border: 2px dashed var(--gate); border-radius: 2px; }
+.gate-status-long {
+  width: fit-content;
+  padding: 6px 10px;
+  border: 1px solid var(--gate-a55);
+  border-radius: var(--radius-sm);
+  background: var(--gate-a15);
+  color: var(--text);
+}
 /* The CSV link under Live. */
 .live-export { margin: var(--space-3) 0 0; font-size: var(--fs-sm); }
 .live-export .muted { margin-left: var(--space-1); }

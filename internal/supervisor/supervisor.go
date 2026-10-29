@@ -41,7 +41,9 @@ type Supervisor struct {
 	NewSource func(w config.Watch) (source.Source, error)
 
 	// OnEvent, when set, receives every tick's outcome for every watch,
-	// with the crop already PNG-encoded. Nil-safe; read at Start time.
+	// with the crop already PNG-encoded. A gated watch's poll whose gate
+	// was closed comes as the zero Event with no crop (gate.go).
+	// Nil-safe; read at Start time.
 	OnEvent func(watch string, ev trigger.Event, png []byte)
 	// OnHealth, when set, receives every stream health transition.
 	OnHealth func(watch string, hev health.Event)
@@ -116,6 +118,9 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	if err != nil {
 		return err
 	}
+	if err := s.gateEngine(w, r); err != nil {
+		return err
+	}
 	name := w.Name
 	// The runner has just restored the watch's saved trigger state, if it
 	// still applied (runner.Fingerprint, the history database). The registry
@@ -145,6 +150,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 			onEvent(name, ev, buf.Bytes())
 		}
 	}
+	gateClosedHook(name, r, onEvent)
 	// Always mirror health transitions into the registry (must_fix 1/4: the
 	// web UI derives its running/error/stopped display and the Live panel's
 	// staleness badge from this), regardless of whether an onHealth hook is

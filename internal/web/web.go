@@ -119,6 +119,8 @@ type Server struct {
 	// AcceptLower in tests (meter.go); nil uses the supervisor's.
 	valueOf  func(name string) (runner.ValueStatus, bool)
 	acceptOf func(name string, v float64) error
+	// gateOf stands in for the supervisor's Gate in tests (gate.go).
+	gateOf func(name string) (runner.GateStatus, bool)
 }
 
 func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) (*Server, error) {
@@ -334,6 +336,9 @@ type indexRow struct {
 	AlertsRetrying string
 	// Value is a numeric or value watch's published number (meter.go).
 	Value *valueView
+	// Gate is a gated watch's gate (gate.go); the row says when it has
+	// been shut a long time.
+	Gate *gateView
 }
 
 // agoText says how long ago something was, in the same words as app.js's
@@ -443,6 +448,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 			Has:    has,
 			Status: s.statusFor(wc.Name, s.isRunning(wc.Name)),
 			Value:  s.valueFor(wc),
+			Gate:   s.gateFor(wc),
 		}
 		if t, ok := s.reg.LastFired(wc.Name); ok && !(has && latest.Fired) {
 			row.FiredAgo = agoText(now.Sub(t))
@@ -522,6 +528,9 @@ type liveData struct {
 	// prefix, for the accept form.
 	Value *valueView
 	Base  string
+	// Gate is what a gated watch's gate did on the last poll (gate.go),
+	// nil for a watch without one.
+	Gate *gateView
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -549,6 +558,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		Progress: confirmProgress(wc.Trigger, latest, viewReadingFor(wc.Trigger, wc.Engine, latest.Reading, latest.Unsure).Skipped),
 		Value:    s.valueFor(wc),
 		Base:     s.base(r),
+		Gate:     s.gateFor(wc),
 	})
 }
 
@@ -1320,6 +1330,10 @@ type testResult struct {
 	// as the camera sent it, before any preprocessing, or empty when the
 	// panic came before there was a frame; Note says where it crashed.
 	Crashed bool
+	// Gate is the gate's reading on the same frame, for a gated watch;
+	// GateClosed says it read and didn't open, so the frame is a skip.
+	Gate       *gateTest
+	GateClosed bool
 }
 
 // pixelTest is the second half of a pixel_change Test: the region in the
@@ -1488,7 +1502,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, regionTooSmallText(frame), http.StatusBadRequest)
 			return nil
 		}
-		s.testCrop(w, r, wc, src, crop, frame, region, prep)
+		s.testCrop(w, r, wc, src, crop, frame, region, prep, img)
 		return nil
 	}); err != nil {
 		s.testCrashed(w, r, wc, step, crop, err)
@@ -1497,7 +1511,7 @@ func (s *Server) testRegion(w http.ResponseWriter, r *http.Request) {
 
 // testCrop is the Test of one region after the grab: crop is the region
 // in the frame (frame is its size) and prep the form's preprocessing.
-func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, crop *image.RGBA, frame image.Rectangle, region config.Region, prep config.Preprocess) {
+func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watch, src source.Source, crop *image.RGBA, frame image.Rectangle, region config.Region, prep config.Preprocess, img image.Image) {
 	// pixel_change reads no text: its Test grabs a second frame and
 	// measures what the watch would. (Only when the form says so: a request
 	// without ttype, from curl or an older client, is read by the engine as
@@ -1578,6 +1592,11 @@ func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watc
 		unsure := ocr.HasUnsureDigit(res.Text, res.Words)
 		res.Reading = viewReadingFor(trig, res.Engine, res.Text, unsure)
 		res.Verdict = verdictFor(trig, res.Engine, res.Text, unsure, trigErrs)
+	}
+	// A gated watch reads its gate from the same frame (gate.go); a closed
+	// gate is a skip whatever the value box says.
+	if res.Gate = s.testGate(r.Context(), r, wc, img, engName, prep); res.Gate != nil && res.Gate.Read && !res.Gate.Open {
+		res.Verdict, res.GateClosed = closedVerdict(res.Gate), true
 	}
 	s.render(w, "testresult.html", res)
 }
@@ -1849,6 +1868,9 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 		fail("notify", fmt.Sprintf("Notify line %d: %s", p.Line, p.Reason))
 	}
 	w.Trigger = trig
+	gate, gateErrs := gateFromForm(r, base, w.Trigger.Type)
+	w.Gate = gate
+	errs = append(errs, gateErrs...)
 	// Unit and Device class describe a numeric or value watch's number to
 	// Home Assistant; the form shows them only for those, and another type
 	// drops them (config.Validate refuses them there). A client that omits
@@ -2123,6 +2145,11 @@ func readsDifferently(a, b config.Watch) bool {
 		return w.Engine
 	}
 	if a.Region != b.Region || camera(a) != camera(b) || a.Trigger.Type != b.Trigger.Type {
+		return true
+	}
+	// A new gate keeps other phases' readings out from here on; the old
+	// strip may hold them.
+	if (a.Gate == nil) != (b.Gate == nil) || (a.Gate != nil && (a.Gate.Region != b.Gate.Region || a.Gate.Pattern != b.Gate.Pattern)) {
 		return true
 	}
 	if a.Trigger.Type == "pixel_change" {

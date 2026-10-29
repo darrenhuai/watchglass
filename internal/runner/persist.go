@@ -86,6 +86,15 @@ func Fingerprint(w config.Watch) string {
 	if w.Preprocess.Threshold > 0 {
 		w.Preprocess.Grayscale = false
 	}
+	// A gate read with the watch's own engine is the same gate whether
+	// its engine is spelled out or not.
+	if w.Gate != nil {
+		g := *w.Gate
+		if g.Engine == w.Engine { // w.Engine is spelled out above
+			g.Engine = ""
+		}
+		w.Gate = &g
+	}
 	// Fields the trigger type never reads, which the web UI may still carry
 	// over from another type.
 	switch w.Trigger.Type {

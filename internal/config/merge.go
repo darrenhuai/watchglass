@@ -151,6 +151,14 @@ func mustEncode(v any) *yaml.Node {
 	return &n
 }
 
+// parentPath is path without its last segment.
+func parentPath(path string) string {
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[:i]
+	}
+	return ""
+}
+
 func join(path, key string) string {
 	if path == "" {
 		return key
@@ -160,6 +168,13 @@ func join(path, key string) string {
 
 // regionPath is the one mapping every example writes whole and on one line.
 const regionPath = "watches.region"
+
+// isRegion reports whether path is a region mapping: the watch's own, or
+// its gate's (gate.go). Both are written whole and on one line, and a 0 in
+// either is a coordinate, not a key to drop.
+func isRegion(path string) bool {
+	return path == regionPath || path == "watches.gate.region"
+}
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
@@ -494,7 +509,7 @@ func (m *merger) mergeMapping(ex, de *yaml.Node, path string) {
 // threshold: 0 (the UI blanks what a trigger type doesn't read), except in
 // region, where a 0 is a coordinate.
 func clears(ex, de *yaml.Node, path string) bool {
-	return de.Kind == yaml.ScalarNode && !strings.HasPrefix(path, regionPath+".") &&
+	return de.Kind == yaml.ScalarNode && !isRegion(parentPath(path)) &&
 		isZero(de, path) && !readsSame(ex, de, path)
 }
 
@@ -707,14 +722,14 @@ func prune(n *yaml.Node, path string) {
 			prune(c, path)
 		}
 	case yaml.MappingNode:
-		if path == regionPath {
+		if isRegion(path) {
 			n.Style = yaml.FlowStyle
 		}
 		kept := n.Content[:0]
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
 			kp := join(path, k.Value)
-			if path != regionPath && absentEquivalent(v, kp) {
+			if !isRegion(path) && absentEquivalent(v, kp) {
 				continue
 			}
 			k.Style = 0

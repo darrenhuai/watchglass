@@ -36,11 +36,12 @@ watches:
 | `name` | required | Shown everywhere and used in the watch's URL, so no `/`, `?` or `#`. |
 | `source` | required | Where frames come from. See [sources.md](sources.md). |
 | `interval` | `5s` | Time between polls. At least `1s`. |
-| `max_interval` | off | Adaptive polling: back off up to this while nothing changes ([sources.md](sources.md#adaptive-polling)). |
+| `max_interval` | off | Adaptive polling: back off up to this while nothing changes ([sources.md](sources.md#adaptive-polling)). On a watch with a `gate`, a skipped poll counts as a change ([cycling displays](#a-display-that-cycles-through-values)). |
 | `health_after` | `3` | Failed polls in a row (no frame, or the engine errored) before the watch counts as down and sends one alert. A frame that reads as blank is a normal poll. |
 | `region` | required | The box to read, as fractions of the frame: `x` and `y` of the top-left corner, `w` and `h` its size, all 0 to 1. Drawing it in the UI fills these in. |
 | `preprocess` | off | Adjustments before reading text (below). |
 | `engine` | `tesseract` | How text is read: `tesseract`, `sevenseg` or `rapidocr` (below). |
+| `gate` | none | A second box, for a display that cycles through values: the value is read only on frames where the gate's code matches ([below](#a-display-that-cycles-through-values)). |
 | `trigger` | required | When the watch fires (below). |
 | `notify` | none | Notification URLs, one per line. See [notifications.md](notifications.md). |
 | `tls_insecure` | `false` | Accept a self-signed HTTPS certificate ([sources.md](sources.md#self-signed-certificates)). |
@@ -73,7 +74,7 @@ Leaving takes more evidence than entering: once an `ocr_match` or `numeric` cond
 
 **Restarts don't repeat an alert.** Each watch keeps when it last fired and what it last settled on in the history database, so restarting watchglass, updating it, or pressing **Save & restart watch** doesn't send the same alert again, and a running cooldown still ends on time. What it settled on is only trusted if the watch read the screen within the last 15 minutes (or twice its slowest poll interval, if that is longer); after a longer break, a condition that holds when watchglass comes back is reported as new, once any cooldown that was running ends. An alert that was not sent (a wrong notify URL, or watchglass stopping before it went out) doesn't count: after you fix the URL and save, or on the next start, a condition that still holds is sent again. A camera that is down when watchglass restarts stays down without a second "down" alert, and the first reading after that sends the one "back up" alert. Unlike a fire, that holds even if the "down" alert didn't go out: it isn't sent again. The down state is kept by watch name, so if you point a down watch at another camera in `config.yaml` while watchglass is off, the watch shows the old camera's error until its first reading, and that reading sends a "back up" alert.
 
-A watch starts fresh, and fires once if its condition already holds, when you change what it looks at or looks for: `source` (a new camera password in the URL doesn't count), `region`, `engine` and `preprocess` (`pixel_change` reads neither), or the trigger's `type`, and its `pattern`, `op` or `threshold` where the type uses them. Changing `notify`, `interval`, `confirm`, `cooldown`, `unit`, `counter`, `max_rise` or anything else keeps what it knew. Renaming a watch makes it a new one, and deleting a watch deletes what it knew.
+A watch starts fresh, and fires once if its condition already holds, when you change what it looks at or looks for: `source` (a new camera password in the URL doesn't count), `region`, `gate`, `engine` and `preprocess` (`pixel_change` reads neither), or the trigger's `type`, and its `pattern`, `op` or `threshold` where the type uses them. Changing `notify`, `interval`, `confirm`, `cooldown`, `unit`, `counter`, `max_rise` or anything else keeps what it knew. Renaming a watch makes it a new one, and deleting a watch deletes what it knew.
 
 A new watch on the UI shows four presets above the trigger fields, which fill them in without saving: **Status text** (`ocr_match` on `(?i)complete|done|error`), **Digit display** (`sevenseg` and `numeric`), **Any change** (`pixel_change` at 20%) and **Meter or logger** (`sevenseg` and `value`).
 
@@ -111,6 +112,48 @@ A counter never goes down. A value lower than the last one published is held bac
 On a `numeric` watch that is a counter, a reading the counter holds back doesn't count toward the alert either, so an alert never fires on a number the Live panel calls a misread. Until a lower value is accepted, the alert waits too.
 
 If a wrong high value did get through (no `max_rise`, or a misread that lasted longer than the readings it needs), the counter then holds back every right reading as lower; [home-assistant.md](home-assistant.md#meters-and-the-energy-dashboard) says how to put it right. Give every meter a `max_rise`.
+
+### A display that cycles through values
+
+Many meters and heat pumps show one number at a time and step through several: the import total, the export total, tariff 1, tariff 2, each for a few seconds with a code beside it (`1.8.0`, `2.8.0`) and often a blank frame between. The numbers look alike, so a pattern can't tell them apart, and two watches would read two different frames. A `gate` is a second box on the same watch, around the code:
+
+```yaml
+watches:
+  - name: meter-import
+    source: http://192.168.1.70/snapshot.jpg
+    interval: 2s
+    engine: sevenseg
+    region: {x: 0.31, y: 0.35, w: 0.56, h: 0.22}
+    gate:
+      region: {x: 0.15, y: 0.35, w: 0.15, h: 0.12}
+      pattern: '^1\.8\.0$'
+    unit: kWh
+    device_class: energy
+    max_rise: 5
+    trigger:
+      type: value
+      confirm: 2
+```
+
+Every poll reads the gate first, from the same frame as the value. When the gate's reading matches its `pattern`, the value box is read and used as it would be without a gate. When it doesn't (another phase, a blank frame, a flash), the poll is skipped:
+
+- Nothing is published to Home Assistant, settled or recorded in the history. The history has no row for a skipped poll, so `history.csv` holds only the gated phase's readings. The one exception is the watch's health in Home Assistant: a skipped poll still shows it online, so a gate that has never opened doesn't leave that sensor unknown.
+- It counts toward neither side of `confirm` or the leave rule: three readings above a threshold with other phases in between are still three in a row.
+- It isn't a failed poll. The camera answered and the gate was read, so a gate that never opens doesn't take the watch down, the same as a blank display. Instead the Live panel says how long the gate has been closed and the last code it read (a blank frame between phases doesn't count), and once it has been closed for `health_after` polls and 5 minutes it says so plainly ("Gate closed for 12 min (last saw '2.8.0')"), the watch list tags it, and the log says it once. The watch list also says "gate closed" beside **No readings yet** for a watch whose gate hasn't opened since it started, which is what a gate box off the code or a pattern that never matches looks like.
+- A long closed spell is treated like a long blank one. Once nothing has been read for 15 minutes (or twice the slowest poll interval, if that is longer), the watch forgets what it had settled on, so a condition that still holds when the gate opens again is reported again, subject to `cooldown`. The normal cycle, with the phase you want every few seconds to a minute, never gets near that.
+
+A gate that the engine fails to read is a failed read, like a value it fails to read.
+
+`gate` takes:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `region` | required | The box around the code, as fractions of the frame like `region`. |
+| `pattern` | required | A regular expression the gate's reading must match. Anchor it with `^` and `$` when one code is part of another (`2` and `12`). A seven-segment digit the decoder wasn't sure of never opens the gate. |
+| `engine` | the watch's | How the code is read, when it is printed differently from the value. |
+| `preprocess` | the watch's | The code's own preprocessing, written like `preprocess`. |
+
+Pick a short `interval`: the watch only sees the phase you want when a poll lands on it. With phases a few seconds long, poll every 1 or 2 seconds. `max_interval` works on a gated watch, but a skipped poll counts as a change and puts it back on `interval`: a gated watch only backs off while the gate stays open on the same value, so polls that slowed down can't fall out of step with the cycle and miss the phase for minutes. In practice a display that keeps cycling polls at `interval`. On the watch page, tick **Use a gate**, draw the gate box (it is dashed and blue; **Value box** and **Gate box** under the image, or a click inside a box, pick which one you are moving; a drag always draws the one picked), and press **Test this region**: it reads both boxes from one frame and says whether the gate was open. Changing the gate starts the watch fresh, like changing its region. The [cycling meter recipe](recipes/meter-cycling-obis.md) has a tested example.
 
 ### Readings out as CSV
 

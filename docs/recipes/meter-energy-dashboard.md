@@ -39,7 +39,7 @@ On the sample, **Test this region** reads `000000` and says the value is 0.
 - `device_class: energy` with `unit: kWh` makes the watch a counter and its Home Assistant sensor `total_increasing`, which the Energy dashboard takes. For a water meter use `device_class: water` and `unit: m³` (or `L`); for gas, `device_class: gas`.
 - `confirm: 3`: the value is the middle of the last five numbers read, so one or two misread frames never show.
 - `max_rise: 5`: the most the total can go up between two readings, in kWh. A house uses a few kWh an hour at most, so a rise of more than 5 in 30 seconds is a misread digit, not energy. It is held until five readings in a row agree on it, so a real jump after the camera was off still gets through. Pick a number well above the most your meter moves between two polls.
-- Leave out the meter's other fields: the `1.8.0` register name, the `kWh` label and the arrows. A meter that cycles between registers (total, tariff 1, tariff 2) needs the box on the total and a camera timed for it.
+- Leave out the meter's other fields: the `1.8.0` register name, the `kWh` label and the arrows. A meter that cycles between registers (total, tariff 1, tariff 2) needs a gate on the register's code: see [Meter that cycles through registers](meter-cycling-obis.md).
 
 ## Home Assistant
 

@@ -526,15 +526,7 @@ func (e *Evaluator) need(key string) int {
 // from its first.
 func (e *Evaluator) skipped(s string) Event {
 	ev := Event{Reading: s}
-	if e.lastRead.IsZero() {
-		e.lastRead = e.Now()
-	}
-	if e.StaleAfter > 0 && e.Now().Sub(e.lastRead) > e.StaleAfter {
-		e.stable, e.hasStable, e.numCond = "", false, false
-		e.candidate, e.candCount = "", 0
-		e.nums, e.lastText, e.textRun = nil, "", 0
-		e.lastRead = time.Time{}
-	}
+	e.Idle()
 	if e.candCount == 0 {
 		return ev
 	}
@@ -551,6 +543,27 @@ func (e *Evaluator) skipped(s string) Event {
 		ev.CooldownEnds = e.cooldownEnds()
 	}
 	return ev
+}
+
+// Idle tells the evaluator a poll went by that it doesn't see at all (a
+// gated watch's frame whose gate was closed, runner/gate.go). Nothing
+// counts and nothing is reported, but the time counts as a skipped
+// reading's does: once the watch has read nothing for StaleAfter, the
+// settled state, the count and the numeric window go (the fire time
+// stays). It reports whether that happened, so the caller can save the
+// state that changed.
+func (e *Evaluator) Idle() (forgot bool) {
+	if e.lastRead.IsZero() {
+		e.lastRead = e.Now()
+	}
+	if e.StaleAfter > 0 && e.Now().Sub(e.lastRead) > e.StaleAfter {
+		e.stable, e.hasStable, e.numCond = "", false, false
+		e.candidate, e.candCount = "", 0
+		e.nums, e.lastText, e.textRun = nil, "", 0
+		e.lastRead = time.Time{}
+		return true
+	}
+	return false
 }
 
 // edge reports whether a reading with candidate key (and, for the
