@@ -400,8 +400,11 @@ func TestRestartWhileDownSendsNoSecondDownAlert(t *testing.T) {
 		if !ok || !h.Down || !strings.Contains(h.Message, "connection refused") {
 			t.Errorf("restart %d: registry health %+v ok=%v, want down from the start", i+1, h, ok)
 		}
-		if d := h.Since.Sub(h1.Since); d < -time.Second || d > time.Second {
-			t.Errorf("restart %d: down since %v, want about %v (when it went down)", i+1, h.Since, h1.Since)
+		// The saved verdict and the page share one instant, however long
+		// the database write took (it took over a second on a loaded
+		// machine once), so "down since" is the same after a restart.
+		if !h.Since.Equal(h1.Since) {
+			t.Errorf("restart %d: down since %v, want %v (when it went down)", i+1, h.Since, h1.Since)
 		}
 		time.Sleep(300 * time.Millisecond) // 15 failing polls
 		if n := count("no reading for"); n != 1 {

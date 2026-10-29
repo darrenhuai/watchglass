@@ -7,12 +7,19 @@
 // worse still, so only transitions are reported.
 package health
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Event describes a health transition. State is "down" or "healthy".
 type Event struct {
 	State   string
 	Message string
+	// At is when the transition happened. The runner sets it once, so the
+	// saved verdict and the page say the same "down since", before and
+	// after a restart.
+	At time.Time
 }
 
 type Tracker struct {

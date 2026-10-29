@@ -188,10 +188,14 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 		r.SeedRestoredDown(reassert)
 	}
 	r.OnHealth = func(hev health.Event) {
+		since := hev.At
+		if since.IsZero() {
+			since = time.Now()
+		}
 		s.reg.SetHealth(name, state.Health{
 			Down:    hev.State == "down",
 			Message: hev.Message,
-			Since:   time.Now(),
+			Since:   since,
 		})
 		if onHealth != nil {
 			onHealth(name, hev)

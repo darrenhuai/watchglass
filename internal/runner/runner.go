@@ -523,7 +523,8 @@ func (r *Runner) pollSucceeded(ctx context.Context) {
 func (r *Runner) notifyHealth(ctx context.Context, hev health.Event) {
 	r.logf("watch %s: %s", r.watch.Name, hev.Message)
 	r.isDown = hev.State == "down"
-	r.saveHealth(hev, time.Now())
+	hev.At = time.Now()
+	r.saveHealth(hev, hev.At)
 	if r.OnHealth != nil {
 		r.OnHealth(hev)
 	}
