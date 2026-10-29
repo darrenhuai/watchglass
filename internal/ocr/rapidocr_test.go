@@ -34,9 +34,9 @@ func TestRapidOCRRecognizeRunsShimOnPNG(t *testing.T) {
 	if gotBin != "/usr/bin/python3" {
 		t.Errorf("bin = %q", gotBin)
 	}
-	want := []string{"-c", rapidShim}
+	want := []string{"-c", rapidShim, "--no-cls"}
 	if !reflect.DeepEqual(gotArgs, want) {
-		t.Errorf("args = %v, want [-c <shim>]", gotArgs)
+		t.Errorf("args = %v, want [-c <shim> --no-cls]", gotArgs)
 	}
 	if !strings.Contains(rapidShim, "from rapidocr import RapidOCR") {
 		t.Errorf("embedded shim does not look like the rapidocr shim:\n%s", rapidShim)
@@ -66,8 +66,8 @@ func TestRapidOCRRecognizeWordsOneWordPerLine(t *testing.T) {
 			t.Errorf("word %d = %+v, want %+v", i, words[i], w)
 		}
 	}
-	if !reflect.DeepEqual(gotArgs, []string{"-c", rapidShim}) {
-		t.Errorf("args = %v, want [-c <shim>]", gotArgs)
+	if !reflect.DeepEqual(gotArgs, []string{"-c", rapidShim, "--no-cls"}) {
+		t.Errorf("args = %v, want [-c <shim> --no-cls]", gotArgs)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestRapidOCRMalformedOutput(t *testing.T) {
 
 func TestParseRapidJSONTruncatesLongGarbage(t *testing.T) {
 	long := strings.Repeat("x", 500)
-	_, err := parseRapidJSON([]byte(long))
+	_, _, err := parseRapidJSON([]byte(long))
 	if err == nil {
 		t.Fatal("expected error")
 	}

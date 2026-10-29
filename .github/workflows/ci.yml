@@ -5,10 +5,10 @@ on:
   pull_request:
 jobs:
   test-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install runtime tools (integration paths)
@@ -24,8 +24,8 @@ jobs:
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test (no ffmpeg/tesseract - exercises skip paths)
@@ -33,9 +33,9 @@ jobs:
         env:
           CGO_ENABLED: "0"
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build image
         run: docker build -t watchglass:ci .
       - name: Smoke test container

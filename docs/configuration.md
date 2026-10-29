@@ -76,7 +76,23 @@ A new watch on the UI shows three presets above the trigger fields, which fill t
 
 ### Picking a pixel_change threshold
 
-A camera never sends exactly the same picture twice, and a backlight may flicker, so some pixels change even when nothing on the screen does. Draw the box, leave the screen alone and press **Test this region**. For `pixel_change` it grabs two frames, waits the watch's interval in between (kept between 1 and 3 seconds), and says how much of the region changed and whether the Threshold in the form would fire. It compares them the way the running watch compares each frame with the one before (the number the Live panel shows as "4.2% changed"), only with the Test's own two frames 1 to 3 seconds apart rather than one interval apart. With nothing moving, that number is the camera's own noise: the floor. A threshold a few times above it stays quiet; one at or below it fires on its own. Then press Test again while the screen does what you want to hear about (a light comes on, a page changes) and check that the change clears the threshold.
+A camera never sends exactly the same picture twice. Sensor noise, JPEG compression, a flickering backlight and a mount that shakes all change some pixels when nothing on the screen does. The threshold has to sit above that noise and below the change you want to hear about, so measure both on your own camera:
+
+1. Draw the box and press **Test this region** with the screen left alone. For `pixel_change` it grabs two frames 1 to 3 seconds apart (the watch's interval, kept in that range) and says how much of the region changed, compared the way the running watch compares each frame with the one before. That's a first look at the noise, from one pair of frames.
+2. Save the watch with Threshold `100` and its notify list empty while you measure, and leave the screen alone. At 100, noise alone won't fire it, but a frame where every pixel in the box changes at once (the lights go out, the camera restarts or changes its picture size) still fires, and with nothing to notify that sends no alert. Each tile in the Live panel says how much changed since the frame before ("4.2% changed"), and the panel keeps the last 10 readings. Look at it now and then over a few minutes, or longer if the room's light changes (lamps, daylight, a camera that switches to night vision), and note the highest number you see. That's your camera's noise.
+3. Press Test while the screen does what you want to hear about (a light comes on, a page changes, a number moves on), or watch the Live panel as it happens. That's the smallest real change.
+4. Set the threshold between the two: above the highest noise you saw, and below the real change. Then put the watch's notify targets back. If the real change isn't clearly bigger than the noise, no threshold will work; see below.
+
+`confirm` doesn't apply to `pixel_change`: one pair of frames over the threshold fires. `cooldown` stops a run of noisy frames from sending an alert each, but it also hides a real change that comes during it.
+
+On an emulated camera with a shake of 1 to 3 pixels, a flickering backlight, passing hands and an IR switch, the frames with nothing changing moved 9% of the box half the time, 22 to 29% once in a hundred frames and up to 99% when a hand passed or the IR light switched. The real change, a counter going from 984 to 1284, moved only 6 to 22%. A threshold of 5% sent 112 false alerts an hour, and with a 30 s cooldown only 4 of 30 real changes got their own alert. 40% sent 8 false alerts and missed all 30 real changes. The same camera held to a shake of at most 1 pixel, with no flicker, moved at most 4.4% when still, and the change always moved more than 5%, so 5% separated them.
+
+So a camera that shakes by more than a pixel, or whose picture flickers (auto exposure hunting, an IR light switching on and off, a backlight beating with the camera's frame rate), may have no threshold that works. Then:
+
+- Mount the camera so it can't move: a bracket, not a shelf that a door or a fan shakes.
+- Steady the light: fixed exposure if the camera has it, IR or night mode off, a lamp that stays on.
+- Draw a smaller box around only the part that changes (a status light rather than the whole panel), so the change is a bigger share of the box.
+- Use a text watch if what changes is words or digits. `ocr_changed` or `ocr_match` with `confirm` ignores a picture that moves while the text stays the same.
 
 ## Preprocess
 
@@ -95,7 +111,7 @@ preprocess:
 
 ### A display that is sideways
 
-A phone on its side, an ESP32-CAM screwed in at a right angle, a meter whose LCD faces the wrong way: tesseract and `sevenseg` both need the text upright. `rotate` turns the crop a quarter or half turn before it is read: `90` when the tops of the letters point left in the picture, `270` when they point right, `180` when the display is upside down. In the UI it is **Rotate**, the first control under Preprocess. Try a value and press **Test this region**: the result shows the turned crop.
+A phone on its side, an ESP32-CAM screwed in at a right angle, a meter whose LCD faces the wrong way: tesseract, `sevenseg` and rapidocr all need the text upright. `rotate` turns the crop a quarter or half turn before it is read: `90` when the tops of the letters point left in the picture, `270` when they point right, `180` when the display is upside down. In the UI it is **Rotate**, the first control under Preprocess. Try a value and press **Test this region**: the result shows the turned crop.
 
 The region doesn't change. It stays a box on the picture as the camera sends it, and the page keeps showing that picture unturned; only the crop is turned. The crops in the Live panel, the picture attached to an ntfy alert and Home Assistant's snapshot are the turned crop too, so they arrive the right way up.
 
@@ -107,7 +123,7 @@ The region doesn't change. It stays a box on the picture as the camera sends it,
 |---|---|---|
 | `tesseract` (default) | printed text: LCD menus, console output, status lines | the tesseract program ([install.md](install.md#what-to-install-for-reading-text-and-streams)) |
 | `sevenseg` | seven-segment digits: scales, meters, thermostats, appliance timers | nothing, it's built in |
-| `rapidocr` | printed text tesseract struggles with: low contrast, small or stylised fonts, odd angles, several lines at once | Python with `pip install rapidocr onnxruntime`; not in the Docker image |
+| `rapidocr` | printed text tesseract struggles with: low contrast, small or stylised fonts, odd angles, several lines at once; sometimes a [digit display `sevenseg` can't read](#rapidocr-on-digit-displays) | Python with `pip install rapidocr onnxruntime`; not in the Docker image |
 
 tesseract reads the region as **one line of text**. Draw the box around a single line; two watches on the same camera are cheap if you need two lines. rapidocr reads a block of lines, joined with spaces.
 
@@ -121,7 +137,25 @@ It's a geometry decoder, not a font model. It works out the polarity itself, so 
 
 ### rapidocr
 
-rapidocr runs the PaddleOCR PP-OCR models through the [RapidOCR](https://github.com/RapidAI/RapidOCR) Python package. watchglass doesn't link it: each read starts Python, hands it the crop and reads the text back, so the binary stays small and static and the engine stays optional. `pip install rapidocr` alone isn't enough; `onnxruntime` is what runs the models. Each read costs about 5 s on a desktop PC and more on a Pi, so give these watches an `interval` of 10 s or more.
+rapidocr runs the PaddleOCR PP-OCR models through the [RapidOCR](https://github.com/RapidAI/RapidOCR) Python package. watchglass doesn't link it: each read starts Python, hands it the crop and reads the text back, so the binary stays small and static and the engine stays optional. `pip install rapidocr` alone isn't enough; `onnxruntime` is what runs the models. Each read takes about 4 s on a desktop PC, up to 6, and more on a Pi, so give these watches an `interval` of 10 s or more.
+
+watchglass runs rapidocr with its text-direction check off. That check is meant for photographed pages that may be upside down, and it turns digit displays over: with it on, 14 of the 73 digit displays below had some or all of their digits read upside down, with full confidence (`12:05` as `50:21`, `8.34` as `hE8`). With it off, rapidocr no longer turns text that really is upside down. If the display is upside down in the camera's picture (a camera mounted the wrong way up), set `rotate: 180` ([a display that is sideways](#a-display-that-is-sideways)); Test this region shows the turned crop. A rapidocr watch on such a display that read fine on 0.1.12 or earlier needs it now.
+
+#### rapidocr on digit displays
+
+`sevenseg` is the engine for seven-segment digits, and rapidocr is worth a try only on a display `sevenseg` can't read. On 73 photos of real digit displays (clocks, meters, thermostats, pumps, VFDs, scales):
+
+| | read exactly | confidently wrong | unsure or nothing |
+|---|---|---|---|
+| `sevenseg` | 37 | 2 | 34 |
+| rapidocr | 46 | 13 | 14 |
+
+- On the 34 displays `sevenseg` couldn't read, rapidocr read 18 exactly and gave a confident wrong reading on 5.
+- On the 37 that `sevenseg` read, rapidocr got 6 wrong, so don't switch a display that already reads.
+- rapidocr's wrong readings look like readings: `3 14 g` for 314 on a kitchen scale, `9.86 96 044` for 9.8696044 on a calculator. A `numeric` watch takes the first number, so it would act on 3 or 9.86.
+- A rapidocr read takes seconds (above); `sevenseg` takes a few hundredths of a second.
+
+So if Test this region gets only `?` or no digits from `sevenseg` whatever you try, switch the Engine to rapidocr and press Test on several frames, including the display's other states. Keep it only if every one reads right, and leave the watch's `confirm` at 3 or more.
 
 ## History
 

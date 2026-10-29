@@ -12,10 +12,10 @@ You have a device whose only output is its screen: a boiler, a heat pump, a 3D p
 ## Try it in a minute (no camera needed)
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
+docker run --rm --pull always -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
 
-Open http://127.0.0.1:8080. The first run downloads the image (about 240 MB); after that it starts in a second or two. Two demo watches fire about 25 seconds in; this clip is that run, and its ntfy alerts go to a local test receiver:
+Open http://127.0.0.1:8080. The first run downloads the image (about 240 MB); after that it downloads again only when a newer release is out, and otherwise starts in a second or two (offline, leave out `--pull always`). Two demo watches fire about 25 seconds in; this clip is that run, and its ntfy alerts go to a local test receiver:
 
 <img src="docs/demo.gif" width="640" alt="Setting up a watch in the watchglass web UI: the pattern (?i)print complete is typed in, a new box is drawn over a 3D printer's status line, Test this region reads PRINTING 34% at 95% confidence and says the condition isn't met yet, a test notification goes to an ntfy server (a local test receiver), the watch is saved, and when the screen changes to PRINT COMPLETE the watch shows FIRED · SENT">
 
@@ -53,7 +53,7 @@ curl -fsSL https://github.com/darrenhuai/watchglass/releases/latest/download/wat
 
 Or unpack the archive for your system from [Releases](https://github.com/darrenhuai/watchglass/releases/latest) and run `./watchglass`, or double-click `watchglass.exe`. The first run creates an empty `config.yaml` in the current folder and prints the address to open. It only answers on this machine; to open it from another one, add an [`auth:` block](docs/security.md#reaching-it-from-other-machines) and start it with `-listen 0.0.0.0:8080`. Reading text needs tesseract, and RTSP, webcams and screen capture need ffmpeg ([what to install](docs/install.md#what-to-install-for-reading-text-and-streams)); seven-segment digits and snapshot URLs need nothing extra.
 
-The Home Assistant add-on, `docker run`, systemd, [checksums](docs/install.md#checking-the-download) and building from source: [docs/install.md](docs/install.md).
+The Home Assistant add-on, `docker run`, systemd, [checksums](docs/install.md#checking-the-download), [updating](docs/install.md#updating) and building from source: [docs/install.md](docs/install.md).
 
 ## Your first watch
 

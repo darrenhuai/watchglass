@@ -48,6 +48,10 @@ No camera yet? The empty watch list has an **Add a demo watch** button that crea
 
 With one seven-segment watch the add-on used about 17 MB of memory. With a tesseract text watch added it used about 30 MB, briefly up to 50 MB while tesseract reads. Either way it stayed well under 1% of a CPU. The Info tab shows the live figures.
 
+## Updating
+
+When a new version is out, Home Assistant shows the update at the top of **Settings** and on the add-on's page. Press **Update**: the Supervisor rebuilds the add-on on the new `ghcr.io/darrenhuai/watchglass` image and starts it again, and your `config.yaml` and history stay. Home Assistant looks for new versions on its own schedule; to look now, open the store (**Settings → Apps → Install app**, or **Settings → Add-ons → Add-on Store** on older versions) and pick **Check for updates** in its ⋮ menu. Each add-on version runs the image with the same version number, so an add-on update is the only way it moves to a newer watchglass; the [releases page](https://github.com/darrenhuai/watchglass/releases) says what changed.
+
 ## Home Assistant entities via MQTT
 
 Install and start the official **Mosquitto broker** add-on. Home Assistant then finds the broker and offers the MQTT integration under Settings → Devices & services; add it. Create a Home Assistant user for watchglass (Settings → People → Add person, with **Allow login** on) and put its login in an `mqtt:` block in watchglass's `config.yaml`:

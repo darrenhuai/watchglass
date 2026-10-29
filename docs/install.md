@@ -10,6 +10,7 @@ watchglass is one program with a web UI. Run it in Docker, as the Home Assistant
 - [What to install for reading text and streams](#what-to-install-for-reading-text-and-streams)
 - [Run it as a service (systemd)](#run-it-as-a-service-systemd)
 - [go install and building from source](#go-install-and-building-from-source)
+- [Updating](#updating)
 - [Command-line flags](#command-line-flags)
 
 ## Docker Compose
@@ -31,7 +32,7 @@ This needs Docker's Compose plugin. If `docker compose version` says `unknown co
 - **A camera on the Docker host itself**: inside the container, `127.0.0.1` is the container. Use `http://host.docker.internal:<port>/...` instead. The compose file maps that name on Linux too.
 - **Try the demo** in the same setup: uncomment the `WATCHGLASS_DEMO=1` lines in the compose file. The demo keeps its files in the container's `/tmp` and leaves `./config` alone.
 - **Health**: the image's `HEALTHCHECK` runs `watchglass -healthcheck`, which checks `127.0.0.1:8080` inside the container. If you change the listen port in the container's command, pass the same `-listen` to the check with `--health-cmd` (or `healthcheck:` in compose), or Docker will call it unhealthy.
-- **Updating**: `docker compose pull && docker compose up -d`.
+- **Updating**: `docker compose pull && docker compose up -d`. `docker compose up -d` alone keeps the image you already have; see [Updating](#updating).
 
 To build the image yourself from a clone instead, comment out `image:` and uncomment `build: .` in the compose file, or run `docker build -t watchglass .`.
 
@@ -48,8 +49,10 @@ docker run -d --name watchglass --restart unless-stopped \
 The demo, with nothing to clean up afterwards:
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
+docker run --rm --pull always -p 127.0.0.1:8080:8080 -e WATCHGLASS_DEMO=1 ghcr.io/darrenhuai/watchglass
 ```
+
+`--pull always` makes Docker check for a newer image before it starts. Without it, `docker run` uses whatever image it downloaded the first time. To update the long-running container above, see [Updating](#updating).
 
 In a container the start-up line prints the address inside the container (`http://127.0.0.1:8080/`). Which port you open on your machine is decided by `-p`, so keep it `8080:8080` unless you have a reason not to.
 
@@ -126,7 +129,7 @@ watchglass looks for tesseract on PATH first. The Windows installer puts it in `
 engines: tesseract=C:\Program Files\Tesseract-OCR\tesseract.exe, sevenseg=built-in, rapidocr=not installed
 ```
 
-For rapidocr, watchglass tries `python3` and then `python`, and keeps the first that can import `rapidocr` and `onnxruntime`. `-python /path/to/venv/bin/python` picks one. Each read starts Python and loads the models (about 5 s on a desktop PC, more on a Pi), so give rapidocr watches an interval of 10 s or more.
+For rapidocr, watchglass tries `python3` and then `python`, and keeps the first that can import `rapidocr` and `onnxruntime`. `-python /path/to/venv/bin/python` picks one. Each read starts Python and loads the models (about 4 s on a desktop PC, up to 6, more on a Pi), so give rapidocr watches an interval of 10 s or more.
 
 ## Run it as a service (systemd)
 
@@ -159,6 +162,37 @@ go test ./...
 ```
 
 The build needs no C compiler (`CGO_ENABLED=0` works); the SQLite driver is pure Go. To run it from the clone without building: `go run ./cmd/watchglass -demo`.
+
+## Updating
+
+Every way below keeps your `config.yaml` and history. The [releases page](https://github.com/darrenhuai/watchglass/releases) says what changed; `watchglass -version`, or the `ready` line in the log, says which version you are running.
+
+**Docker.** Docker downloads an image once and then keeps using it. The `:latest` on your machine stays the version you first pulled, however many releases come out after it, until you pull again; `docker run` and `docker compose up -d` don't check. With Compose:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+With `docker run`, pull the new image, remove the container and start it again with the same command as before (your files are in the mounted folder, not in the container):
+
+```bash
+docker pull ghcr.io/darrenhuai/watchglass:latest
+docker rm -f watchglass
+```
+
+If you pinned a version tag instead of `:latest`, nothing changes until you edit the tag: put the new version from the releases page in its place and do the same.
+
+**The Home Assistant add-on.** When a new version is out, Home Assistant shows the update at the top of **Settings** and on the add-on's page; press **Update**. It rebuilds the add-on on the new image and starts it again. Home Assistant looks for new versions on its own schedule; **Check for updates** in the ⋮ menu of the store (**Settings → Apps → Install app**) looks now. More in [addon/DOCS.md](../addon/DOCS.md#updating).
+
+**The binary.** The download links above always fetch the newest release, so download and unpack the archive again, stop watchglass and put the new binary where the old one was. For the systemd service, from the unpacked folder:
+
+```bash
+systemctl stop watchglass
+install -m 0755 watchglass /usr/local/bin/watchglass
+systemctl start watchglass
+```
+
+With `go install`, run the same `go install` line again.
 
 ## Command-line flags
 
