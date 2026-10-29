@@ -35,10 +35,10 @@ preprocessing to tune. This recipe is that setup.
 1. Add the watch, open it, and drag a rectangle around *just the digits*.
    Leave out units, labels and the decimal-point-only annunciators some
    meters have. A few pixels of the bezel or housing round the display
-   window are fine; a bright frame edge that runs through the crop looks
-   like a bar. Include the whole height of the digits with a little margin;
-   a crop that clips the top or bottom bar changes what the digits look
-   like.
+   window are fine; a bright frame edge that runs through the digits can
+   look like a bar (standing alone it reads `?`, not `1`). Include the
+   whole height of the digits with a little margin; a crop that clips the
+   top or bottom bar changes what the digits look like.
 2. In the Trigger fieldset set **Engine** to `sevenseg` and the Type to
    `numeric` (or `ocr_changed` if you just want to know the reading moved).
 3. Hit **Test this region**. You should see the reading and one chip per
