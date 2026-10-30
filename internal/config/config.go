@@ -194,6 +194,13 @@ type Watch struct {
 	// the unit is free text ("rpm", "L").
 	Unit        string `yaml:"unit,omitempty"`
 	DeviceClass string `yaml:"device_class,omitempty"`
+	// CheckMoves, when set to false, stops the watch from checking
+	// whether the picture around its box has moved (a bumped camera, a
+	// screen that slid). Unset is on.
+	CheckMoves *bool `yaml:"check_moves,omitempty"`
+	// MoveAlert sends one alert to the notify URLs when the picture
+	// around the box moves, or can't be found. Off unless set.
+	MoveAlert bool `yaml:"move_alert,omitempty"`
 }
 
 // DeviceClasses are the Home Assistant sensor device classes a numeric

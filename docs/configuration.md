@@ -46,6 +46,8 @@ watches:
 | `tls_insecure` | `false` | Accept a self-signed HTTPS certificate ([sources.md](sources.md#self-signed-certificates)). |
 | `headers` | none | Extra request headers for an `http(s)` source, as `"Name: value"` strings. |
 | `unit`, `device_class` | none | How a `numeric` watch's number is described to Home Assistant ([home-assistant.md](home-assistant.md#units-and-device-classes)). |
+| `check_moves` | `true` | Notice when the picture around the box moves ([below](#when-the-camera-or-the-screen-moves)). `false` turns it off. |
+| `move_alert` | `false` | Also send one alert to the `notify` URLs when it does ([below](#when-the-camera-or-the-screen-moves)). |
 
 Durations are written like `30s`, `5m`, `2h` or `1h30m`.
 
@@ -156,6 +158,33 @@ watchglass runs rapidocr with its text-direction check off. That check is meant 
 - A rapidocr read takes seconds (above); `sevenseg` takes a few hundredths of a second.
 
 So if Test this region gets only `?` or no digits from `sevenseg` whatever you try, switch the Engine to rapidocr and press Test on several frames, including the display's other states. Keep it only if every one reads right, and leave the watch's `confirm` at 3 or more.
+
+## When the camera or the screen moves
+
+A camera gets bumped, a screen slides on its stand, or the camera's switch to night vision shifts the picture. The box then sits partly off the digits, and the watch reads part of the number or the wrong one. watchglass notices, and says so on the watch's page.
+
+**How.** After a watch's first three clean readings (text with no unsure digit, and for `sevenseg` no `?`; any frame for `pixel_change`), it keeps a small grayscale picture of the area around the box: the bezel, the housing, the labels. The box itself is left out, so digits that change don't count. Every 5 seconds it lines the current frame up with that picture by the edges in it, so a change of exposure, white balance or night vision doesn't count either, and works out how far the picture has moved. It also tries small turns, up to about 4 degrees, so a camera that was knocked a little crooked is measured at the box rather than across the whole picture.
+
+**What it says.**
+
+- When four checks in a row (about 20 seconds) agree that the picture moved by at least 4.5 pixels, the Live panel says "The picture around this box moved about 14 px right and 3 px down since 14:02. Readings may be wrong until the box is moved." The watch list marks the watch "camera moved", and the log has a line. A camera that shakes on its own has to move by more: about 3 times how far its picture usually jumps from one check to the next, if that is more than 4.5 pixels, and never more than 9. A picture that creeps, or gets nudged a few pixels at a time, is reported once it has gone that far in all. While the warning is shown, a further move updates the offset on the page and in the log, without a new alert.
+- When nothing lines up for 5 minutes, and the box hasn't read cleanly in that time (three clean readings in a row; a `?` from the seven-segment decoder isn't a clean reading, and nor is a lone digit it makes out in the dark), the panel says the picture around the box hasn't been in view since then: the lens is covered, or the camera points somewhere else. A screen that shows something else for a while (a menu, a boot screen) while the box still reads isn't reported.
+- When the picture moves back, the warning goes away by itself.
+
+**What to do.** The warning has two buttons:
+
+- **Move the box with it** moves the box by the measured amount, saves it to `config.yaml` (comments kept, as every save), restarts the watch and takes a new picture of the area around the box. Moving the box is a change of `region`, so the watch starts fresh, as it does for any region change ([triggers](#triggers)).
+- **The new position is fine** keeps the box where it is and takes a new picture from the next frame. Press it once the camera shows what it should: a picture of a covered lens is too plain to go by, and the check then stops until the watch is saved.
+
+Changing the box or the `source` and saving takes a new picture too.
+
+**The alert.** With `move_alert: true`, a move (or a picture that can't be found) also sends one alert to the watch's `notify` URLs, titled `watchglass: <name> (camera moved)` or `watchglass: <name> (box not in view)`, with the same retries as other alerts. It goes out once per move: not again while the picture stays moved, and not again after a restart. It is off by default because it is a new kind of message that a watch set up before it didn't ask for.
+
+**What it can't notice.** A move smaller than its threshold. A move bigger than the margin it keeps around the box (60% of the box's longer side), which reads as "can't find" instead. Zoom. A box with too little around it to go by: one that fills nearly the whole frame, or sits on a plain wall, gets a note on its page that the area around it is too plain or changes too much, and isn't checked until it is saved again or watchglass restarts. The same goes for a watch that never reads cleanly, since it never takes the picture. On a screen grab or a KVM, where nothing around the box stays put, set `check_moves: false`. Do the same for a box on a screen whose text scrolls around it (a console, a log, a list): when the lines move up, the check can't tell that from the camera moving, and says the picture moved by a line or more.
+
+**Restarts.** The picture, and what the check last said, is kept in the history database, one small row per watch. A camera bumped while watchglass was off still shows as moved after the restart, and the same move isn't reported twice.
+
+**Accuracy and cost.** On the 77 freely licensed photos of round 6's test set, moved by 5, 10 and 20 pixels, the measured offset was within 2 pixels of the true one on 460 of 462, and on 148 of 154 turned by 2 degrees. Changes of exposure (0.65 to 1.45 times) and white balance gave no shift of more than about a pixel. Two replays of the first hour of round 6's 73-minute recording of emulated cameras (12 watches polling every 1 to 2 seconds, with shake, exposure steps, night vision, hands in front, a camera reboot and a restart of watchglass) reported no move and no lost picture. The checks measured in that recording, run through the move rule in every stretch of 150 checks, forwards and backwards (316,272 checks in all), gave no move either. A check takes about 5 to 25 milliseconds on a desktop PC; most polls skip it. For those 12 watches it added about 2% of one CPU core, compared with the same build without it on the same frames. The picture it keeps takes at most 37 KB per watch. Each check makes 3 to 4 MB of short-lived garbage, so the process's memory sat about 1 MB higher most of the time, with peaks 15 to 30 MB higher before Go's garbage collector caught up.
 
 ## History
 

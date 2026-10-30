@@ -51,7 +51,7 @@
 {{else}}
 <p class="flash" role="status">
   <svg class="flash-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
-  <span class="flash-text">{{if eq .Kind "saved"}}Saved to {{.File}} and restarted the watch <time class="flash-meta mono" datetime="{{isoTime .At}}">{{.At.Local.Format "15:04:05"}}</time>{{else if eq .Kind "created"}}Created <strong class="mono">{{.Subject}}</strong>. Drag on the snapshot to choose the region to watch, then save.{{else}}Deleted <strong class="mono">{{.Subject}}</strong>{{end}}</span>
+  <span class="flash-text">{{if eq .Kind "saved"}}Saved to {{.File}} and restarted the watch <time class="flash-meta mono" datetime="{{isoTime .At}}">{{.At.Local.Format "15:04:05"}}</time>{{else if eq .Kind "created"}}Created <strong class="mono">{{.Subject}}</strong>. Drag on the snapshot to choose the region to watch, then save.{{else if eq .Kind "drift-moved"}}Moved the box {{.Subject}}, saved it to {{.File}} and restarted the watch. It takes a new picture of the area around the box from its next frame.{{else if eq .Kind "drift-kept"}}The box stays where it is. The watch takes a new picture of the area around it from its next frame.{{else if eq .Kind "drift-gone"}}The picture around this box is no longer reported as moved, so nothing was changed.{{else if eq .Kind "drift-changed"}}The picture moved again after this page showed it, so the box wasn't moved. Check the new offset below and try again.{{else}}Deleted <strong class="mono">{{.Subject}}</strong>{{end}}</span>
 </p>
 {{end}}{{end}}{{end}}
 

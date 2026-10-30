@@ -67,6 +67,7 @@ func Fingerprint(w config.Watch) string {
 	w.Interval, w.MaxInterval, w.HealthAfter = 0, 0, 0
 	w.Notify, w.Headers, w.TLSInsecure = nil, nil, false
 	w.Unit, w.DeviceClass = "", ""
+	w.CheckMoves, w.MoveAlert = nil, false
 	w.Trigger.Confirm, w.Trigger.Cooldown = 0, 0
 	if w.Engine == "" {
 		w.Engine = "tesseract" // the default, spelled either way

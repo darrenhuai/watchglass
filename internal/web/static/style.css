@@ -1840,6 +1840,34 @@ fieldset > .field-error { margin-top: var(--space-2); }
 .stale-badge .mono { font-size: var(--fs-sm); }
 .stale-age { color: var(--text-dim); }
 
+/* The position warning at the top of the Live panel (live.html): the
+   picture around the box moved, or can't be found, with the two actions
+   under it. Amber like a fire: it is about what the watch reads, not a
+   failure of watchglass. */
+.drift-warn {
+  max-width: 72ch;
+  margin: 0 0 var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--amber-a55);
+  border-radius: var(--radius-sm);
+  background: var(--amber-a15);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.drift-text { margin: 0; color: var(--text); text-wrap: pretty; overflow-wrap: anywhere; }
+.drift-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.drift-actions form { margin: 0; }
+.drift-note {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
 /* Two rows at every width: the LED, the label, the fired tag and the time
    (flush right) on the first, the reading full width under them. With the
    time in the flow it landed after a short reading and alone on a line
@@ -2093,6 +2121,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   white-space: nowrap;
 }
 .reading-error > .alerts-failing { display: block; margin-top: 2px; }
+.reading-wrap > .drift-mark { color: var(--amber); font-size: var(--fs-sm); white-space: nowrap; }
 
 /* The Notify section: the box, then Send test notification with its
    hint, the test's answer, and the common formats folded away. */

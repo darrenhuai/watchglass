@@ -697,7 +697,10 @@ func TestFingerprint(t *testing.T) {
 		"tls_insecure": func(w *config.Watch) { w.TLSInsecure = true },
 		"unit":         func(w *config.Watch) { w.Unit, w.DeviceClass = "°C", "temperature" },
 		"confirm":      func(w *config.Watch) { w.Trigger.Confirm = 5 },
-		"cooldown":     func(w *config.Watch) { w.Trigger.Cooldown = 0 },
+		// The position check (internal/drift) asks nothing of the display.
+		"check_moves": func(w *config.Watch) { off := false; w.CheckMoves = &off },
+		"move_alert":  func(w *config.Watch) { w.MoveAlert = true },
+		"cooldown":    func(w *config.Watch) { w.Trigger.Cooldown = 0 },
 		"engine spelled out": func(w *config.Watch) {
 			w.Engine = "tesseract" // "" means tesseract
 		},

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/drift"
 	"github.com/darrenhuai/watchglass/internal/health"
 	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/notify"
@@ -45,6 +46,9 @@ type Supervisor struct {
 	OnEvent func(watch string, ev trigger.Event, png []byte)
 	// OnHealth, when set, receives every stream health transition.
 	OnHealth func(watch string, hev health.Event)
+	// Drift holds each watch's position check (internal/drift) for the
+	// web UI; nil turns the checks off. Read at Start time.
+	Drift *drift.Board
 
 	mu      sync.Mutex
 	running map[string]*handle
@@ -67,6 +71,7 @@ type Supervisor struct {
 func New(store *history.Store, reg *state.Registry, engines ocr.Engines, logf func(string, ...any)) *Supervisor {
 	return &Supervisor{
 		NewSource: source.For,
+		Drift:     drift.NewBoard(),
 		running:   map[string]*handle{},
 		store:     store,
 		reg:       reg,
@@ -116,6 +121,11 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	if err != nil {
 		return err
 	}
+	var ds drift.Store
+	if s.store != nil {
+		ds = s.store
+	}
+	r.Drift = s.Drift.Tracker(w, ds, s.logf)
 	name := w.Name
 	// The runner has just restored the watch's saved trigger state, if it
 	// still applied (runner.Fingerprint, the history database). The registry
@@ -289,6 +299,9 @@ func (s *Supervisor) ForgetExcept(watches []config.Watch) {
 	}
 	if _, err := s.store.KeepTriggerState(names); err != nil {
 		s.logf("history: dropping trigger state of deleted watches: %v", err)
+	}
+	if err := s.store.KeepDrift(names); err != nil {
+		s.logf("history: dropping the saved position of deleted watches: %v", err)
 	}
 }
 

@@ -50,7 +50,7 @@ type Health struct {
 // no credential (notify.Scrub), at most 200 characters.
 type Delivery struct {
 	TS      time.Time
-	Kind    string // "fired", "down" or "recovered"
+	Kind    string // "fired", "down", "recovered" or "moved"
 	OK      bool   // every notify URL took it
 	Skipped bool   // the watch has no notify URLs, so nothing was sent
 	Err     string // why it wasn't delivered, when !OK && !Skipped

@@ -86,6 +86,10 @@ After `health_after` failed polls in a row (3 by default), whether the grab fail
 
 The alert titles are `watchglass: <name> (down)` and `watchglass: <name> (healthy)`, with bodies like `<name>: no reading for 3 consecutive polls: …` and `<name>: stream recovered`.
 
+## When the camera moves
+
+A bumped camera or a screen that slid on its stand puts the box partly off the digits, and the readings go wrong without the stream failing. watchglass notices when the picture around the box moves, says so on the watch's page and offers to move the box with it. See [When the camera or the screen moves](configuration.md#when-the-camera-or-the-screen-moves).
+
 ## Adaptive polling
 
 Set `max_interval` above `interval` and a watch doubles its gap between polls while nothing changes, up to `max_interval`, and goes back to `interval` as soon as something does. It's off unless you set it. Backing off also stretches how long `confirm` takes in real time. A failed poll puts the watch straight back on its base interval, so noticing a dead stream is never delayed.
