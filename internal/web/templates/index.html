@@ -1,7 +1,7 @@
 {{template "head" .}}
 <div class="page-head">
   <h1>Watches</h1>
-  <p class="muted page-sub">Each watch reads one region of a camera frame and alerts you when it changes.</p>
+  <p class="muted page-sub">Each watch reads one region of a camera frame. It alerts you when it changes, or records the number it shows.</p>
   {{if len .Rows}}
   <div class="page-head-actions">
     <span class="count-chip mono" data-count>{{len .Rows}} {{if eq (len .Rows) 1}}watch{{else}}watches{{end}}</span>
@@ -49,12 +49,15 @@
                A '?' the pattern matches on purpose isn't a box to fix,
                so it keeps the green LED. */}}
           <span class="led {{if .Latest.Fired}}led-amber{{else if or (and $r.Unreadable (not $r.Matched)) $r.Skipped}}led-unsure{{else}}led-green{{end}}" aria-hidden="true"></span>
-          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none">{{.}}</span>{{if $r.Skipped}} <span class="reading-sub" title="{{blankSkippedNote}}">skipped</span>{{end}}{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{if and $r.Unreadable $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}"><span aria-hidden="true">no digits read, </span>skipped</span>{{else if $r.Unreadable}} <span class="reading-sub" aria-hidden="true" title="{{if $r.Matched}}{{matchedNote}}{{else}}The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize.{{end}}">no digits read</span>{{else if $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}">skipped</span>{{end}}{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}} <span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}{{with .AlertsRetrying}} <span class="alerts-failing alerts-retrying" title="{{.}}">retrying alert</span>{{end}}</span>
+          <span class="reading-body">{{with $r.Placeholder}}<span class="reading-none">{{.}}</span>{{if $r.Skipped}} <span class="reading-sub" title="{{blankSkippedNote}}">skipped</span>{{end}}{{else}}<span class="mono{{if .Latest.Fired}} fired{{end}}">{{template "readingText" $r}}</span>{{if and $r.Unreadable $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}"><span aria-hidden="true">no digits read, </span>skipped</span>{{else if $r.Unreadable}} <span class="reading-sub" aria-hidden="true" title="{{if $r.Matched}}{{matchedNote}}{{else}}The seven-segment decoder couldn't read any digit. Tighten the region or adjust Binarize.{{end}}">no digits read</span>{{else if $r.Skipped}} <span class="reading-sub" title="{{skippedNote}}">skipped</span>{{end}}{{end}}{{if .Latest.Fired}} <span class="tag tag-fired">fired</span>{{end}}{{with .FiredAgo}} <span class="fired-ago">fired {{.}}</span>{{end}}{{with .AlertsFailing}} <span class="alerts-failing" title="{{.}}">alerts failing</span>{{end}}{{with .AlertsRetrying}} <span class="alerts-failing alerts-retrying" title="{{.}}">retrying alert</span>{{end}}{{with .Value}}{{if .Text}} <span class="reading-value" title="The number it publishes"><span class="reading-value-label">{{if .Counter}}counter{{else}}value{{end}}</span> <span class="reading-value-num">{{.Text}}</span></span>{{end}}{{with .Held}} <span class="tag tag-held" title="{{.Text}}">held back</span>{{end}}{{end}}{{with .Gate}}{{if .Long}} <span class="tag tag-gate" title="{{.Text}}">gate closed {{.Minutes}} min</span>{{end}}{{end}}</span>
         {{else}}
           {{/* After a restart the registry knows the last fire (seeded from
-               the history database) before the watch has read again. */}}
-          <span class="led led-off" aria-hidden="true"></span>
-          <span class="reading-pending">No readings yet</span>{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}
+               the history database) before the watch has read again.
+               A gated watch whose gate hasn't opened since it started has
+               no reading either: a half-lit LED and what the gate is doing,
+               the likeliest sign of a gate box or pattern that is wrong. */}}
+          <span class="led {{with .Gate}}{{if .Open}}led-off{{else}}led-unsure{{end}}{{else}}led-off{{end}}" aria-hidden="true"></span>
+          <span class="reading-pending">No readings yet</span>{{with .Gate}}{{if .Long}} <span class="tag tag-gate" title="{{.Text}}">gate closed {{.Minutes}} min</span>{{else if not .Open}} <span class="reading-sub" title="{{.Text}}">gate closed</span>{{end}}{{end}}{{with .FiredAgo}}<span class="fired-ago">fired {{.}}</span>{{end}}
         {{end}}
         </span>
       </td>

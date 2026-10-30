@@ -696,6 +696,7 @@ func TestFingerprint(t *testing.T) {
 		"headers":      func(w *config.Watch) { w.Headers = []string{"X-Key: 1"} },
 		"tls_insecure": func(w *config.Watch) { w.TLSInsecure = true },
 		"unit":         func(w *config.Watch) { w.Unit, w.DeviceClass = "°C", "temperature" },
+		"counter":      func(w *config.Watch) { w.Counter, w.MaxRise = true, 5 },
 		"confirm":      func(w *config.Watch) { w.Trigger.Confirm = 5 },
 		"cooldown":     func(w *config.Watch) { w.Trigger.Cooldown = 0 },
 		"engine spelled out": func(w *config.Watch) {

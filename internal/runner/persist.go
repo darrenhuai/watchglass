@@ -52,7 +52,7 @@ func restoreWindow(w config.Watch) time.Duration {
 // pattern, op, threshold). Saved trigger state is only restored under the
 // same fingerprint, so editing any of those starts the watch fresh, and
 // editing anything else (notify URLs, interval, confirm, cooldown, headers,
-// the Home Assistant unit, the camera's password, a field the trigger type
+// the Home Assistant unit, counter and max_rise, the camera's password, a field the trigger type
 // doesn't read, another spelling of the same preprocess) does not.
 //
 // It hashes the whole watch with the fields that don't matter cleared,
@@ -66,7 +66,7 @@ func Fingerprint(w config.Watch) string {
 	w.Name = ""
 	w.Interval, w.MaxInterval, w.HealthAfter = 0, 0, 0
 	w.Notify, w.Headers, w.TLSInsecure = nil, nil, false
-	w.Unit, w.DeviceClass = "", ""
+	w.Unit, w.DeviceClass, w.Counter, w.MaxRise = "", "", false, 0
 	w.Trigger.Confirm, w.Trigger.Cooldown = 0, 0
 	if w.Engine == "" {
 		w.Engine = "tesseract" // the default, spelled either way
@@ -86,13 +86,22 @@ func Fingerprint(w config.Watch) string {
 	if w.Preprocess.Threshold > 0 {
 		w.Preprocess.Grayscale = false
 	}
+	// A gate read with the watch's own engine is the same gate whether
+	// its engine is spelled out or not.
+	if w.Gate != nil {
+		g := *w.Gate
+		if g.Engine == w.Engine { // w.Engine is spelled out above
+			g.Engine = ""
+		}
+		w.Gate = &g
+	}
 	// Fields the trigger type never reads, which the web UI may still carry
 	// over from another type.
 	switch w.Trigger.Type {
 	case "pixel_change":
 		w.Engine, w.Preprocess = "", config.Preprocess{}
 		w.Trigger.Pattern, w.Trigger.Op = "", ""
-	case "ocr_match":
+	case "ocr_match", "value":
 		w.Trigger.Op, w.Trigger.Threshold = "", 0
 	case "ocr_changed":
 		w.Trigger.Pattern, w.Trigger.Op, w.Trigger.Threshold = "", "", 0

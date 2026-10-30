@@ -6,8 +6,26 @@
   var img = document.getElementById("snap");
   var canvas = document.getElementById("overlay");
   var form = document.getElementById("watchform");
-  var fx = form.elements["x"], fy = form.elements["y"],
-      fw = form.elements["w"], fh = form.elements["h"];
+  // fx/fy/fw/fh are the inputs of the box being edited: the value's
+  // region (x, y, w, h), or a gated watch's gate box (gx, gy, gw, gh; see
+  // setBox below). Everything that reads or writes "the region" goes
+  // through them, so the drag, the arrow keys and the manual fields work
+  // on either box the same way.
+  var BOXES = {
+    value: [form.elements["x"], form.elements["y"], form.elements["w"], form.elements["h"]],
+    gate: form.elements["gx"] ? [form.elements["gx"], form.elements["gy"], form.elements["gw"], form.elements["gh"]] : null
+  };
+  var box = "value";
+  var fx, fy, fw, fh;
+  function bindBox(b) {
+    var f = BOXES[b];
+    fx = f[0]; fy = f[1]; fw = f[2]; fh = f[3];
+  }
+  bindBox("value");
+  var gateOn = form.elements["gate_on"];
+  var fsGate = document.getElementById("fs-gate");
+  // The gate box is in play while Gate is ticked on a type that reads text.
+  function gated() { return !!(BOXES.gate && gateOn && gateOn.checked && fsGate && !fsGate.hidden); }
   var name = stage.dataset.name;
   var base = stage.dataset.base || "";
   // Called after the drag or the manual fields change the region inputs
@@ -15,6 +33,7 @@
   // end of this script.
   var regionEdited = function () {};
   var ACCENT = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7fd4a8";
+  var GATE = getComputedStyle(document.documentElement).getPropertyValue("--gate").trim() || "#8ab4ff";
 
   // The editor works in CSS px throughout (pointer positions, hit-testing,
   // painting); only the backing store is scaled by devicePixelRatio, so
@@ -43,11 +62,19 @@
     canvas.height = bh;
     drawRect();
   }
-  function region() {
+  function regionOf(f) {
     return {
-      x: parseFloat(fx.value) || 0, y: parseFloat(fy.value) || 0,
-      w: parseFloat(fw.value) || 0, h: parseFloat(fh.value) || 0
+      x: parseFloat(f[0].value) || 0, y: parseFloat(f[1].value) || 0,
+      w: parseFloat(f[2].value) || 0, h: parseFloat(f[3].value) || 0
     };
+  }
+  function region() { return regionOf([fx, fy, fw, fh]); }
+  // The box that isn't being edited, while a gate is in play; null when
+  // there is only the one box.
+  function otherBox() {
+    if (!gated()) return null;
+    var r = regionOf(box === "gate" ? BOXES.value : BOXES.gate);
+    return r.w > 0 && r.h > 0 ? r : null;
   }
   // The region inputs hold four decimals, so every edge lives on a 1e-4
   // grid. Both edges are snapped to that grid as integers (0..GRID) and
@@ -155,31 +182,62 @@
     ctx.clearRect(0, 0, cssW, cssH);
     var r = region();
     if (!(r.w > 0) || !(r.h > 0)) return;
-    var g = geom(r), full = isFull(r);
+    var g = geom(r), full = isFull(r), other = otherBox();
+    var og = other ? geom(other) : null;
     // What is outside the region is dimmed rather than the inside tinted:
     // a 12% mint tint vanished on the bright frames the region is often
     // meant to watch. The stroke sits on a dark halo for the same reason.
-    if (!full) {
+    if (!full || og) {
       ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
       ctx.fillRect(0, 0, cssW, cssH);
       ctx.clearRect(g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0);
+      if (og) ctx.clearRect(og.x0, og.y0, og.x1 - og.x0, og.y1 - og.y0);
     }
-    ctx.setLineDash(full ? [6, 4] : []);
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
-    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = ACCENT;
-    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
+    // A gated watch's two boxes: the value solid in the accent, the gate
+    // dashed in blue, each named on the image; the one not being edited
+    // has no handles.
+    var editColor = box === "gate" ? GATE : ACCENT;
+    var taken = og ? outline(ctx, og, box === "gate" ? ACCENT : GATE, box === "gate" ? [] : [5, 3], box === "gate" ? "Value" : "Gate") : null;
+    outline(ctx, g, editColor, full && !og ? [6, 4] : box === "gate" ? [5, 3] : [], og ? (box === "gate" ? "Gate" : "Value") : "", taken);
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
     ctx.strokeStyle = "rgba(0, 0, 0, 0.75)";
-    ctx.fillStyle = ACCENT;
+    ctx.fillStyle = editColor;
     Object.keys(g.corners).forEach(function (k) {
       var c = g.corners[k];
       ctx.fillRect(c[0] - HANDLE / 2, c[1] - HANDLE / 2, HANDLE, HANDLE);
       ctx.strokeRect(c[0] - HANDLE / 2 + 0.5, c[1] - HANDLE / 2 + 0.5, HANDLE - 1, HANDLE - 1);
     });
+  }
+  // outline strokes one box on its dark halo, dashed or not, with its name
+  // above it (inside, when it touches the top of the frame), and returns
+  // where the name went. A name that would cover taken (the other box's
+  // name: two boxes that share a corner) goes below its box instead, or
+  // inside its bottom edge when that is the bottom of the frame.
+  function outline(ctx, g, color, dash, label, taken) {
+    ctx.setLineDash(dash);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = color;
+    ctx.strokeRect(g.sx, g.sy, g.ex - g.sx, g.ey - g.sy);
+    ctx.setLineDash([]);
+    if (!label) return null;
+    ctx.font = "600 11px " + (getComputedStyle(document.body).fontFamily || "sans-serif");
+    var tw = ctx.measureText(label).width + 8, th = 15;
+    var inside = g.sy - th - 2 < 0;
+    var lx = Math.min(Math.max(g.sx + (inside ? 3 : 0), 0), Math.max(cssW - tw, 0));
+    var ly = inside ? g.sy + 3 : g.sy - th - 2;
+    if (taken && lx < taken.x + taken.w && taken.x < lx + tw && ly < taken.y + taken.h && taken.y < ly + th) {
+      ly = g.ey + th + 2 <= cssH ? g.ey + 2 : g.ey - th - 3;
+    }
+    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillRect(lx, ly, tw, th);
+    ctx.fillStyle = color;
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, lx + 4, ly + th / 2 + 0.5);
+    return { x: lx, y: ly, w: tw, h: th };
   }
   // drawRect is the drag/load path: it syncs the manual fields to match
   // (they aren't the source of the change) and repaints.
@@ -258,6 +316,13 @@
     var full = isFull(region());
     var lead = full ? "Whole frame selected. " : "";
     var aim = full ? "narrow it" : "select the region to watch";
+    if (gated()) {
+      lead = box === "gate" ? "Editing the gate box (blue, dashed). " : "Editing the value box. ";
+      aim = box === "gate" ? "draw it around the code" : "draw it around the value";
+      if (editing()) return lead + "Drag on the image to " + aim + ". Tap Done when you're finished.";
+      if (coarse) return lead + "Tap Edit region, then drag on the image to " + aim + ".";
+      return lead + "Drag on the image to " + aim + ", or click inside the other box to edit that one.";
+    }
     if (editing()) return lead + "Drag on the image to " + aim + ". Tap Done when you're finished.";
     if (coarse) return lead + "Tap Edit region, then drag on the image to " + aim + ".";
     return lead + "Drag on the image to " + aim + ", or set it manually below.";
@@ -347,10 +412,20 @@
     // A finger draws only in editing mode; otherwise the browser has the
     // gesture (touch-action pan-y) and the page scrolls.
     if (e.pointerType === "touch" && !editing()) return;
-    var p = pointerPos(e), r = region();
+    var p = pointerPos(e);
     var mode = hitTest(p[0], p[1], e.pointerType === "touch" ? 14 : 10);
+    var r = region();
     drag = { id: e.pointerId, mode: mode, px: e.clientX, py: e.clientY, live: false,
       saved: [fx.value, fy.value, fw.value, fh.value] };
+    // A drag always draws the box being edited, wherever it starts: the
+    // value box is often the whole frame, and the gate is drawn inside
+    // it. Only a click inside the other box, with no drag, switches to
+    // that box (endDrag), whatever the press would have done to this one:
+    // a gate inside a value box is a press that would move the value box.
+    var ob = otherBox();
+    if (ob && p[0] >= ob.x * cssW && p[0] <= (ob.x + ob.w) * cssW && p[1] >= ob.y * cssH && p[1] <= (ob.y + ob.h) * cssH) {
+      drag.pick = box === "gate" ? "value" : "gate";
+    }
     if (mode === "move") {
       drag.w = toGrid(r.w);
       drag.h = toGrid(r.h);
@@ -406,7 +481,9 @@
     } else {
       announceRegion();
     }
+    var pick = !cancelled && !drag.live && drag.pick;
     drag = null;
+    if (pick) setBox(pick);
     var p = pointerPos(e);
     canvas.style.cursor = e.pointerType === "touch" ? "" : CURSORS[hitTest(p[0], p[1], 10)];
   }
@@ -446,6 +523,70 @@
     regionEdited();
   });
   canvas.addEventListener("keyup", function (e) { if (KEY_DX[e.key] || KEY_DY[e.key]) announceRegion(); });
+
+  // The two boxes of a gated watch (detail.html #box-switch, #fs-gate).
+  // setBox points the editor at one of them; syncGateUI shows the switch,
+  // the gate's fields and the manual fields' box name while Gate is
+  // ticked, and gives a gate that has never been drawn a starting box
+  // next to the value, which it then selects so the next drag places it.
+  var boxSwitch = document.getElementById("box-switch");
+  var manualBox = document.getElementById("manual-box");
+  var CANVAS_KEYS = "Arrow keys move the box, Shift+Arrow resizes it, Alt for fine steps.";
+  function setBox(b) {
+    if (b === "gate" && !gated()) b = "value";
+    var changed = b !== box;
+    box = b;
+    bindBox(b);
+    if (boxSwitch) {
+      Array.prototype.forEach.call(boxSwitch.querySelectorAll("[data-box]"), function (btn) {
+        btn.setAttribute("aria-pressed", btn.getAttribute("data-box") === b ? "true" : "false");
+      });
+    }
+    var on = gated();
+    canvas.setAttribute("aria-label", on ? "Region editor, " + b + " box. " + CANVAS_KEYS : "Region editor. Arrow keys move the region, Shift+Arrow resizes it, Alt for fine steps.");
+    if (manualBox) manualBox.textContent = "(" + b + " box)";
+    if (changed) {
+      syncManualFields();
+      announceRegion();
+    }
+    paint();
+  }
+  function syncGateUI() {
+    if (!gateOn) return;
+    var on = gated();
+    ["row-gate-pattern", "row-gate-engine"].forEach(function (id) {
+      var row = document.getElementById(id);
+      if (row) row.hidden = !gateOn.checked;
+    });
+    if (boxSwitch) boxSwitch.hidden = !on;
+    if (manualBox) manualBox.hidden = !on;
+    var gr = regionOf(BOXES.gate);
+    if (on && !(gr.w > 0 && gr.h > 0)) {
+      // Above the value box when there is room, else below it: a third
+      // of its width, as tall, then selected so the next drag places it.
+      var v = regionOf(BOXES.value);
+      var w = Math.min(Math.max(toGrid(v.w / 3), 300), GRID), h = Math.min(Math.max(toGrid(v.h), 300), GRID);
+      var x = Math.min(toGrid(v.x), GRID - w);
+      var y = toGrid(v.y) - h - 100 >= 0 ? toGrid(v.y) - h - 100 : Math.min(toGrid(v.y + v.h) + 100, GRID - h);
+      var f = BOXES.gate;
+      f[0].value = fmt(x); f[1].value = fmt(y); f[2].value = fmt(w); f[3].value = fmt(h);
+      setBox("gate");
+      return;
+    }
+    setBox(on ? box : "value");
+  }
+  if (boxSwitch) {
+    boxSwitch.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-box]");
+      if (btn) setBox(btn.getAttribute("data-box"));
+    });
+  }
+  if (gateOn) {
+    gateOn.addEventListener("change", function () {
+      syncGateUI();
+      markTestStale();
+    });
+  }
   canvas.addEventListener("focus", announceRegion);
   img.addEventListener("load", sizeCanvas);
   window.addEventListener("resize", sizeCanvas);
@@ -913,6 +1054,8 @@
   // the time between the two frames it compares (pixelGapMs).
   var TEST_FIELDS = { ttype: 1, engine: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
     pp_rotate: 1, pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
+  // A gated watch's Test reads the gate with these too (gate.go testGate).
+  TEST_FIELDS.gate_on = TEST_FIELDS.gate_pattern = TEST_FIELDS.gate_engine = 1;
   function testFieldChanged(e) {
     if (!e.target) return;
     if (TEST_FIELDS[e.target.name] || (e.target.name === "interval" && testEngine() === "")) markTestStale();
@@ -946,7 +1089,7 @@
   // as the camera sends it: no Upscale, no Rotate.
   function cropSize(width) {
     if (img.hidden || !img.naturalWidth) return null;
-    var r = region(), up = parseInt((form.elements["pp_upscale"] || {}).value, 10);
+    var r = regionOf(BOXES.value), up = parseInt((form.elements["pp_upscale"] || {}).value, 10);
     var turn = (form.elements["pp_rotate"] || {}).value;
     if (!(up > 1) || testEngine() === "") up = 1;
     var w = r.w * img.naturalWidth * up, h = r.h * img.naturalHeight * up;
@@ -1580,6 +1723,7 @@
   var patternHelp = document.getElementById("pattern-help");
   var fsPreprocess = document.getElementById("fs-preprocess");
   var fsHA = document.getElementById("fs-ha");
+  var fsMeter = document.getElementById("fs-meter");
   var ttypeHelp = document.getElementById("ttype-help");
   var thresholdHelp = document.getElementById("threshold-help");
   var engineNote = document.getElementById("engine-note");
@@ -1592,7 +1736,8 @@
     pixel_change: "Fires when at least Threshold percent of the region's pixels change between frames, and again each Cooldown while it stays changed. It compares the pixels as the camera sends them, so Engine and Preprocess (Rotate included) aren't used.",
     ocr_match: "Fires when the text read from the region starts matching Pattern (a regular expression).",
     ocr_changed: "Fires each time the text read from the region settles on a new value.",
-    numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number."
+    numeric: "Reads a number from the region and fires when it goes above or below Threshold (set under Compare). Pattern is optional; its first capture group picks the number.",
+    value: "Reads a number from the region and records it: Home Assistant's Value, the history and its CSV. It never sends an alert. Pattern is optional; its first capture group picks the number."
   };
   // What Confirm counts per type (trigger.go counts readings that meet the
   // condition, or the same text for ocr_changed); the same sentences as
@@ -1600,13 +1745,15 @@
   var CONFIRM_HELP = {
     ocr_match: "Readings in a row that must match Pattern before it fires. Blank means 3.",
     ocr_changed: "Readings in a row that must show the same new text before it counts. Blank means 3.",
-    numeric: "Readings in a row that must be on the same side of the threshold. Blank means 3."
+    numeric: "Readings in a row that must be on the same side of the threshold. Blank means 3.",
+    value: "The value is the middle of the last 2 × Confirm − 1 numbers read, so Confirm readings must agree before it moves. Blank means 3."
   };
   // patternHelps in formview.go: a `quoted` stretch is a machine token,
   // shown in monospace (setPatternHelp).
   var PATTERN_HELP = {
     ocr_match: "Plain words work; `(?i)` ignores case; `a|b` matches either.",
-    numeric: "Leave it empty to use the first number read."
+    numeric: "Leave it empty to use the first number read.",
+    value: "Leave it empty to use the first number read."
   };
   // config.go rejects a pixel_change threshold of 0, hence "above 0".
   var THRESHOLD_HELP = {
@@ -1707,10 +1854,12 @@
   function updateTriggerFields() {
     if (!ttypeSel) return;
     var t = ttypeSel.value;
-    if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric");
+    if (rowPattern) rowPattern.hidden = !(t === "ocr_match" || t === "numeric" || t === "value");
     if (rowOp) rowOp.hidden = t !== "numeric";
     if (rowThreshold) rowThreshold.hidden = !(t === "pixel_change" || t === "numeric");
     if (rowConfirm) rowConfirm.hidden = t === "pixel_change";
+    var rowCooldown = document.getElementById("row-cooldown");
+    if (rowCooldown) rowCooldown.hidden = t === "value";
     if (confirmHelp) confirmHelp.textContent = CONFIRM_HELP[t] || "";
     if (patternHelp) {
       patternHelp.textContent = "";
@@ -1719,7 +1868,13 @@
       });
     }
     if (fsPreprocess) fsPreprocess.hidden = t === "pixel_change";
-    if (fsHA) fsHA.hidden = t !== "numeric";
+    // pixel_change reads no text, so it has no gate (the save drops it).
+    if (fsGate) fsGate.hidden = t === "pixel_change";
+    syncGateUI();
+    // A number (numeric, value): Home Assistant's unit and class, and
+    // whether it is a counter.
+    if (fsHA) fsHA.hidden = !(t === "numeric" || t === "value");
+    if (fsMeter) fsMeter.hidden = !(t === "numeric" || t === "value");
     if (ttypeHelp) ttypeHelp.textContent = TRIGGER_HELP[t] || "";
     if (thresholdHelp) thresholdHelp.textContent = THRESHOLD_HELP[t] || "";
     // Compare: the validator only takes gt or lt for numeric, so a type
@@ -1777,6 +1932,8 @@
         note: "Filled in for status text. Change Pattern to the words your screen shows, then press Test this region." },
       digits: { engine: "sevenseg", ttype: "numeric", confirm: "2", op: "gt",
         note: "Filled in for a digit display. Set Threshold to the number that should fire it, then press Test this region." },
+      meter: { engine: "sevenseg", ttype: "value", confirm: "3",
+        note: "Filled in to record the number on a digit display. Pick a Device class and Unit below (energy and kWh for an electricity meter), then press Test this region." },
       change: { engine: "tesseract", ttype: "pixel_change", tthreshold: "20",
         note: "Filled in: fires when a fifth of the box changes. Press Save to keep it." }
     };
@@ -1918,16 +2075,26 @@
       units.forEach(function (u) { var o = document.createElement("option"); o.value = u; unitList.appendChild(o); });
     }
     if (dclassHelp) {
-      dclassHelp.textContent = cls ? "Home Assistant takes " + spellUnits(units) + " for " + cls + "." :
-        "What the number measures. Home Assistant uses it for the icon and unit conversion.";
+      dclassHelp.textContent = !cls ? "What the number measures. Home Assistant uses it for the icon and unit conversion." :
+        units.length ? "Home Assistant takes " + spellUnits(units) + " for " + cls + "." :
+        "Home Assistant gives " + cls + " no unit: leave Unit empty.";
     }
     // A device class makes the unit required (Save refuses one without),
-    // so the hint stops calling it optional (detail.html mirrors this).
+    // so the hint stops calling it optional (detail.html mirrors this);
+    // a class with no unit (ph) wants it empty.
     if (unitHelp) {
-      unitHelp.textContent = cls ? "Shown after the number. Needed for " + cls + "." :
-        "Shown after the number, like °C or rpm. Optional.";
+      unitHelp.textContent = !cls ? "Shown after the number, like °C or rpm. Optional." :
+        units.length ? "Shown after the number. Needed for " + cls + "." : "No unit for " + cls + ".";
     }
+    syncCounterUI();
     if (!fill || !cls || units.indexOf(unitIn.value) >= 0) return;
+    if (!units.length) {
+      // ph: a unit of another class goes; one typed by hand is left for
+      // Save to explain.
+      var other = Object.keys(UNITS).some(function (k) { return k && UNITS[k].indexOf(unitIn.value) >= 0; });
+      if (other) { unitIn.value = ""; unitIn.dispatchEvent(new Event("input", { bubbles: true })); }
+      return;
+    }
     var classed = Object.keys(UNITS).some(function (k) { return k && UNITS[k].indexOf(unitIn.value) >= 0; });
     if (unitIn.value === "" || classed) {
       unitIn.value = units[0];
@@ -1935,6 +2102,28 @@
     }
   }
   if (dclassSel) dclassSel.addEventListener("change", function () { syncUnitUI(true); });
+  // Counter (detail.html #fs-meter): energy, water, gas and volume are
+  // always counters (data-counter-classes mirrors config.CounterClasses),
+  // so the box is ticked and locked for them; Max rise only shows on a
+  // counter. When the class changes again, the box goes back to what the
+  // user had ticked.
+  var counterBox = document.getElementById("f-counter");
+  var rowMaxRise = document.getElementById("row-maxrise");
+  var counterHelp = document.getElementById("counter-help");
+  var COUNTER_CLASSES = counterBox ? (counterBox.getAttribute("data-counter-classes") || "").split(" ") : [];
+  var counterOwn = counterBox ? (counterBox.disabled ? false : counterBox.checked) : false;
+  var COUNTER_HELP = "A reading lower than the last value is held back, not published, and Home Assistant gets a total it can use in the Energy dashboard.";
+  function syncCounterUI() {
+    if (!counterBox) return;
+    var cls = dclassSel ? dclassSel.value : "";
+    var forced = cls !== "" && COUNTER_CLASSES.indexOf(cls) >= 0;
+    if (forced && !counterBox.disabled) counterOwn = counterBox.checked;
+    counterBox.checked = forced ? true : counterOwn;
+    counterBox.disabled = forced;
+    if (counterHelp) counterHelp.textContent = (forced ? "The " + cls + " class is always a counter. " : "") + COUNTER_HELP;
+    if (rowMaxRise) rowMaxRise.hidden = !counterBox.checked;
+  }
+  if (counterBox) counterBox.addEventListener("change", function () { counterOwn = counterBox.checked; syncCounterUI(); });
 
   function resyncFromForm() {
     updateTriggerFields();

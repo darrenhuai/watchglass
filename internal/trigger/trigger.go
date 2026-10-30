@@ -60,6 +60,10 @@ type Event struct {
 	// Unsure is ObserveRead's unsure: a '?' in Reading is a digit the
 	// decoder saw and wasn't sure of, which no pattern matches.
 	Unsure bool
+	// Held is set when a counter's Value was held back (counter.go): it
+	// went down, or rose more than the rise limit allows. HasValue and
+	// HasSettled are false then, so nothing publishes it.
+	Held *Hold
 }
 
 // numRead is one number a numeric watch read, with the text it came from.
@@ -105,6 +109,9 @@ type Evaluator struct {
 	hasPix   bool
 	pixAbove bool
 	pixAt    time.Time
+	// counter is the never-down and rise-limit gate on Value (counter.go),
+	// nil unless SetCounter turned it on.
+	counter *counterGate
 	// Now is the clock; tests replace it.
 	Now func() time.Time
 	// SevenSeg says the readings come from the seven-segment decoder, whose
@@ -159,8 +166,8 @@ func New(cfg config.Trigger) (*Evaluator, error) {
 			return nil, fmt.Errorf("pattern: %w", err)
 		}
 		e.re = re
-	case "numeric":
-		if cfg.Op != "gt" && cfg.Op != "lt" {
+	case "numeric", "value":
+		if cfg.Type == "numeric" && cfg.Op != "gt" && cfg.Op != "lt" {
 			return nil, fmt.Errorf("numeric op must be gt or lt, got %q", cfg.Op)
 		}
 		pat := cfg.Pattern
@@ -293,7 +300,7 @@ func (e *Evaluator) ObserveRead(s string, unsure bool) Event {
 	ev, quiet := e.observeText(s, unsure)
 	ev.Unsure = unsure
 	switch {
-	case e.cfg.Type == "numeric":
+	case e.cfg.Type == "numeric" || e.cfg.Type == "value":
 		e.settleNumber(&ev, s)
 	case quiet:
 		// A '?' reading the watch skipped, or took as its stable text
@@ -339,6 +346,9 @@ func (e *Evaluator) settleNumber(ev *Event, s string) {
 		return
 	}
 	e.textRun = 0
+	if e.counter != nil {
+		e.counter.observe(v)
+	}
 	size := 2*e.cfg.Confirm - 1
 	e.nums = append(e.nums, numRead{v, s})
 	if len(e.nums) > size {
@@ -350,6 +360,12 @@ func (e *Evaluator) settleNumber(ev *Event, s string) {
 	sorted := append([]numRead(nil), e.nums...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].v < sorted[j].v })
 	mid := sorted[size/2]
+	if e.counter != nil {
+		if h := e.counter.check(mid.v); h != nil {
+			ev.Held = h
+			return
+		}
+	}
 	ev.Value, ev.HasValue = mid.v, true
 	ev.Settled, ev.HasSettled = mid.text, true
 }
@@ -372,6 +388,15 @@ func (e *Evaluator) observeText(s string, unsure bool) (ev Event, quiet bool) {
 			return e.skipped(s), partial
 		}
 		key = condKey(met)
+	case "value":
+		// A value watch has no condition: it never fires, and a reading
+		// only feeds the number (settleNumber). One that says nothing is
+		// skipped as numeric skips it, so a long dark spell still forgets.
+		if e.unread(s) {
+			return e.skipped(s), partial
+		}
+		e.lastRead = e.Now()
+		return Event{Reading: s}, false
 	case "numeric":
 		if e.unread(s) {
 			return e.skipped(s), partial
@@ -381,6 +406,11 @@ func (e *Evaluator) observeText(s string, unsure bool) (ev Event, quiet bool) {
 			e.candidate, e.candCount = "", 0
 			e.lastRead = e.Now()
 			return Event{Reading: s}, false
+		}
+		if e.counter != nil && e.counter.holds(v) {
+			// A number the counter holds back (counter.go) isn't trusted
+			// as the Value, so it doesn't drive the alert either.
+			return e.skipped(s), partial
 		}
 		met = (e.cfg.Op == "gt" && v > e.cfg.Threshold) ||
 			(e.cfg.Op == "lt" && v < e.cfg.Threshold)
@@ -496,15 +526,7 @@ func (e *Evaluator) need(key string) int {
 // from its first.
 func (e *Evaluator) skipped(s string) Event {
 	ev := Event{Reading: s}
-	if e.lastRead.IsZero() {
-		e.lastRead = e.Now()
-	}
-	if e.StaleAfter > 0 && e.Now().Sub(e.lastRead) > e.StaleAfter {
-		e.stable, e.hasStable, e.numCond = "", false, false
-		e.candidate, e.candCount = "", 0
-		e.nums, e.lastText, e.textRun = nil, "", 0
-		e.lastRead = time.Time{}
-	}
+	e.Idle()
 	if e.candCount == 0 {
 		return ev
 	}
@@ -521,6 +543,27 @@ func (e *Evaluator) skipped(s string) Event {
 		ev.CooldownEnds = e.cooldownEnds()
 	}
 	return ev
+}
+
+// Idle tells the evaluator a poll went by that it doesn't see at all (a
+// gated watch's frame whose gate was closed, runner/gate.go). Nothing
+// counts and nothing is reported, but the time counts as a skipped
+// reading's does: once the watch has read nothing for StaleAfter, the
+// settled state, the count and the numeric window go (the fire time
+// stays). It reports whether that happened, so the caller can save the
+// state that changed.
+func (e *Evaluator) Idle() (forgot bool) {
+	if e.lastRead.IsZero() {
+		e.lastRead = e.Now()
+	}
+	if e.StaleAfter > 0 && e.Now().Sub(e.lastRead) > e.StaleAfter {
+		e.stable, e.hasStable, e.numCond = "", false, false
+		e.candidate, e.candCount = "", 0
+		e.nums, e.lastText, e.textRun = nil, "", 0
+		e.lastRead = time.Time{}
+		return true
+	}
+	return false
 }
 
 // edge reports whether a reading with candidate key (and, for the
@@ -588,6 +631,11 @@ type Condition struct {
 	// (ocr_match) doesn't match, or one with a digit it wasn't sure of
 	// (CheckRead).
 	Skipped bool
+	// Value is the number a value watch would record from the reading
+	// (HasValue). A value watch has no condition: Met says only that
+	// there is a number.
+	Value    float64
+	HasValue bool
 	// Detail says why, in a short sentence without a trailing period.
 	Detail string
 }
@@ -654,6 +702,20 @@ func CheckRead(cfg config.Trigger, engine, reading string, unsure bool) (Conditi
 			return Condition{Evaluable: true, Met: true, Detail: fmt.Sprintf("%s is %s %s", num(v), word, num(cfg.Threshold))}, nil
 		}
 		return Condition{Evaluable: true, Detail: fmt.Sprintf("%s is not %s %s", num(v), word, num(cfg.Threshold))}, nil
+	case "value":
+		if e.unread(reading) {
+			detail := "A digit wasn't read for sure, so this reading is skipped and the value stays as it was"
+			if reading == "" {
+				detail = "Nothing was read, so this reading is skipped and the value stays as it was"
+			}
+			return Condition{Evaluable: true, Skipped: true, Detail: detail}, nil
+		}
+		v, ok := e.extract(reading)
+		if !ok {
+			return Condition{Evaluable: true, Detail: "No number found in the reading, so it isn't recorded as a value"}, nil
+		}
+		return Condition{Evaluable: true, Met: true, Value: v, HasValue: true,
+			Detail: "The value is " + strconv.FormatFloat(v, 'f', -1, 64)}, nil
 	case "ocr_changed":
 		return Condition{Detail: "Fires when the text changes from one stable reading to another"}, nil
 	}

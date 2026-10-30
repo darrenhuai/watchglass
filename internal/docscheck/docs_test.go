@@ -23,6 +23,7 @@ import (
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/ocr"
+	"github.com/darrenhuai/watchglass/internal/runner"
 	"github.com/darrenhuai/watchglass/internal/web"
 )
 
@@ -355,7 +356,7 @@ func TestUILinksToDocsResolve(t *testing.T) {
 	}
 }
 
-var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met|skipped)(?:\s+reads=(\S+))?\s*-->`)
+var sampleRe = regexp.MustCompile(`<!--\s*sample-check:\s*(\S+)\s+(\S+)\s+(met|not-met|skipped)(?:\s+reads=(\S+))?(?:\s+gate=(open|closed))?\s*-->`)
 
 // sampleStates maps a sample-check verdict to the Test page's verdict
 // state (web.Verdict).
@@ -393,35 +394,39 @@ func TestRecipeSamples(t *testing.T) {
 		for sc.Scan() {
 			for _, m := range sampleRe.FindAllStringSubmatch(sc.Text(), -1) {
 				checks++
-				name, img, verdict, reads := m[1], m[2], m[3], m[4]
+				name, img, verdict, reads, wantGate := m[1], m[2], m[3], m[4], m[5]
 				t.Run(path.Base(f.rel)+"/"+name+"/"+path.Base(img), func(t *testing.T) {
 					w, ok := watches[name]
 					if !ok {
 						t.Fatalf("no watch %q in a yaml block of %s", name, f.rel)
 					}
-					var eng ocr.Engine
-					switch w.Engine {
-					case "sevenseg":
-						eng = ocr.NewSevenSeg()
-					case "", "tesseract":
-						if tess == nil {
-							t.Skip("tesseract isn't installed")
-						}
-						eng = tess
-					case "rapidocr":
-						if !rapidTried {
-							rapidTried = true
-							ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-							if r, err := ocr.DetectRapidOCR(ctx, ""); err == nil {
-								rapid = r
+					engineFor := func(name string) ocr.Engine {
+						switch name {
+						case "sevenseg":
+							return ocr.NewSevenSeg()
+						case "", "tesseract":
+							if tess == nil {
+								t.Skip("tesseract isn't installed")
 							}
-							cancel()
+							return tess
+						case "rapidocr":
+							if !rapidTried {
+								rapidTried = true
+								ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+								if r, err := ocr.DetectRapidOCR(ctx, ""); err == nil {
+									rapid = r
+								}
+								cancel()
+							}
+							if rapid == nil {
+								t.Skip("no Python with rapidocr")
+							}
+							return rapid
 						}
-						if rapid == nil {
-							t.Skip("no Python with rapidocr")
-						}
-						eng = rapid
+						t.Fatalf("engine %q", name)
+						return nil
 					}
+					eng := engineFor(w.Engine)
 					fh, err := os.Open(filepath.Join(root, filepath.FromSlash(path.Join(path.Dir(f.rel), img))))
 					if err != nil {
 						t.Fatal(err)
@@ -455,6 +460,26 @@ func TestRecipeSamples(t *testing.T) {
 						t.Fatal(err)
 					}
 					state, title, detail := web.VerdictRead(w.Trigger, engine, text, unsure)
+					// A gated watch reads its gate from the same frame, as
+					// the running watch and Test do; a closed gate makes the
+					// frame a skip whatever the value box says.
+					gate := ""
+					if w.Gate != nil {
+						g, err := runner.ReadGate(ctx, frame, w, engineFor(w.GateEngine()), regexp.MustCompile(w.Gate.Pattern))
+						if err != nil {
+							t.Fatal(err)
+						}
+						gate = "closed"
+						if g.Open {
+							gate = "open"
+						} else {
+							state, title, detail = "skipped", "Gate closed", fmt.Sprintf("the gate box read %q", g.Text)
+						}
+						t.Logf("gate read %q: %s", g.Text, gate)
+					}
+					if wantGate != "" && gate != wantGate {
+						t.Errorf("the gate is %q on this frame; the recipe says %s", gate, wantGate)
+					}
 					t.Logf("read %q: %s. %s", text, title, detail)
 					if state != sampleStates[verdict] {
 						t.Errorf("read %q, and Test says %q (%s); the recipe says %s", text, title, detail, verdict)

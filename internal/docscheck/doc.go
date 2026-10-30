@@ -6,7 +6,7 @@
 // A recipe ties a watch to a sample with an HTML comment, which GitHub
 // doesn't render:
 //
-//	<!-- sample-check: <watch name> <image path> met|not-met|skipped [reads=<text>] -->
+//	<!-- sample-check: <watch name> <image path> met|not-met|skipped [reads=<text>] [gate=open|closed] -->
 //
 // The image path is relative to the Markdown file. The watch is looked up in
 // the file's ```yaml blocks. The check crops the image to the watch's region,
@@ -16,5 +16,8 @@
 // or "Reading skipped" (skipped: a numeric watch on the seven-segment
 // decoder ignores a reading with a '?' in it). reads= compares the text
 // exactly (use it only for sevenseg, whose output doesn't depend on a
-// tesseract version).
+// tesseract version). A watch with a gate has its gate read from the same
+// frame first (runner.ReadGate, as the running watch and Test read it); a
+// closed gate makes the frame "skipped", and gate= says which the recipe
+// expects.
 package docscheck

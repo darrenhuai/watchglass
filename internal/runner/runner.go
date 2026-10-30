@@ -108,6 +108,11 @@ type Runner struct {
 	clock  clock
 	// isDown mirrors the health tracker's verdict, for cond.
 	isDown bool
+	// meter is the published number's bookkeeping (meter.go).
+	meter meter
+	// gate is the watch's gate, when it has one (gate.go).
+	gate gate
+
 	// resendTaken is the notify URLs (by urlKey) that took the last
 	// fire's alert before the restart, when the rest hadn't and the
 	// condition still held at the stop: the first fire after the restart
@@ -182,8 +187,12 @@ func New(w config.Watch, src source.Source, engine ocr.Engine, notifier notify.N
 		store: store, eval: eval, logf: logf,
 		health: health.New(w.HealthAfter), baseIvl: base, maxIvl: time.Duration(w.MaxInterval),
 		wake: make(chan struct{}, 1), clock: realClock{}}
+	if err := r.setupGate(); err != nil {
+		return nil, err
+	}
 	r.restoreState(time.Now())
 	r.restoreHealth()
+	r.restoreCounter()
 	r.noteCondition()
 	return r, nil
 }
@@ -272,7 +281,7 @@ func (r *Runner) Run(ctx context.Context) {
 		case err != nil && ctx.Err() == nil:
 			r.logf("watch %s: %v", r.watch.Name, err)
 		}
-		changed := tickChanged(r.watch.Trigger.Type, ev, err, lastReading)
+		changed := r.pollChanged(ev, err, lastReading)
 		lastReading = ev.Reading
 		interval = NextInterval(r.baseIvl, r.maxIvl, interval, changed)
 
@@ -309,6 +318,7 @@ func (r *Runner) Tick(ctx context.Context) (trigger.Event, error) {
 }
 
 func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
+	r.takeAccept()
 	at := time.Now()
 	var img image.Image
 	err := Contain(func() error {
@@ -330,9 +340,15 @@ func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 		ev       trigger.Event
 		crop     *image.RGBA
 		baseline bool
+		closed   bool
 	)
 	err = Contain(func() error {
 		var err error
+		// A gated watch reads its gate first, from the same frame; a
+		// closed gate skips the poll (gate.go).
+		if closed, err = r.gateClosed(ctx, img); err != nil || closed {
+			return err
+		}
 		ev, crop, baseline, err = r.read(ctx, img)
 		return err
 	})
@@ -353,15 +369,28 @@ func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 		return trigger.Event{}, r.pollFailed(ctx, fmt.Errorf("ocr: %w", err))
 	}
 	r.pollSucceeded(ctx)
+	if closed {
+		// A gated watch's frame of another phase: nothing to evaluate,
+		// record or publish (gate.go).
+		r.gateSkip(at)
+		return trigger.Event{}, nil
+	}
 	if baseline {
 		return trigger.Event{}, nil // a pixel_change watch's first frame
 	}
 
 	if r.store != nil {
-		if err := r.store.Record(r.watch.Name, time.Now(), ev.Reading, ev.Fired); err != nil {
+		var err error
+		if ev.HasValue {
+			err = r.store.RecordValue(r.watch.Name, time.Now(), ev.Reading, ev.Value, ev.Fired)
+		} else {
+			err = r.store.Record(r.watch.Name, time.Now(), ev.Reading, ev.Fired)
+		}
+		if err != nil {
 			r.logf("watch %s: history: %v", r.watch.Name, err)
 		}
 	}
+	r.noteValue(ev, at)
 	// Before the alert is raised: a fire is remembered from the moment it
 	// is decided, so a restart right after it can't send it twice.
 	r.saveState()

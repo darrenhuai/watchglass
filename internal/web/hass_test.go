@@ -153,7 +153,7 @@ func TestUnitAndDeviceClassFields(t *testing.T) {
 	if resp.StatusCode != 400 || !strings.Contains(body, "Humidity needs a unit: %.") {
 		t.Errorf("class without unit: %d; body:\n%s", resp.StatusCode, body)
 	}
-	resp, body = postForm(t, h, "/watch/printer/save", numericSaveForm("kWh", "energy"))
+	resp, body = postForm(t, h, "/watch/printer/save", numericSaveForm("lx", "illuminance"))
 	if resp.StatusCode != 400 || !strings.Contains(body, "Pick a device class from the list, or none.") || !strings.Contains(body, `href="#f-dclass"`) {
 		t.Errorf("unknown class: %d; body:\n%s", resp.StatusCode, body)
 	}

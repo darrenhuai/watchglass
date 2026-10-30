@@ -28,9 +28,9 @@ Each watch becomes a device named `watchglass <watch name>` with these entities:
 | Entity | Type | What it shows |
 |---|---|---|
 | Reading | sensor | The text read, once it has held (below). HA keeps 255 characters, so a longer reading is cut and ends in `…`. |
-| Value | sensor | `numeric` watches only: the number, which HA can graph and keep statistics for. |
+| Value | sensor | `numeric` and `value` watches only: the number, which HA can graph and keep statistics for. |
 | Health | binary sensor (connectivity) | Online while frames are read, offline once the watch counts as down. Online from the first frame read. |
-| Motion | binary sensor (motion) | On for 30 seconds each time the trigger fires. |
+| Motion | binary sensor (motion) | On for 30 seconds each time the trigger fires. A `value` watch never fires, so it has none. |
 | Snapshot | camera | The cropped region from the last fire, turned upright if the watch uses `rotate`. Empty until the watch first fires. |
 
 HA puts the device name in front, so the Value of a watch called `boiler` is "watchglass boiler Value", with the entity ID `sensor.watchglass_boiler_value`.
@@ -45,13 +45,13 @@ Delete a watch and its device goes from HA too. A watch renamed in `config.yaml`
 
 The Reading entity only changes when a reading has held for `confirm` polls in a row, so a frame misread through glare never reaches HA.
 
-- For a `numeric` watch, the Value is the middle (median) of the last 2 × `confirm` − 1 numbers read. With `confirm: 2` or more, a misread digit never reaches the history graph; with `confirm: 1`, every number read is sent. A value that changes on every poll, like power draw, is still followed, one reading behind. The Reading is the text that number came from, or what the panel shows instead of a number (`Err`, `OFF`) once that has held. A seven-segment reading with a `?` anywhere in it (a digit the decoder couldn't read, or read too unsurely to tell from another digit) is skipped, so a display at 71.0 read as `??.0` never sends 0.
+- For a `numeric` or `value` watch, the Value is the middle (median) of the last 2 × `confirm` − 1 numbers read. With `confirm: 2` or more, a misread digit never reaches the history graph; with `confirm: 1`, every number read is sent. A value that changes on every poll, like power draw, is still followed, one reading behind. The Reading is the text that number came from, or what the panel shows instead of a number (`Err`, `OFF`) once that has held. A seven-segment reading with a `?` anywhere in it (a digit the decoder couldn't read, or read too unsurely to tell from another digit) is skipped, so a display at 71.0 read as `??.0` never sends 0.
 - For an `ocr_match` or `ocr_changed` watch on `sevenseg`, a `?` reading the watch skips (the pattern doesn't match it) or takes as its last text read partly (`?2.5` after `22.5`) doesn't reach the Reading either; one the pattern catches on purpose (`End` read as `?`) does.
 - For `pixel_change`, the Reading is the change percentage. It's sent at once when it crosses the threshold in either direction, and otherwise at most once a minute, so camera noise doesn't make a new state every frame.
 
 ### Units and device classes
 
-Give a `numeric` watch a unit and a device class and HA treats the Value as a proper measurement, with long-term statistics. They're under **Home Assistant** on a numeric watch's page, or in `config.yaml`:
+Give a `numeric` or `value` watch a unit and a device class and HA treats the Value as a proper measurement, with long-term statistics. They're under **Home Assistant** on the watch's page, or in `config.yaml`:
 
 ```yaml
 watches:
@@ -71,16 +71,38 @@ watches:
 |---|---|
 | `temperature` | °C, °F, K |
 | `humidity` | % |
-| `pressure` | hPa, kPa, Pa, mPa, bar, cbar, mbar, psi, mmHg, inHg, inH₂O |
+| `pressure` | hPa, kPa, Pa, mPa, bar, cbar, mbar, psi, mmHg, inHg, inH₂O, atm |
 | `power` | W, kW, mW, MW, GW, TW |
 | `voltage` | V, mV, μV, kV, MV |
 | `current` | A, mA, μA |
 | `weight` | kg, g, mg, μg, lb, oz, st |
 | `duration` | s, min, h, d, ms, μs |
+| `energy` | kWh, Wh, MWh, GWh, TWh, mWh, J, kJ, MJ, GJ, cal, kcal, Mcal, Gcal, thm |
+| `water` | m³, L, gal, ft³, CCF, MCF |
+| `gas` | m³, L, ft³, CCF, MCF |
+| `volume` | L, mL, m³, gal, fl. oz., ft³, CCF, MCF |
+| `battery` | % |
+| `ph` | no unit |
 
-A device class needs one of its units. Without a device class, the unit is free text of up to 16 characters (`rpm`, `L`). HA spells micro with the Greek μ; a `µ` typed on a keyboard is changed into it when you save. Both fields are refused on a watch that isn't `numeric`.
+A device class needs one of its units (`ph` takes none). Without a device class, the unit is free text of up to 16 characters (`rpm`, `L`). HA spells micro with the Greek μ; a `µ` typed on a keyboard is changed into it when you save. Both fields are refused on a watch that isn't `numeric` or `value`.
 
-When a watch stops being numeric, watchglass sends an empty config for its Value entity at start-up so HA removes it. That's expected in the broker log.
+When a watch stops having a number, watchglass sends an empty config for its Value entity at start-up so HA removes it. That's expected in the broker log.
+
+## Meters and the Energy dashboard
+
+The Value's state class tells HA what kind of number it is. Most are `measurement`: a reading at a moment, like a temperature. A counter ([configuration.md](configuration.md#counters)) is `total_increasing`: a running total, which HA turns into a sum per hour and day, and which the Energy dashboard reads. A watch with the `energy`, `water`, `gas` or `volume` device class is always a counter, since HA keeps those only as totals; `counter: true` makes any other value one (with no device class, or `weight` or `duration`). Every other device class stays `measurement`, so a `numeric` watch from before keeps the sensor it had.
+
+To put an electricity meter on the Energy dashboard:
+
+1. Make a `value` watch on the meter's total with `device_class: energy` and `unit: kWh` (the [meter recipe](recipes/meter-energy-dashboard.md) has one).
+2. In HA, open the Energy settings (**Settings → Dashboards → Energy**), and under **Electricity grid** press **Add grid connection** and pick the watch's Value, "watchglass <name> Value".
+3. HA builds its statistics every 5 minutes; as its own note says, new data can take up to 2 hours to show on the dashboard.
+
+A water meter goes under **Water consumption** with `device_class: water`, and a gas meter under **Gas consumption** with `device_class: gas`.
+
+A counter never sends HA a lower value, and a rise above `max_rise` only after the readings agree on it ([rise limit](configuration.md#rise-limit)), so one misread frame can't add a year's energy to the dashboard. **After replacing a meter**, the new one starts low and the watch holds that back: press **Accept** under the held value on the watch's page. HA then sees the total drop, takes it as a new meter (that is what `total_increasing` means) and goes on adding from there; the energy used before stays in the statistics. HA counts the new meter from zero, so whatever it shows when you accept it is added once as used.
+
+**If a wrong high value got through** (a counter without `max_rise`, or a misread that lasted longer than the readings the limit needs), every right reading after it is lower, so the watch holds them all back. Accept the right value on the watch's page, then open **Developer tools → Statistics** in HA, find the watch's Value and adjust the sum at the spike: HA counts the accepted value from zero as a new meter, so without that the whole meter total, thousands of kWh, lands on the dashboard once. Give every meter a `max_rise` so this doesn't happen.
 
 ## Is it connected?
 

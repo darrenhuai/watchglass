@@ -41,6 +41,24 @@
 {{else}}
 <p class="muted">No readings yet</p>
 {{end}}
+{{/* A gated watch's gate on the last poll (gate.go gateFor): open, shut
+     for a frame or a few (the value was skipped), or shut long enough to
+     say so plainly. */}}
+{{with .Gate}}<p class="gate-status{{if .Long}} gate-status-long{{else if not .Open}} gate-status-closed{{end}}"><span class="gate-swatch" aria-hidden="true"></span><span>{{.Text}}{{if and (not .Open) (not .Long) $.Recent}} The latest reading above is from the last open frame.{{end}}</span></p>{{end}}
+{{/* The number a numeric or value watch publishes (valueFor in meter.go),
+     and what a counter is holding back, with the accept button for a
+     lower value after a meter was replaced. */}}
+{{with .Value}}<div class="value-status">
+{{if .Text}}<p class="value-line"><span class="readout-label">{{if .Counter}}Counter{{else}}Value{{end}}</span> <strong class="mono value-now">{{.Text}}</strong>{{if .Kept}} <span class="muted">kept from before the restart</span>{{else if .Accepted}} <span class="muted">accepted, not published yet</span>{{else if not .At.IsZero}} <span class="muted">published <time class="mono" datetime="{{isoTime .At}}">{{.At.Format "15:04:05"}}</time></span>{{end}}</p>
+{{else}}<p class="value-line muted">No value published yet.</p>{{end}}
+{{with .Accepting}}<p class="value-held value-accepting">{{.}} was accepted as the counter's new value. It is published with the next reading at or above it.</p>
+{{else}}{{with .Held}}<p class="value-held">{{.Text}}</p>
+{{if .Lower}}<form method="post" action="{{watchURL $.Base $.Name "/accept-lower"}}" class="accept-form">
+  <input type="hidden" name="value" value="{{.Value}}">
+  <button type="submit" class="btn btn-outline">Accept {{.ValueText}} as the new value</button>
+  <p class="field-hint">Only if the meter was replaced or reset. Readings from {{.ValueText}} up are then published.</p>
+</form>{{end}}{{end}}{{end}}
+</div>{{end}}
 {{/* Whether alerts are getting out (deliveryFor in web.go). A failure
      stays until a later alert goes through or the URLs are changed; the
      error names each URL by scheme://host only. While a URL that didn't

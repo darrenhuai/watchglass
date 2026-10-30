@@ -59,7 +59,7 @@
              resize, drag inside to move. Focusable, so the keyboard drives
              it too; the sr-only readout below announces the region after
              each key. */}}
-        <canvas id="overlay" tabindex="0" role="application" aria-label="Region editor. Arrow keys move the region, Shift+Arrow resizes it, Alt for fine steps." aria-describedby="region-readout"></canvas>
+        <canvas id="overlay" tabindex="0" role="application" aria-label="Region editor{{if .Watch.Gate}}, value box{{end}}. Arrow keys move the region, Shift+Arrow resizes it, Alt for fine steps." aria-describedby="region-readout"></canvas>
         <div id="snap-error" class="snap-error" role="status" hidden></div>
       </div>
       <span id="region-readout" class="sr-only" aria-live="polite"></span>
@@ -68,6 +68,14 @@
       {{/* app.js rewrites the hint from state: no image, touch editing on or
            off, whole frame selected. */}}
       <p id="region-hint" class="hint muted">Drag on the image to select the region to watch, or set it manually below.</p>
+      {{/* A gated watch has two boxes on the one overlay (gate.go): the
+           value (accent, solid) and the gate around the code (blue,
+           dashed). These pick which one the drag, the arrow keys and the
+           manual fields move; app.js shows them while Gate is ticked. */}}
+      <div class="box-switch" id="box-switch" role="group" aria-label="Box to edit"{{if not .Watch.Gate}} hidden{{end}}>
+        <button type="button" class="box-btn box-btn-value" data-box="value" aria-pressed="true"><span class="box-swatch" aria-hidden="true"></span>Value box</button>
+        <button type="button" class="box-btn box-btn-gate" data-box="gate" aria-pressed="false"><span class="box-swatch" aria-hidden="true"></span>Gate box</button>
+      </div>
       <div class="region-btns">
         {{/* Touch screens only (style.css): a finger on the snapshot scrolls
              the page until Edit region is on, so the frame can't trap a
@@ -77,13 +85,14 @@
       </div>
     </div>
     {{with .Form.Err "region"}}<p id="err-region" class="field-error field-error-region">{{.}}</p>{{end}}
+    {{with .Form.Err "gate_region"}}<p id="err-gate-region" class="field-error field-error-region">{{.}}</p>{{end}}
     {{/* The keyboard/screen-reader path to the same region inputs the drag
          writes (app.js applyManualFields validates and copies them over,
          syncManualFields writes them back after a drag). step=any: a drag
          leaves values like 0.0312 that a fixed step would call invalid;
          app.js gives the arrow keys 0.01 steps instead. */}}
     <details class="region-manual" id="region-manual">
-      <summary>Set region manually</summary>
+      <summary>Set region manually<span id="manual-box" class="manual-box"{{if not .Watch.Gate}} hidden{{end}}>(value box)</span></summary>
       <p class="region-manual-hint">Fractions of the frame from its top-left corner, 0 to 1 (0.5 = halfway). Arrow keys step by 0.01.</p>
       <div class="region-manual-grid">
         <div class="field-row">
@@ -122,6 +131,9 @@
         <div id="live-strip"></div>
       </div>
       <p id="live-announce" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+      {{/* Every reading the history database still holds, as a CSV file
+           (meter.go historyCSV): time, reading, value, fired. */}}
+      <p class="live-export"><a href="{{watchURL $.Base .Watch.Name "/history.csv"}}" download>Download readings (CSV)</a> <span class="muted">time, reading, value and whether it fired, {{.HistoryKept}}</span></p>
     </section>
   </div>
   <div class="col-config">
@@ -136,6 +148,13 @@
       <input type="text" name="y" value="{{.Watch.Region.Y}}" hidden tabindex="-1" aria-hidden="true">
       <input type="text" name="w" value="{{.Watch.Region.W}}" hidden tabindex="-1" aria-hidden="true">
       <input type="text" name="h" value="{{.Watch.Region.H}}" hidden tabindex="-1" aria-hidden="true">
+      {{/* The gate's box, written by the same editor as the region above
+           when the Gate box is picked (app.js). Empty until a gate is
+           drawn. */}}
+      <input type="text" name="gx" value="{{with .Watch.Gate}}{{.Region.X}}{{end}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="gy" value="{{with .Watch.Gate}}{{.Region.Y}}{{end}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="gw" value="{{with .Watch.Gate}}{{.Region.W}}{{end}}" hidden tabindex="-1" aria-hidden="true">
+      <input type="text" name="gh" value="{{with .Watch.Gate}}{{.Region.H}}{{end}}" hidden tabindex="-1" aria-hidden="true">
       <fieldset>
         <legend>Trigger</legend>
         {{/* A watch as Create left it gets a head start: each preset fills
@@ -150,6 +169,7 @@
             <button type="button" class="preset" data-preset="text" aria-pressed="false"{{if not (or .TesseractAvailable .RapidOCRAvailable)}} disabled title="Reading text needs tesseract, and it isn't installed"{{end}}><span class="preset-name">Status text</span><span class="preset-desc">{{if or .TesseractAvailable .RapidOCRAvailable}}Words like DONE or ERROR{{else}}Needs tesseract (not installed){{end}}</span></button>
             <button type="button" class="preset" data-preset="digits" aria-pressed="false"><span class="preset-name">Digit display</span><span class="preset-desc">Seven‑segment numbers</span></button>
             <button type="button" class="preset" data-preset="change" aria-pressed="false"><span class="preset-name">Any change</span><span class="preset-desc">Anything in the box changing</span></button>
+            <button type="button" class="preset" data-preset="meter" aria-pressed="false"><span class="preset-name">Meter or logger</span><span class="preset-desc">A number over time, no alert</span></button>
           </div>
           <p id="preset-note" class="field-hint preset-note" aria-live="polite">Fills in the fields below. Nothing is saved until you press Save.</p>
         </div>
@@ -212,6 +232,7 @@
             <option value="ocr_match" {{if eq .Watch.Trigger.Type "ocr_match"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_match")}}disabled{{end}} data-label="ocr_match — {{trigLabel "ocr_match"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_match — {{trigLabel "ocr_match"}}{{if ne .Watch.Trigger.Type "ocr_match"}}{{$needs}}{{end}}</option>
             <option value="ocr_changed" {{if eq .Watch.Trigger.Type "ocr_changed"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "ocr_changed")}}disabled{{end}} data-label="ocr_changed — {{trigLabel "ocr_changed"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>ocr_changed — {{trigLabel "ocr_changed"}}{{if ne .Watch.Trigger.Type "ocr_changed"}}{{$needs}}{{end}}</option>
             <option value="numeric" {{if eq .Watch.Trigger.Type "numeric"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "numeric")}}disabled{{end}} data-label="numeric — {{trigLabel "numeric"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>numeric — {{trigLabel "numeric"}}{{if ne .Watch.Trigger.Type "numeric"}}{{$needs}}{{end}}</option>
+            <option value="value" {{if eq .Watch.Trigger.Type "value"}}selected{{end}} {{if and $locked (ne .Watch.Trigger.Type "value")}}disabled{{end}} data-label="value — {{trigLabel "value"}}"{{if not .TesseractAvailable}} data-needs-tesseract="1"{{end}}{{if not .RapidOCRAvailable}} data-needs-rapidocr="1"{{end}}>value — {{trigLabel "value"}}{{if ne .Watch.Trigger.Type "value"}}{{$needs}}{{end}}</option>
           </select>
           {{with .Form.Err "ttype"}}<p id="err-ttype" class="field-error">{{.}}</p>{{end}}
           {{/* What the selected type does; app.js (TRIGGER_HELP) fills it. */}}
@@ -252,28 +273,63 @@
           {{with .Form.Err "confirm"}}<p id="err-confirm" class="field-error">{{.}}</p>{{end}}
           <p id="confirm-help" class="field-hint">{{confirmHelp .Watch.Trigger.Type}}</p>
         </div>
-        <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}">
+        {{/* A value watch never fires, so it has no cooldown; app.js hides
+             the row for it as for pixel_change's Confirm. */}}
+        <div class="field-row{{if .Form.Err "cooldown"}} field-invalid{{end}}" id="row-cooldown"{{if eq .Watch.Trigger.Type "value"}} hidden{{end}}>
           <label for="f-cooldown">Cooldown</label>
           <input class="control-short" id="f-cooldown" name="cooldown" value="{{.Form.Val "cooldown" (dur .Watch.Trigger.Cooldown)}}" placeholder="e.g. 30s, 5m" autocapitalize="off" pattern="0|(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+" title="A duration like 30s or 5m; 0 for none" spellcheck="false"{{with .Form.Err "cooldown"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "cooldown"}}err-cooldown {{end}}cooldown-help">
           {{with .Form.Err "cooldown"}}<p id="err-cooldown" class="field-error">{{.}}</p>{{end}}
           <p id="cooldown-help" class="field-hint">Quiet period after a notification, e.g. 10m. A change that still holds when it ends notifies then.</p>
         </div>
       </fieldset>
-      {{/* Home Assistant: what a numeric watch's number is (config.Watch
-           Unit and DeviceClass), sent with its value sensor over MQTT so HA
-           can graph it. Only numeric watches have a number, so app.js hides
-           the fieldset for the other types and the save drops both fields
-           there. The Unit suggestions follow the device class (data-units,
-           config.DeviceClassUnits); a class takes only the units HA accepts
-           for it. */}}
-      <fieldset id="fs-ha"{{if ne .Watch.Trigger.Type "numeric"}} hidden{{end}}>
+      {{/* Gate (config.Gate, gate.go): for a display that cycles through
+           values that look alike, a second box around the code that says
+           which one is showing. A frame where it doesn't match is skipped.
+           gate_shown tells the save the fieldset was on the page, since an
+           unticked box sends nothing. pixel_change reads no text, so app.js
+           hides it there and the save drops the gate. */}}
+      <fieldset id="fs-gate"{{if eq .Watch.Trigger.Type "pixel_change"}} hidden{{end}}>
+        <legend>Gate <span class="legend-note">for a display that cycles through values</span></legend>
+        <input type="text" name="gate_shown" value="1" hidden tabindex="-1" aria-hidden="true">
+        <div class="field-row" id="row-gate">
+          <label for="f-gate">Use a gate</label>
+          <label class="checkbox"><input type="checkbox" id="f-gate" name="gate_on"{{if .Watch.Gate}} checked{{end}} aria-describedby="gate-help"> Read the value only when a code shows</label>
+          <p id="gate-help" class="field-hint">For a meter that shows 1.8.0, then 2.8.0, each with its own total. Draw a second box around the code. On a frame where it doesn't match Gate pattern, the poll is skipped: nothing is published or counted.</p>
+        </div>
+        <div class="field-row{{if .Form.Err "gate_pattern"}} field-invalid{{end}}" id="row-gate-pattern"{{if not .Watch.Gate}} hidden{{end}}>
+          <label for="f-gate-pattern">Gate pattern</label>
+          <input id="f-gate-pattern" name="gate_pattern" class="mono" value="{{with .Watch.Gate}}{{.Pattern}}{{end}}" placeholder="e.g. ^1\.8\.0$" spellcheck="false" autocapitalize="off"{{with .Form.Err "gate_pattern"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "gate_pattern"}}err-gate-pattern {{end}}gate-pattern-help">
+          {{with .Form.Err "gate_pattern"}}<p id="err-gate-pattern" class="field-error">{{.}}</p>{{end}}
+          <p id="gate-pattern-help" class="field-hint">What the code box reads when the value you want is showing. Use ^ and $ when one code is part of another, like 2 and 12.</p>
+        </div>
+        <div class="field-row{{if .Form.Err "gate_engine"}} field-invalid{{end}}" id="row-gate-engine"{{if not .Watch.Gate}} hidden{{end}}>
+          <label for="f-gate-engine">Gate engine</label>
+          {{$ge := ""}}{{with .Watch.Gate}}{{$ge = .Engine}}{{end}}
+          <select id="f-gate-engine" name="gate_engine" class="control-medium"{{with .Form.Err "gate_engine"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "gate_engine"}}err-gate-engine {{end}}gate-engine-help">
+            <option value="" {{if eq $ge ""}}selected{{end}}>same as the value</option>
+            <option value="tesseract" {{if eq $ge "tesseract"}}selected{{end}}>tesseract</option>
+            <option value="sevenseg" {{if eq $ge "sevenseg"}}selected{{end}}>sevenseg</option>
+            <option value="rapidocr" {{if eq $ge "rapidocr"}}selected{{end}}>rapidocr</option>
+          </select>
+          {{with .Form.Err "gate_engine"}}<p id="err-gate-engine" class="field-error">{{.}}</p>{{end}}
+          <p id="gate-engine-help" class="field-hint">Keep the value's unless the code is printed in another style.{{with .Watch.Gate}}{{if .Preprocess}} The gate's own preprocess settings in {{$.ConfigFile}} are kept.{{end}}{{end}}</p>
+        </div>
+      </fieldset>
+      {{/* Home Assistant: what a numeric or value watch's number is
+           (config.Watch Unit and DeviceClass), sent with its value sensor
+           over MQTT so HA can graph it. Only those types have a number, so
+           app.js hides the fieldset for the other types and the save drops
+           both fields there. The Unit suggestions follow the device class
+           (data-units, config.DeviceClassUnits); a class takes only the
+           units HA accepts for it. */}}
+      <fieldset id="fs-ha"{{if not (hasValue .Watch.Trigger.Type)}} hidden{{end}}>
         <legend>Home Assistant <span class="legend-note">{{if .MQTT}}sent with the number over MQTT{{else}}used once {{.ConfigFile}} has an mqtt: block{{end}}</span></legend>
         <div class="field-row{{if .Form.Err "unit"}} field-invalid{{end}}">
           <label for="f-unit">Unit</label>
           <input class="control-short mono" id="f-unit" name="unit" value="{{.Watch.Unit}}" list="unit-list" maxlength="16" placeholder="e.g. °C" spellcheck="false" autocapitalize="off"{{with .Form.Err "unit"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "unit"}}err-unit {{end}}unit-help">
           <datalist id="unit-list">{{range unitSuggestions .Watch.DeviceClass}}<option value="{{.}}"></option>{{end}}</datalist>
           {{with .Form.Err "unit"}}<p id="err-unit" class="field-error">{{.}}</p>{{end}}
-          <p id="unit-help" class="field-hint">{{if .Watch.DeviceClass}}Shown after the number. Needed for {{.Watch.DeviceClass}}.{{else}}Shown after the number, like °C or rpm. Optional.{{end}}</p>
+          <p id="unit-help" class="field-hint">{{if .Watch.DeviceClass}}{{if unitSuggestions .Watch.DeviceClass}}Shown after the number. Needed for {{.Watch.DeviceClass}}.{{else}}No unit for {{.Watch.DeviceClass}}.{{end}}{{else}}Shown after the number, like °C or rpm. Optional.{{end}}</p>
         </div>
         <div class="field-row{{if .Form.Err "device_class"}} field-invalid{{end}}">
           <label for="f-dclass">Device class</label>
@@ -283,7 +339,31 @@
             {{end}}
           </select>
           {{with .Form.Err "device_class"}}<p id="err-device-class" class="field-error">{{.}}</p>{{end}}
-          <p id="dclass-help" class="field-hint">{{with unitSuggestions .Watch.DeviceClass}}{{if $.Watch.DeviceClass}}Home Assistant takes {{unitList .}} for {{$.Watch.DeviceClass}}.{{else}}What the number measures. Home Assistant uses it for the icon and unit conversion.{{end}}{{end}}</p>
+          <p id="dclass-help" class="field-hint">{{with unitSuggestions .Watch.DeviceClass}}{{if $.Watch.DeviceClass}}Home Assistant takes {{unitList .}} for {{$.Watch.DeviceClass}}.{{else}}What the number measures. Home Assistant uses it for the icon and unit conversion.{{end}}{{else}}{{if $.Watch.DeviceClass}}Home Assistant gives {{$.Watch.DeviceClass}} no unit: leave Unit empty.{{end}}{{end}}</p>
+        </div>
+      </fieldset>
+      {{/* Counter (config.Watch Counter, MaxRise; trigger/counter.go): a
+           number that only goes up, like a meter's total. Never down, an
+           optional rise limit, and state_class total_increasing in Home
+           Assistant. energy, water, gas and volume are always counters
+           (data-counter-classes): app.js ticks and locks the box for them.
+           counter_shown tells the save the box was on the page, since an
+           unticked box sends nothing. Max rise shows only on a counter. */}}
+      {{$classCounter := isCounterClass .Watch.DeviceClass}}
+      <fieldset id="fs-meter"{{if not (hasValue .Watch.Trigger.Type)}} hidden{{end}}>
+        <legend>Meter</legend>
+        <div class="field-row{{if .Form.Err "counter"}} field-invalid{{end}}" id="row-counter">
+          <label for="f-counter">Counter</label>
+          <label class="checkbox"><input type="checkbox" id="f-counter" name="counter" data-counter-classes="{{counterClasses}}"{{if or .Watch.Counter $classCounter}} checked{{end}}{{if $classCounter}} disabled{{end}}{{with .Form.Err "counter"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "counter"}}err-counter {{end}}counter-help"> Only goes up, like a meter's total</label>
+          <input type="text" name="counter_shown" value="1" hidden tabindex="-1" aria-hidden="true">
+          {{with .Form.Err "counter"}}<p id="err-counter" class="field-error">{{.}}</p>{{end}}
+          <p id="counter-help" class="field-hint">{{if $classCounter}}The {{.Watch.DeviceClass}} class is always a counter. {{end}}A reading lower than the last value is held back, not published, and Home Assistant gets a total it can use in the Energy dashboard.</p>
+        </div>
+        <div class="field-row{{if .Form.Err "max_rise"}} field-invalid{{end}}" id="row-maxrise"{{if not .Watch.IsCounter}} hidden{{end}}>
+          <label for="f-maxrise">Max rise</label>
+          <input class="control-short" id="f-maxrise" name="max_rise" type="number" step="any" min="0" value="{{.Form.Val "max_rise" (or (and .Watch.MaxRise (printf "%v" .Watch.MaxRise)) "")}}" placeholder="no limit"{{with .Form.Err "max_rise"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "max_rise"}}err-max-rise {{end}}maxrise-help">
+          {{with .Form.Err "max_rise"}}<p id="err-max-rise" class="field-error">{{.}}</p>{{end}}
+          <p id="maxrise-help" class="field-hint">The most the number can go up between two readings, in its unit. A bigger rise is held until 2 × Confirm − 1 readings in a row agree, so one misread digit never reaches the total. Empty for no limit.</p>
         </div>
       </fieldset>
       {{/* Watch-level timing (config.Watch, not the trigger): how often the
