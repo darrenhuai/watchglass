@@ -41,6 +41,9 @@ var (
 
 func (p photoBox) with(pp config.Preprocess) photoBox { p.pp = pp; return p }
 
+// grown is p with its box d px bigger on every side (smaller for d < 0).
+func (p photoBox) grown(d int) photoBox { p.box = p.box.Inset(-d); return p }
+
 // read decodes the box the way a watch does (crop, preprocess, decoder).
 func (p photoBox) read(t *testing.T) string {
 	t.Helper()
@@ -200,6 +203,18 @@ func TestSevenSegPhotoFixturesPinned(t *testing.T) {
 		{"meter 74590, Binarize 160", aclaraBox.with(config.Preprocess{Threshold: 160}), "?"},
 		{"meter 4.96", unitBox, "4.96"},
 		{"angled clock 1:06", photoBox{file: "clock-philips-106.jpg", box: philipsBox}, "?"},
+		// S2's reflective LCDs (sevenseg_lcd_test.go reads them as drawn).
+		{"thermometer 28.8, tight box", seikoTempBox.grown(-6), "28.8"},
+		{"thermometer 28.8, loose box", seikoTempBox.grown(12), "28.8"},
+		{"thermometer 28.8, Binarize 128", seikoTempBox.with(config.Preprocess{Threshold: 128}), "?"},
+		{"thermometer 22.0, Binarize 128", tfaTempBox.with(config.Preprocess{Threshold: 128}), "22.0"},
+		{"thermometer 22.3, Binarize 128", hamaBox.with(config.Preprocess{Threshold: 128}), "?2.3"},
+		{"thermometer 22.3, loose box", hamaBox.grown(6), "22.?"},
+		{"clock 852, tight box", atomixBox.grown(-15), "852"},
+		{"clock 852, loose box", atomixBox.grown(30), "?"},
+		{"kettle meter 120, tight box", kettleBox.grown(-2), "120"},
+		{"kettle meter 120, loose box", kettleBox.grown(4), "?"},
+		{"meter 74590 at q95, tight box", aclaraRimBox.grown(-2), "7459?."},
 	} {
 		if got := c.box.read(t); got != c.want {
 			t.Errorf("%s: read %q, pinned %q", c.name, got, c.want)
@@ -223,6 +238,13 @@ func boxAround(img *image.RGBA, l, t, r, b int) *image.RGBA {
 func smallTenths(whole, tenths string, share float64, dark bool) *image.RGBA {
 	o := clean
 	o.Dark = dark
+	return smallTail(whole, tenths, share, o)
+}
+
+// smallTail is whole rendered with o, and tail after it share as tall, on
+// the same baseline: a thermometer's tenths, a clock's seconds.
+func smallTail(whole, tail string, share float64, o renderOpts) *image.RGBA {
+	tenths := tail
 	a := render(whole, o)
 	so := o
 	so.H = int(float64(o.H) * share)

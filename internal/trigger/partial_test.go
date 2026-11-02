@@ -43,8 +43,8 @@ func sevenseg(t *testing.T, cfg config.Trigger) *Evaluator {
 
 // Round 6's three real photos, each a display well above the watch's
 // threshold that the decoder reads with a digit missing. The default
-// pattern finds a number beside the '?' (0 in "??.0", 5.5 in "?5.5", 3 in
-// "?.3") that is below the threshold, and each one alerted. A numeric
+// pattern finds a number beside the '?' (0 in "??.0", 5.5 in "?5.5", 2.3
+// in "?2.3") that is below the threshold, and each one alerted. A numeric
 // watch must skip those readings: no alert, no progress towards one and
 // no number for Home Assistant.
 func TestPartlyReadPhotosNeverFireANumericWatch(t *testing.T) {
@@ -55,7 +55,7 @@ func TestPartlyReadPhotosNeverFireANumericWatch(t *testing.T) {
 	}{
 		{"car-71-0.png", "??.0", 71.0, config.Trigger{Type: "numeric", Op: "lt", Threshold: 50, Confirm: 2}},
 		{"wall-15-5.png", "?5.5", 15.5, config.Trigger{Type: "numeric", Op: "lt", Threshold: 10, Confirm: 2}},
-		{"hama-22-3.png", "?.3", 22.3, config.Trigger{Type: "numeric", Op: "lt", Threshold: 10, Confirm: 2}},
+		{"hama-22-3-b128.png", "?2.3", 22.3, config.Trigger{Type: "numeric", Op: "lt", Threshold: 10, Confirm: 2}},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			got := readFixture(t, c.file)

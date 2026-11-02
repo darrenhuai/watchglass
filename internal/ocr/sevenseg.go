@@ -82,7 +82,18 @@ func (g glyph) unsure() bool {
 // read is the decode behind Recognize and RecognizeWords: the best reading
 // of the crop, with no glyphs when nothing is lit or nothing reads.
 func (s *SevenSeg) read(img image.Image) reading {
-	g := toGray(img)
+	g0 := toGray(img)
+	g := enlargeSmall(g0)
+	best := readCrop(g)
+	if g.h == g0.h {
+		best = withSmallDigits(g0, best)
+	}
+	return best
+}
+
+// readCrop reads one gray crop, the whole of it and the window inside a
+// housing, and then takes the second opinions and edge checks.
+func readCrop(g grayImg) reading {
 	thr, primary, ok := thresholdLevels(g)
 	if !ok {
 		return reading{} // uniform (or empty) crop: nothing lit
@@ -104,7 +115,7 @@ func (s *SevenSeg) read(img image.Image) reading {
 			}
 		}
 	}
-	return withCutEdges(g, readSpans(g, best))
+	return withCutEdges(g, readSpans(g, withFlatLight(g, best)))
 }
 
 // readGray reads one gray crop; cut says which of its edges findWindow cut
@@ -1452,23 +1463,28 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 	if len(bars) == 0 {
 		return reading{}
 	}
-	clusters := clusterBars(m, bars, inkH)
+	clusters := splitPairs(m, clusterBars(m, bars, inkH))
+	clusters, units := splitStacked(m, clusters, bars, inkH, wk)
 	clusters, points = attachDots(m, clusters, points, leaning)
 	stroke := strokeEstimate(m, clusters, inkH, wk)
+	clusters = dropSpecks(m, clusters, bars, stroke, wk)
 	clusters, split := splitAttachedDots(m, clusters, stroke, inkH)
 	points = append(points, split...)
-	cells, rowH := layoutCells(m, clusters, append(append([]blob(nil), points...), colons...), stroke, inkTop, inkH)
+	clusters, points, colons, promoted := smallOnesAfterPoint(clusters, points, colons, stroke, inkTop, inkH)
+	cells, rowH := layoutCells(m, clusters, points, colons, promoted, stroke, inkTop, inkH)
 	if cells == nil {
 		return reading{}
 	}
 	points = append(points, blurredPoints(cells, inkH)...)
-	points, cutPoints := pointsOnRow(points, cells, stroke, rowH)
+	points, cutPoints := pointsOnRow(points, cells, stroke, rowH, m.h)
 	r := readCells(m, cells, stroke, rowH)
 	if len(r.glyphs) == 0 {
 		return reading{} // a point or colon with no digit is not a reading
 	}
 	for _, k := range cells {
 		switch {
+		case k.absorbed:
+			continue
 		case k.degree:
 			r.marks = append(r.marks, k.c.rect())
 		case k.fragment:
@@ -1479,6 +1495,9 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 		if barPiece(k.c, stroke) {
 			r.bars = append(r.bars, k.c.rect())
 		}
+	}
+	for _, u := range units {
+		r.marks = append(r.marks, u.rect())
 	}
 	for _, p := range cutPoints {
 		r.cutPoints = append(r.cutPoints, p.rect())
@@ -1557,11 +1576,18 @@ func blurredPoints(cells []cell, inkH int) []blob {
 // A point on the baseline with no digit before it and no room for one
 // between it and the box's left edge is returned apart, as cut: the box
 // cut through the digit it follows.
-func pointsOnRow(points []blob, cells []cell, stroke int, rowH float64) (kept, cut []blob) {
+//
+// A mark after the last digit that the box's bottom edge cuts, its centre
+// below the digits' feet, is the top of something under the display (a
+// meter's bar-graph scale) and no point: 002.4 read 002.4. once the 4 read
+// surely.
+func pointsOnRow(points []blob, cells []cell, stroke int, rowH float64, cropH int) (kept, cut []blob) {
 	base, feet := math.MinInt, math.MinInt
+	var footRows []int // each digit's foot: their median is the baseline a mark under the row is below
 	for _, k := range cells {
 		if k.tall && !k.degree && !k.fragment {
 			base, feet = max(base, k.y1), max(feet, k.c.y1)
+			footRows = append(footRows, k.c.y1)
 		}
 	}
 	// Two marks one over the other after the last digit are no point: the
@@ -1582,7 +1608,7 @@ func pointsOnRow(points []blob, cells []cell, stroke int, rowH float64) (kept, c
 	}
 	kept = points[:0]
 	for i, p := range points {
-		if stacked[i] {
+		if stacked[i] || inSmall(p, cells) {
 			continue
 		}
 		if p.cy() > float64(base)+float64(stroke)/2 {
@@ -1590,6 +1616,9 @@ func pointsOnRow(points []blob, cells []cell, stroke int, rowH float64) (kept, c
 		}
 		if p.y1 < feet-stroke {
 			continue // above the baseline
+		}
+		if p.x0 > last && p.y1 == cropH-1 && p.cy() > float64(median(footRows)) {
+			continue // under the display, cut by the box
 		}
 		prev := math.MinInt // the right edge of the nearest digit before it
 		for _, k := range cells {
@@ -2178,6 +2207,10 @@ type cell struct {
 	leftBars   bool    // a narrow cluster where a digit's left-hand bars stand, not a "1"
 	afterMark  bool    // a "1" with a point or colon between it and the glyph before it
 	centre     float64 // reading order
+	sizeRef    float64 // the height its width is judged against (see sizeRef)
+	small      bool    // a small digit after the point or a clock's minutes (see smallAfterPoint)
+	absorbed   bool    // a piece of such a small digit, merged into its cell
+	unread     bool    // a small digit with another one in pieces merged in: read as '?'
 }
 
 // layoutCells turns clusters into cells. A glyph's ink only reaches the top
@@ -2185,17 +2218,22 @@ type cell struct {
 // short), so each tall cluster's cell is extended by a stroke where its
 // ink shows no bar there. Short clusters (a lone "-") take the row's
 // extent. rowH is the row's height with those extensions; cells is nil
-// when nothing tall is showing. marks are the row's points and colons,
+// when nothing tall is showing. points and colons are the row's marks,
 // which a "1"'s cell leaves out of its probes.
-func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (cells []cell, rowH float64) {
+func layoutCells(m bitmap, clusters, points, colons, promoted []blob, stroke, inkTop, inkH int) (cells []cell, rowH float64) {
 	fInk := float64(inkH)
+	marks := append(append([]blob(nil), points...), colons...)
 	reach := stroke + max(1, int(math.Round(reachFrac*float64(stroke))))
 	cells = make([]cell, 0, len(clusters))
 	rowY0, rowY1 := math.MaxInt, math.MinInt
 	maxWide := 0
+	full := fullDigits(clusters, fInk)
 	for _, c := range clusters {
-		k := cell{c: c, centre: c.cx(), y0: c.y0, y1: c.y1}
-		k.wide = float64(c.w()) >= wideCellFrac*fInk
+		k := cell{c: c, centre: c.cx(), y0: c.y0, y1: c.y1, sizeRef: fInk}
+		if full {
+			k.sizeRef = sizeRef(m, c, fInk, stroke, reach)
+		}
+		k.wide = float64(c.w()) >= wideCellFrac*k.sizeRef
 		k.tall = float64(c.h()) >= tallCellFrac*fInk
 		if !k.tall {
 			k.fromRow = true
@@ -2214,6 +2252,16 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 			// upright.
 			thin := float64(c.h()) <= minusMaxStrokes*float64(stroke) || (float64(c.h()) <= minusMaxFrac*fInk && c.w() >= c.h())
 			barLike := thin && c.cy() >= float64(inkTop)+minusBand0*fInk && c.cy() <= float64(inkTop)+minusBand1*fInk
+			if k.degree && barLike && c.w() > c.h() {
+				// A degree sign follows the number. A flat bar before
+				// every digit is its minus sign, high in the row when
+				// the digits have no top bar: -4.2 read a confident 4.2.
+				lead := true
+				for _, o := range clusters {
+					lead = lead && !(o.x1 < c.x0 && float64(o.h()) >= tallCellFrac*fInk)
+				}
+				k.degree = !lead
+			}
 			k.fragment = !k.degree && !barLike
 		} else {
 			if !k.wide || !barAcross(m, c, c.y0, min(c.y1, c.y0+max(1, stroke/2)-1)) {
@@ -2229,12 +2277,13 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 		}
 		cells = append(cells, k)
 	}
+	smallAfterPoint(m, cells, points, colons, promoted, stroke, reach, inkTop, fInk)
 	if rowY0 == math.MaxInt {
 		return nil, 0
 	}
 	rowH = float64(rowY1 - rowY0 + 1)
 	W := cellWidth(cells, maxWide, rowH, inkH, stroke)
-	gap := digitGap(cells, marks)
+	gap := digitGap(cells, marks, fInk)
 	for i := range cells {
 		k := &cells[i]
 		if k.fromRow {
@@ -2253,9 +2302,17 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 			// bars and read a confident 8. A digit the box cuts on the
 			// right is narrow too, but it is on the crop's edge and has
 			// its left-hand bars.
-			narrow := float64(k.c.w()) < narrowCellFrac*float64(maxWide) && float64(k.c.w())*(1-midBand1) <= float64(stroke)
+			// A smaller digit (the tenths) is laid out as wide as the
+			// widest digit drawn its size.
+			full := int(math.Round(float64(maxWide) * k.sizeRef / fInk))
+			if k.small {
+				// Its own height is known (smallAfterPoint), and sizeRef
+				// errs on the large side.
+				full = int(math.Round(float64(maxWide) * float64(k.y1-k.y0+1) / fInk))
+			}
+			narrow := float64(k.c.w()) < narrowCellFrac*float64(full) && float64(k.c.w())*(1-midBand1) <= float64(stroke)
 			if narrow && k.c.x1 < m.w-1 && !leftBar(m, k.c, stroke) {
-				k.x0 = k.x1 - maxWide + 1
+				k.x0 = k.x1 - full + 1
 				for _, o := range clusters {
 					if o.x1 < k.c.x0 {
 						k.x0 = max(k.x0, o.x1+1)
@@ -2265,6 +2322,12 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 		case k.tall: // a "1": its two bars sit at the right of the cell
 			k.x1 = k.c.x1
 			k.x0 = k.x1 - W + 1
+			if k.small {
+				// A smaller "1" has a cell its own size: laid out a
+				// full-size digit wide, a clock's second small 1 took
+				// in the first one's bars (12:34 11 read 12:341?).
+				k.x0 = k.x1 - max(1, int(math.Round(float64(W)*float64(k.y1-k.y0+1)/fInk))) + 1
+			}
 			// A leading "1" is the leftmost thing on most displays and
 			// its cell always begins before its bars, so the cell may
 			// start left of the crop. The bars themselves must not: ink
@@ -2278,7 +2341,12 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 			// left-hand bars of the next digit, whose right-hand bars the
 			// threshold lost or the box cut off: read as a "1", "0" became
 			// "1" (or, with the digit before kept out of the cell, a
-			// confident one).
+			// confident one). A smaller "1" (a clock's seconds) stands
+			// that much closer, by its own size (12:34 01 read 12:340?).
+			scale := 1.0
+			if k.small {
+				scale = math.Min(1, k.sizeRef/fInk)
+			}
 			for _, o := range clusters {
 				if o.x1 < k.c.x0 && float64(o.w()) >= wideCellFrac*fInk && float64(o.h()) >= tallCellFrac*fInk {
 					prev := o.x1
@@ -2287,8 +2355,9 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 							prev = -1 // something stands between: not the digit before
 						}
 					}
-					if prev >= 0 && float64(k.c.x0-prev-1) < gap+oneShiftFrac*float64(maxWide-k.c.w()) {
+					if prev >= 0 && float64(k.c.x0-prev-1) < scale*(gap+oneShiftFrac*float64(maxWide-k.c.w())) {
 						k.leftBars = true
+						k.fragment = k.fragment || windowEdge(k.c, o, clusters, gap)
 					}
 				}
 			}
@@ -2359,7 +2428,9 @@ func layoutCells(m bitmap, clusters, marks []blob, stroke, inkTop, inkH int) (ce
 				from = o.x1 + 1
 			}
 		}
-		k.skip = max(0, from-k.x0)
+		if from != math.MinInt {
+			k.skip = max(0, from-k.x0)
+		}
 	}
 	return cells, rowH
 }
@@ -2386,7 +2457,7 @@ func leftBar(m bitmap, c blob, stroke int) bool {
 // in the row, with no colon or point between them: the median of those
 // spaces, or 0 when the row shows no such pair (some displays leave next
 // to none).
-func digitGap(cells []cell, marks []blob) float64 {
+func digitGap(cells []cell, marks []blob, fInk float64) float64 {
 	var gaps []int
 	var prev *cell
 	for i := range cells {
@@ -2394,7 +2465,11 @@ func digitGap(cells []cell, marks []blob) float64 {
 		if !k.tall || k.degree || k.fragment {
 			continue
 		}
-		if k.wide && prev != nil && prev.wide {
+		// The gap to or from a smaller digit (a clock's seconds) is the
+		// tail's own spacing, not the row's: counted, it had a small
+		// seconds 1 taken for the left-hand bars of a digit (12:34 01
+		// read 12:340?).
+		if k.wide && prev != nil && prev.wide && k.sizeRef >= fInk && prev.sizeRef >= fInk {
 			between := false
 			for _, mk := range marks {
 				between = between || (mk.x0 > prev.c.x1 && mk.x1 < k.c.x0)
@@ -2473,12 +2548,21 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 	// glyphs the glow ran together, which can spell a digit too. A digit
 	// on the crop's edge may be one the box cut through, narrower than any
 	// digit the display draws, and is not the measure.
-	narrowest, wide := math.MaxInt, 0
+	// Widths are judged against each cell's own height, so a smaller digit
+	// (the tenths of a thermometer) is not the measure of the full-size ones,
+	// and a smaller digit is no measure at all: its sizeRef errs on the
+	// large side, and against a small 3 at 0.7 of the height the 8 of 8.3
+	// looked like two digits run together.
+	narrowest, wide := math.Inf(1), 0
+	fullRef := 0.0 // the full-size digits' sizeRef: the row's
+	for _, k := range cells {
+		fullRef = math.Max(fullRef, k.sizeRef)
+	}
 	for _, k := range cells {
 		if k.wide && k.tall && !k.fragment {
 			wide++
-			if k.c.x0 > 0 && k.c.x1 < m.w-1 {
-				narrowest = min(narrowest, k.c.w())
+			if k.c.x0 > 0 && k.c.x1 < m.w-1 && !k.small && k.sizeRef >= fullRef {
+				narrowest = math.Min(narrowest, cellAspect(k))
 			}
 		}
 	}
@@ -2502,7 +2586,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			tol := max(2, int(sticksOutFrac*float64(nb.c.h())))
 			k.y0, k.y1 = max(k.y0, nb.c.y0-tol), min(k.y1, nb.c.y1+tol)
 		}
-		if k.offCrop || k.thin {
+		if k.offCrop || k.thin || k.unread {
 			// A tall narrow blob on the crop's left edge, or thinner than
 			// half a stroke, is a bezel, a reflection or a sliver of a
 			// digit the crop cut through — never a "1" to be read at full
@@ -2512,7 +2596,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			// A bar that only looks like a "1": the edge of the frame or
 			// the housing, a reflection, a speck. Not read as a digit.
 			ch, conf = '?', unsureConf
-		} else if float64(k.x1-k.x0+1) > cellMaxAspect*rowH || (k.wide && wide > 1 && narrowest != math.MaxInt && float64(k.c.w()) >= runTogetherFrac*float64(narrowest)) {
+		} else if float64(k.x1-k.x0+1) > cellMaxAspect*rowH || (k.wide && wide > 1 && !math.IsInf(narrowest, 1) && cellAspect(k) >= runTogetherFrac*narrowest) {
 			// Wider than the row is tall: digits run together, or the
 			// frame round the display, whose ring of edges spells "0".
 			// Or far wider than the other digits: on a small display a
@@ -2533,6 +2617,12 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 				// spells "1" without it), or a mark on the glass.
 				ch, conf, alt = '?', unsureConf, 0
 			}
+		}
+		if blank && k.small {
+			// Ink smallAfterPoint took for a small digit that no probe
+			// finds lit: something is there, and dropped the reading
+			// would be a confident shorter number (8.3 read 8.).
+			ch, conf, blank = '?', unsureConf, false
 		}
 		if blank {
 			continue
