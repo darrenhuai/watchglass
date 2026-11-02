@@ -347,8 +347,10 @@ func TestTrackerIgnoresShake(t *testing.T) {
 	}
 	stretches := map[string][]Result{}
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if strings.HasPrefix(line, "#") {
+	for _, line := range strings.Split(string(raw), "\n") {
+		// A Windows checkout may end lines in \r\n.
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		var name string
