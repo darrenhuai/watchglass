@@ -223,9 +223,12 @@ func (s *Server) Handler() http.Handler {
 	// A value watch's readings out, and a counter's accept (meter.go).
 	mux.HandleFunc("GET /watch/{name}/history.csv", s.historyCSV)
 	mux.HandleFunc("POST /watch/{name}/accept-lower", s.acceptLower)
+	mux.HandleFunc("POST /watch/{name}/move-box", s.moveBox)
+	mux.HandleFunc("POST /watch/{name}/keep-box", s.keepBox)
 	// cop rejects cross-origin browser POSTs (via Sec-Fetch-Site, falling
 	// back to Origin-vs-Host) to the POST routes above — CSRF protection
-	// for /watch/new, /watch/{name}/test, /test-notify, /save and /delete
+	// for /watch/new, /watch/{name}/test, /test-notify, /save, /delete,
+	// /move-box and /keep-box
 	// (a cross-site page must not make watchglass post to URLs of its
 	// choosing any more than it may change the config).
 	// Non-browser clients (curl, scripts) send neither header and are
@@ -339,6 +342,9 @@ type indexRow struct {
 	// Gate is a gated watch's gate (gate.go); the row says when it has
 	// been shut a long time.
 	Gate *gateView
+	// Moved is the position warning (drift.go) when the picture around
+	// the box has moved or can't be found: the row marker's title.
+	Moved string
 }
 
 // agoText says how long ago something was, in the same words as app.js's
@@ -459,6 +465,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, r *http.Request, status int,
 		case "retrying":
 			row.AlertsRetrying = dv.Sentence()
 		}
+		row.Moved = s.driftWarning(r, wc.Name)
 		rows = append(rows, row)
 	}
 	data := indexData{Rows: rows, Form: form, ConfigFile: s.configFile(), Base: s.base(r)}
@@ -531,6 +538,9 @@ type liveData struct {
 	// Gate is what a gated watch's gate did on the last poll (gate.go),
 	// nil for a watch without one.
 	Gate *gateView
+	// Drift is the position warning and its actions (drift.go), nil
+	// when there is nothing to say.
+	Drift *driftView
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -559,6 +569,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		Value:    s.valueFor(wc),
 		Base:     s.base(r),
 		Gate:     s.gateFor(wc),
+		Drift:    s.driftFor(r, name),
 	})
 }
 
@@ -574,7 +585,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 type deliveryView struct {
 	State string
 	At    time.Time // when the alert it describes was raised
-	Kind  string    // "fired", "down" or "recovered"
+	Kind  string    // "fired", "down", "recovered" or "moved"
 	Text  string    // "failed": what went wrong, in sentences (deliveryText); "retrying": why it waits (retryText); "dropped": why it was let go (droppedText)
 	More  string    // "retrying", "dropped": the URLs given up on meanwhile, in sentences
 	MQTT  bool      // "none": fires still go out over MQTT
@@ -623,13 +634,16 @@ func (d deliveryView) TriesText() string {
 
 // Gone is what ends the tries besides a delivery: for a fire, the
 // condition clearing, or a newer change for a watch that fires on one;
-// for a stream alert, the stream changing again.
+// for a stream alert, the stream changing again; for a move alert, the
+// warning going (drift.go).
 func (d deliveryView) Gone() string {
 	switch d.Kind {
 	case "down":
 		return "the camera comes back"
 	case "recovered":
 		return "the camera goes down again"
+	case "moved":
+		return "the picture around the box is back or the box is moved or kept"
 	}
 	if d.Change {
 		return "a newer change replaces it"
@@ -638,13 +652,15 @@ func (d deliveryView) Gone() string {
 }
 
 // KindNote names a non-fire alert: "" for a fire, " (stream down)",
-// " (stream recovered)".
+// " (stream recovered)", " (camera moved or covered)".
 func (d deliveryView) KindNote() string {
 	switch d.Kind {
 	case "down":
 		return " (stream down)"
 	case "recovered":
 		return " (stream recovered)"
+	case "moved":
+		return " (camera moved or covered)"
 	}
 	return ""
 }
@@ -887,7 +903,7 @@ func (s *Server) takeFlash(w http.ResponseWriter, r *http.Request) *flash {
 		}
 		f.Reason = ""
 		return f
-	case "deleted", "accepted":
+	case "deleted", "accepted", "drift-moved", "drift-kept", "drift-gone", "drift-changed":
 		f.Reason = ""
 		return f
 	case "created", "acceptfail":
@@ -2222,6 +2238,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sup.Stop(name)
 	s.reg.Drop(name)
+	s.sup.Drift.Forget(name)
 	s.notifyConfigChanged()
 	s.setFlash(w, r, "deleted", name, "")
 	http.Redirect(w, r, s.base(r)+"/", http.StatusSeeOther)

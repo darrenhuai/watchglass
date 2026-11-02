@@ -22,12 +22,13 @@ import (
 // alert of its kind has replaced it. URLs that took it are not sent it
 // twice. A failure that won't fix itself (HTTP 404, a refused token) is
 // not tried again. All of it runs on the watch's one sender goroutine
-// (sendLoop), which keeps at most one fire alert and one stream alert
-// (down or recovered), so a service that is down for hours piles nothing
-// up, and a camera that blips while a fire alert waits doesn't push that
-// alert out. A stop ends the tries; the restart re-send (persist.go)
-// takes over a fire alert, since it was never marked delivered, and sends
-// it only to the URLs that hadn't taken it.
+// (sendLoop), which keeps at most one fire alert, one stream alert
+// (down or recovered) and one move alert (drift.go), so a service that
+// is down for hours piles nothing up, and a camera that blips while a
+// fire alert waits doesn't push that alert out. A stop ends the tries;
+// the restart re-send (persist.go) takes over a fire alert, since it was
+// never marked delivered, and sends it only to the URLs that hadn't
+// taken it.
 
 // retryDelays is the wait before each new try: 10 s after the first
 // failure, then 20 s, then every 30 s up to two and a half minutes after
@@ -95,10 +96,12 @@ func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) 
 const condMet = "cond:true"
 
 // condition is what the sender checks before trying an alert again:
-// whether a fire's condition still holds and whether the stream is down.
+// whether a fire's condition still holds, whether the stream is down and
+// whether the picture around the box is still moved (drift.go).
 type condition struct {
-	fire bool
-	down bool
+	fire  bool
+	down  bool
+	moved bool
 }
 
 // noteCondition records the watch's condition after a poll, for the
@@ -106,7 +109,7 @@ type condition struct {
 // reason is gone is let go at once rather than at its next try. Runs on
 // the poll goroutine (and once from New).
 func (r *Runner) noteCondition() {
-	c := condition{fire: r.fireHolds(), down: r.isDown}
+	c := condition{fire: r.fireHolds(), down: r.isDown, moved: r.isMoved}
 	r.condMu.Lock()
 	changed := c != r.cond
 	r.cond = c
@@ -140,6 +143,8 @@ func (r *Runner) condHolds(kind string) bool {
 		return r.cond.down
 	case "recovered":
 		return !r.cond.down
+	case "moved":
+		return r.cond.moved
 	}
 	return r.cond.fire
 }
@@ -152,8 +157,9 @@ type owed struct {
 }
 
 // slot is one alert on its way out and, per notify URL, where it stands.
-// A sender has two: one for fires, one for the stream's down and
-// recovered alerts. A newer alert replaces only the one in its own slot.
+// A sender has three: one for fires, one for the stream's down and
+// recovered alerts, one for the camera moving. A newer alert replaces
+// only the one in its own slot.
 type slot struct {
 	cur    alert
 	has    bool           // cur is set
@@ -187,9 +193,12 @@ type sender struct {
 	keys   []string          // urlKey of each notify URL, when the lines are the watch's URLs
 	// stopping is set when no new try may start: the watch is stopping,
 	// or there is no sender goroutine to make it.
-	stopping     bool
-	fire, stream slot
+	stopping           bool
+	fire, stream, move slot
 }
+
+// slots is the sender's slots, fires first.
+func (s *sender) slots() []*slot { return []*slot{&s.fire, &s.stream, &s.move} }
 
 func newSender(r *Runner) *sender {
 	s := &sender{r: r}
@@ -217,18 +226,13 @@ func urlKey(u string) string {
 
 // slotFor is the slot an alert of kind goes in.
 func (s *sender) slotFor(kind string) *slot {
-	if kind == "fired" {
+	switch kind {
+	case "fired":
 		return &s.fire
+	case "moved":
+		return &s.move
 	}
 	return &s.stream
-}
-
-// other is the slot that isn't sl.
-func (s *sender) other(sl *slot) *slot {
-	if sl == &s.fire {
-		return &s.stream
-	}
-	return &s.fire
 }
 
 // name is what the log and the page call line.
@@ -344,7 +348,7 @@ func (s *sender) attempt(ctx context.Context, sl *slot, lines []int) {
 // retry tries each alert again at every URL whose wait is over, unless
 // its reason is gone, which lets every URL off it (prune).
 func (s *sender) retry(ctx context.Context) {
-	for _, sl := range []*slot{&s.fire, &s.stream} {
+	for _, sl := range s.slots() {
 		if !sl.retrying() {
 			continue
 		}
@@ -369,7 +373,7 @@ func (s *sender) retry(ctx context.Context) {
 // cleared, or the stream came back (or went down again), before the
 // service did.
 func (s *sender) prune() {
-	for _, sl := range []*slot{&s.fire, &s.stream} {
+	for _, sl := range s.slots() {
 		if !sl.retrying() || s.r.condHolds(sl.cur.kind) {
 			continue
 		}
@@ -379,6 +383,8 @@ func (s *sender) prune() {
 			why = "the camera came back"
 		case "recovered":
 			why = "the camera went down again"
+		case "moved":
+			why = "the picture around the box is back, or the box was moved"
 		}
 		for _, line := range lineList(sl.owed) {
 			s.r.logf("watch %s: notify (%s): %s before %s took the alert (%s); it is dropped",
@@ -401,7 +407,7 @@ func (s *sender) prune() {
 func (s *sender) stop() {
 	s.stopping = true
 	resent := s.r.watch.Trigger.Type == "ocr_match" || s.r.watch.Trigger.Type == "numeric"
-	for _, sl := range []*slot{&s.fire, &s.stream} {
+	for _, sl := range s.slots() {
 		then := "it goes out again after the restart if the condition still holds"
 		if sl.cur.kind != "fired" || !resent {
 			then = "it is dropped"
@@ -417,7 +423,7 @@ func (s *sender) stop() {
 // nextDue is when the earliest try is due, if any is.
 func (s *sender) nextDue() (time.Time, bool) {
 	var next time.Time
-	for _, sl := range []*slot{&s.fire, &s.stream} {
+	for _, sl := range s.slots() {
 		for _, o := range sl.owed {
 			if next.IsZero() || o.next.Before(next) {
 				next = o.next
@@ -461,8 +467,10 @@ func (s *sender) report(sl *slot) {
 		s.r.markTaken(sl.cur.fired, keys)
 	}
 	s.r.report(s.delivery(sl))
-	if o := s.other(sl); o.retrying() && (!sl.retrying() || o.cur.ts.After(sl.cur.ts)) {
-		s.r.report(s.delivery(o))
+	for _, o := range s.slots() {
+		if o != sl && o.retrying() && (!sl.retrying() || o.cur.ts.After(sl.cur.ts)) {
+			s.r.report(s.delivery(o))
+		}
 	}
 }
 

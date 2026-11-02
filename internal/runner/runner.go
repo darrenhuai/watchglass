@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/drift"
 	"github.com/darrenhuai/watchglass/internal/health"
 	"github.com/darrenhuai/watchglass/internal/history"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
@@ -113,6 +114,10 @@ type Runner struct {
 	// gate is the watch's gate, when it has one (gate.go).
 	gate gate
 
+	// Drift, when set, checks whether the picture around the box has
+	// moved (drift.go); isMoved mirrors its verdict, for cond.
+	Drift   *drift.Tracker
+	isMoved bool
 	// resendTaken is the notify URLs (by urlKey) that took the last
 	// fire's alert before the restart, when the rest hadn't and the
 	// condition still held at the stop: the first fire after the restart
@@ -124,7 +129,7 @@ type Runner struct {
 // Delivery is one report on an alert's way out (see OnDelivery).
 type Delivery struct {
 	TS      time.Time // when the alert was raised; a fire's is its reading's time
-	Kind    string    // "fired", "down" or "recovered"
+	Kind    string    // "fired", "down", "recovered" or "moved"
 	Pending bool      // handed to the sender; the outcome follows
 	OK      bool      // every notify URL took it
 	Skipped bool      // no notify URLs: nothing to send
@@ -371,10 +376,13 @@ func (r *Runner) tick(ctx context.Context) (trigger.Event, error) {
 	r.pollSucceeded(ctx)
 	if closed {
 		// A gated watch's frame of another phase: nothing to evaluate,
-		// record or publish (gate.go).
+		// record or publish (gate.go). The picture around the box is
+		// still there to check for a move, with no reading to go by.
+		r.observeDrift(ctx, img, at, drift.ReadNone)
 		r.gateSkip(at)
 		return trigger.Event{}, nil
 	}
+	r.observeDrift(ctx, img, at, driftRead(r.watch, ev))
 	if baseline {
 		return trigger.Event{}, nil // a pixel_change watch's first frame
 	}

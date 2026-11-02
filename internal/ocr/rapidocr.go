@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"log"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // rapidShim is the Python program watchglass runs for every rapidocr read:
@@ -35,6 +37,9 @@ var ErrNoRapidOCR = errors.New("needs the rapidocr engine but no Python with the
 type RapidOCR struct {
 	Python string
 	run    runFunc
+	// warnCls makes the "can't turn the check off" log line once per
+	// engine rather than once per read.
+	warnCls sync.Once
 }
 
 var _ DetailedEngine = (*RapidOCR)(nil)
@@ -79,7 +84,7 @@ func (r *RapidOCR) read(ctx context.Context, img image.Image) ([]rapidLine, erro
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, fmt.Errorf("rapidocr: encode: %w", err)
 	}
-	out, err := r.run(ctx, r.Python, buf.Bytes(), "-c", rapidShim)
+	out, err := r.run(ctx, r.Python, buf.Bytes(), rapidArgs()...)
 	if err != nil {
 		if ctx.Err() != nil {
 			// The context killed the interpreter; "exit status 1" alone
@@ -88,7 +93,33 @@ func (r *RapidOCR) read(ctx context.Context, img image.Image) ([]rapidLine, erro
 		}
 		return nil, fmt.Errorf("rapidocr: %w", err)
 	}
-	return parseRapidJSON(out)
+	lines, cls, err := parseRapidJSON(out)
+	if err != nil {
+		return nil, err
+	}
+	if cls == "default" {
+		r.warnCls.Do(func() {
+			log.Printf("rapidocr: the rapidocr package that %s runs can't turn its text-direction check off, so a digit display may read upside down. pip install -U rapidocr updates it.", r.Python)
+		})
+	}
+	return lines, nil
+}
+
+// rapidNoCls is the shim's flag for reading with rapidocr's text-direction
+// check (use_cls) off. The check is meant for photographed documents that
+// may be upside down; on a camera box it turns seven-segment digits over
+// and reads them confidently wrong ('12:05' as '50:21' at 99%): some or
+// all digits of 14 of the 73 displays in round 6's photo set. So every
+// watch reads with it off. The cost: a display that is upside down in the
+// picture (a camera mounted the wrong way up) isn't turned by rapidocr any
+// more; the watch's rotate: 180 turns the crop before the read instead,
+// and docs/configuration.md says so.
+const rapidNoCls = "--no-cls"
+
+// rapidArgs is the interpreter's command line for one read: the shim, then
+// the flags it reads from sys.argv.
+func rapidArgs() []string {
+	return []string{"-c", rapidShim, rapidNoCls}
 }
 
 func joinRapidLines(lines []rapidLine) string {
@@ -99,22 +130,25 @@ func joinRapidLines(lines []rapidLine) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-// parseRapidJSON decodes the shim's {"lines": [...]} document. A missing or
-// null list is an empty read; anything that is not that document (a
-// traceback, the Store stub's "Python was not found") is an error quoting
-// the first 200 bytes.
-func parseRapidJSON(b []byte) ([]rapidLine, error) {
+// parseRapidJSON decodes the shim's {"lines": [...], "cls": ...} document.
+// A missing or null list is an empty read. cls is "off" when the
+// text-direction check was off, "default" when this rapidocr couldn't turn
+// it off, and empty from an older shim. Anything that is not that document
+// (a traceback, the Store stub's "Python was not found") is an error
+// quoting the first 200 bytes.
+func parseRapidJSON(b []byte) ([]rapidLine, string, error) {
 	var doc struct {
 		Lines []rapidLine `json:"lines"`
+		Cls   string      `json:"cls"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(b), &doc); err != nil {
 		head := b
 		if len(head) > 200 {
 			head = head[:200]
 		}
-		return nil, fmt.Errorf("rapidocr: unexpected output: %s", head)
+		return nil, "", fmt.Errorf("rapidocr: unexpected output: %s", head)
 	}
-	return doc.Lines, nil
+	return doc.Lines, doc.Cls, nil
 }
 
 // rapidProbe is what a candidate interpreter must run cleanly to count: the
