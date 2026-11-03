@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/darrenhuai/watchglass/internal/config"
+	"github.com/darrenhuai/watchglass/internal/imgproc"
 	"github.com/darrenhuai/watchglass/internal/runner"
 )
 
@@ -58,7 +59,7 @@ func gateFromForm(r *http.Request, base config.Watch, ttype string) (*config.Gat
 	}
 	switch {
 	case strings.TrimSpace(g.Pattern) == "":
-		errs = append(errs, fieldError{"gate_pattern", "Gate pattern is empty. Enter what the code box shows when the value you want is on the display, for example ^1\\.8\\.0$."})
+		errs = append(errs, fieldError{"gate_pattern", "Gate pattern is empty. Enter what the code box shows when the value you want is on the display, for example ^1\\.?8\\.?0$."})
 	default:
 		if _, err := regexp.Compile(g.Pattern); err != nil {
 			errs = append(errs, fieldError{"gate_pattern", "Gate pattern isn't a valid regular expression. " + regexpProblem(strings.TrimPrefix(err.Error(), "error parsing regexp: "))})
@@ -120,6 +121,13 @@ func (s *Server) testGate(ctx context.Context, r *http.Request, wc config.Watch,
 	gt := &gateTest{Pattern: g.Pattern}
 	if len(errs) > 0 {
 		gt.Note = errs[0].Msg
+		return gt
+	}
+	// As for the value box (regionTooSmallText): a gate box that rounds
+	// to no pixel of this frame has nothing to read, which isn't the same
+	// as a gate that read nothing.
+	if imgproc.Crop(frame, g.Region).Bounds().Empty() {
+		gt.Note = fmt.Sprintf("The gate box wasn't read: it is smaller than one pixel of the %d×%d frame. Drag a bigger gate box.", frame.Bounds().Dx(), frame.Bounds().Dy())
 		return gt
 	}
 	tw := wc

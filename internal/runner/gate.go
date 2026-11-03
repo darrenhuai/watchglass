@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/darrenhuai/watchglass/internal/config"
 	"github.com/darrenhuai/watchglass/internal/imgproc"
@@ -93,7 +94,8 @@ type GateStatus struct {
 	LastOpen time.Time
 	// While it is closed: Saw is the last thing the gate read in this
 	// closed run, skipping blank frames (a display that blanks between
-	// phases would otherwise mostly have "seen nothing"), empty when every
+	// phases would otherwise mostly have "seen nothing"; the seven-segment
+	// decoder reads one as "?", see gateSawSomething), empty when every
 	// frame of the run was blank; ClosedSince is the first poll of this
 	// closed run and ClosedPolls how many polls in a row it has been closed.
 	Saw         string
@@ -218,7 +220,7 @@ func (r *Runner) noteGate(g GateReading, at time.Time) {
 			st.ClosedSince = at
 		}
 		st.Open = false
-		if strings.TrimSpace(g.Text) != "" {
+		if gateSawSomething(g.Text) {
 			st.Saw = g.Text
 		}
 		st.ClosedPolls++
@@ -237,4 +239,13 @@ func (r *Runner) noteGate(g GateReading, at time.Time) {
 	case wasLong && g.Open:
 		r.logf("watch %s: the gate is open again; the value is read", r.watch.Name)
 	}
+}
+
+// gateSawSomething reports whether a closed gate's reading is worth
+// remembering as what it last saw: one with a letter or a digit in it. A
+// blank frame reads as nothing to tesseract and rapidocr, and as "?" to
+// the seven-segment decoder, which gives a '?' for anything it finds and
+// can't read; neither is a code, so neither replaces the last code seen.
+func gateSawSomething(text string) bool {
+	return strings.IndexFunc(text, func(c rune) bool { return unicode.IsLetter(c) || unicode.IsDigit(c) }) >= 0
 }
