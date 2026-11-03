@@ -16,9 +16,10 @@ preprocessing to tune. This recipe is that setup.
   and dark digits on a light LCD both read as-is. Leave `preprocess` off
   unless a test shows you need it.
 - Copes with the gaps real displays leave between bars, with glow around
-  lit LEDs, with the unlit "ghost" segments most LED displays show, and
+  lit LEDs, with the unlit "ghost" segments most displays show, with a
+  reflective LCD lit unevenly, with tenths drawn smaller than the rest, and
   with digits from about 30 px tall in the frame up (40 if the picture is
-  soft or grainy).
+  soft or grainy). Smaller digits are enlarged first but read less often.
 - Reads `0`-`9`, a leading `-`, the decimal point and a colon, joined into
   one string: `23.5`, `-8.0`, `1234`, `1:23`. A glyph whose bars spell no
   digit comes back as `?`.
@@ -35,10 +36,10 @@ preprocessing to tune. This recipe is that setup.
 1. Add the watch, open it, and drag a rectangle around *just the digits*.
    Leave out units, labels and the decimal-point-only annunciators some
    meters have. A few pixels of the bezel or housing round the display
-   window are fine; a bright frame edge that runs through the crop looks
-   like a bar. Include the whole height of the digits with a little margin;
-   a crop that clips the top or bottom bar changes what the digits look
-   like.
+   window are fine; a bright frame edge that runs through the digits can
+   look like a bar (standing alone it reads `?`, not `1`). Include the
+   whole height of the digits with a little margin; a crop that clips the
+   top or bottom bar changes what the digits look like.
 2. In the Trigger fieldset set **Engine** to `sevenseg` and the Type to
    `numeric` (or `ocr_changed` if you just want to know the reading moved).
 3. Hit **Test this region**. You should see the reading and one chip per
@@ -118,10 +119,13 @@ Leave `preprocess` alone to start. The decoder binarizes the crop itself
 and picks the polarity, so `invert` and `threshold` add nothing on a clean
 display. One slider can still help: `threshold`, when the display is so
 washed out (direct sunlight, an overexposed camera) that the automatic
-split lands in the wrong place. `upscale` doesn't help this engine: it adds
-pixels, not detail, so digits under about 30 px tall read no better at 2x.
-Move the camera closer instead. Watch the crop preview: you want crisp bars
-and a dark (or light) empty face, nothing in between.
+split lands in the wrong place. Not on a reflective LCD in uneven light,
+though: one threshold for the whole box loses the dim end, and the decoder
+evens out the light itself. Leave `upscale` off too: the decoder enlarges
+small digits itself, more smoothly, and at `upscale: 2` some displays read
+worse. Digits under about 30 px tall still read less often, so move the
+camera closer instead. Watch the crop preview: you want crisp bars and a
+dark (or light) empty face, nothing in between.
 
 ## Caveats
 
