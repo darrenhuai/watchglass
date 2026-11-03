@@ -402,7 +402,7 @@ func TestRecipeSamples(t *testing.T) {
 					var eng ocr.Engine
 					switch w.Engine {
 					case "sevenseg":
-						eng = ocr.NewSevenSeg()
+						eng = ocr.NewSevenSeg().WithLetters(w.Letters)
 					case "", "tesseract":
 						if tess == nil {
 							t.Skip("tesseract isn't installed")

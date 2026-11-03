@@ -107,7 +107,7 @@ func (s *Supervisor) Start(ctx context.Context, w config.Watch) error {
 	// the engine the watch names — tesseract unless it says sevenseg.
 	var engine ocr.Engine
 	if w.Trigger.Type != "pixel_change" {
-		engine, err = s.engines.For(w.Engine)
+		engine, err = s.engines.ForWatch(w.Engine, w.Letters)
 		if err != nil {
 			return fmt.Errorf("watch %q %w", w.Name, err)
 		}

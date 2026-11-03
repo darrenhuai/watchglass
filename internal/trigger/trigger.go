@@ -325,7 +325,7 @@ func (e *Evaluator) settleText(ev *Event, s string) {
 // decoder's '?' readings are digits it couldn't read, not text, so they
 // settle nothing.
 func (e *Evaluator) settleNumber(ev *Event, s string) {
-	if e.unread(s) {
+	if e.unread(s) || e.lettered(s) {
 		e.textRun = 0
 		return
 	}
@@ -373,7 +373,7 @@ func (e *Evaluator) observeText(s string, unsure bool) (ev Event, quiet bool) {
 		}
 		key = condKey(met)
 	case "numeric":
-		if e.unread(s) {
+		if e.unread(s) || e.lettered(s) {
 			return e.skipped(s), partial
 		}
 		v, ok := e.extract(s)
@@ -633,10 +633,12 @@ func CheckRead(cfg config.Trigger, engine, reading string, unsure bool) (Conditi
 		}
 		return Condition{Evaluable: true, Detail: "The text doesn't match the pattern"}, nil
 	case "numeric":
-		if e.unread(reading) {
+		if e.unread(reading) || e.lettered(reading) {
 			detail := "A digit wasn't read for sure, so this reading is skipped and the watch keeps its last state"
 			if reading == "" {
 				detail = "Nothing was read, so this reading is skipped and the watch keeps its last state"
+			} else if e.lettered(reading) {
+				detail = "A letter was read, so this is a code or a word, not a number: this reading is skipped and the watch keeps its last state"
 			}
 			return Condition{Evaluable: true, Skipped: true, Detail: detail}, nil
 		}
@@ -704,4 +706,18 @@ func (e *Evaluator) extract(s string) (float64, bool) {
 // leaveFactor times Confirm readings in a row.
 func (e *Evaluator) unread(s string) bool {
 	return e.SevenSeg && (s == "" || strings.Contains(s, "?"))
+}
+
+// lettered reports whether s is a seven-segment reading with a letter in
+// it (a watch with letters: true read a fault code or a status word: E4,
+// End, Err). For a numeric watch it is no number at all, exactly like a
+// reading with a '?' (unread): the digits beside a letter are the code's,
+// not a value ("E4" is never 4, "2b.5" never 2 or .5), so it counts
+// towards Confirm on neither side, changes no state and never reaches
+// Home Assistant's Value. An ocr_match or ocr_changed watch sees the
+// letters as text. A text engine's letters are text for every type.
+func (e *Evaluator) lettered(s string) bool {
+	return e.SevenSeg && strings.ContainsFunc(s, func(r rune) bool {
+		return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+	})
 }

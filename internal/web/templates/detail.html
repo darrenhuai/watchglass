@@ -197,6 +197,15 @@
                error is retired (app.js). */}}
           <p id="engine-note" class="field-hint engine-note{{if $note.Warn}} is-warn{{end}}{{if $note.Quiet}} sr-only{{end}}"{{if or (not $note.Show) (and $note.Warn (.Form.Err "ttype"))}} hidden{{end}}>{{$note.Text}}</p>
         </div>
+        {{/* Letters (config.Watch.Letters) is the seven-segment decoder's
+             letter table, so the row only shows while Engine is sevenseg
+             (app.js syncEngineUI follows the select) and the save keeps it
+             only for that engine; pixel_change sets it aside like Engine.
+             Test sends it with the other fields. */}}
+        <div class="field-row field-row-check{{if eq .Watch.Trigger.Type "pixel_change"}} is-unused{{end}}" id="row-letters"{{if ne .Watch.Engine "sevenseg"}} hidden{{end}}>
+          <label class="checkbox"><input type="checkbox" id="f-letters" name="letters" aria-describedby="letters-help"{{if .Watch.Letters}} checked{{end}}> Letters</label>
+          <p id="letters-help" class="field-hint">Read the letters of fault codes and status words (E4, End, Err) instead of ?. A numeric watch skips a reading with a letter in it.</p>
+        </div>
         <div class="field-row{{if .Form.Err "ttype"}} field-invalid{{end}}">
           <label for="f-ttype">Type</label>
           <select id="f-ttype" name="ttype"{{if $blocked}} class="needs-engine"{{end}}{{with .Form.Err "ttype"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "ttype"}}err-ttype {{end}}ttype-help">

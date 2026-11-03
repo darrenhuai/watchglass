@@ -22,7 +22,10 @@ preprocessing to tune. This recipe is that setup.
   soft or grainy). Smaller digits are enlarged first but read less often.
 - Reads `0`-`9`, a leading `-`, the decimal point and a colon, joined into
   one string: `23.5`, `-8.0`, `1234`, `1:23`. A glyph whose bars spell no
-  digit comes back as `?`.
+  digit comes back as `?`, unless the watch has `letters: true`: then the
+  letters of fault codes and status words read too (`E4`, `End`, `Err`; the
+  [table](../configuration.md#letters-on-a-seven-segment-display)), and a
+  `numeric` watch skips any reading with one in it.
 - **Test this region** shows one chip per glyph with its confidence (how
   far every segment sat from the on/off line): a clean read scores near
   100, a glyph with a half-lit or half-hidden bar scores low. Anything

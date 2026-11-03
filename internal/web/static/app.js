@@ -911,7 +911,7 @@
   // checks and the preprocessing. Notify and the like don't change what a
   // test shows, and Interval only matters to a pixel_change test: it sets
   // the time between the two frames it compares (pixelGapMs).
-  var TEST_FIELDS = { ttype: 1, engine: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
+  var TEST_FIELDS = { ttype: 1, engine: 1, letters: 1, pattern: 1, op: 1, tthreshold: 1, confirm: 1,
     pp_rotate: 1, pp_grayscale: 1, pp_invert: 1, pp_threshold: 1, pp_upscale: 1 };
   function testFieldChanged(e) {
     if (!e.target) return;
@@ -1678,6 +1678,12 @@
     var rowEngine = document.getElementById("row-engine");
     if (rowEngine) rowEngine.classList.toggle("is-unused", pixel);
     if (engineSel) engineSel.classList.toggle("needs-engine", blocked);
+    // Letters is the seven-segment decoder's: the row shows for that
+    // engine only (the server hides it the same way for the saved one),
+    // and is set aside like Engine's for pixel_change, which reads nothing.
+    var rowLetters = document.getElementById("row-letters");
+    if (rowLetters && engineSel) rowLetters.hidden = engineSel.value !== "sevenseg";
+    if (rowLetters) rowLetters.classList.toggle("is-unused", pixel);
     if (engineNote) {
       var text = engineNoteFor(t, missing);
       engineNote.textContent = text;

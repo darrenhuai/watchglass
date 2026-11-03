@@ -12,7 +12,7 @@ The frames the recipes are tested against. Each was drawn with Pillow for this r
 | [washer-1-23.jpg](washer-1-23.jpg) | a washing machine with 1:23 left | [appliance-time-remaining.md](../appliance-time-remaining.md) |
 | [washer-0-04.jpg](washer-0-04.jpg) | the same machine with 0:04 left | [appliance-time-remaining.md](../appliance-time-remaining.md) |
 | [washer-0-00.jpg](washer-0-00.jpg) | finished, showing 0:00 | [appliance-time-remaining.md](../appliance-time-remaining.md) |
-| [washer-end.jpg](washer-end.jpg) | finished, showing End | [appliance-time-remaining.md](../appliance-time-remaining.md) |
+| [washer-end.jpg](washer-end.jpg) | finished, showing End (redrawn in round 8 on the 0:00 frame, in the cells 0:04 uses, so the d stands clear of the window's edge; the first drawing cut its right bars off) | [appliance-time-remaining.md](../appliance-time-remaining.md) |
 | [console-kernel-panic.png](console-kernel-panic.png) | a Linux console after a kernel panic | [server-console-ipmi.md](../server-console-ipmi.md) |
 | [console-grub-rescue.png](console-grub-rescue.png) | GRUB's rescue prompt | [server-console-ipmi.md](../server-console-ipmi.md) |
 

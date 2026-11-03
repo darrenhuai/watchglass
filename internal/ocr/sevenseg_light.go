@@ -52,7 +52,7 @@ func flatten(g grayImg) grayImg {
 			sum[(y+1)*w+x+1] = sum[y*w+x+1] + row
 		}
 	}
-	out := grayImg{w: g.w, h: g.h, pix: make([]uint8, len(g.pix))}
+	out := grayImg{w: g.w, h: g.h, pix: make([]uint8, len(g.pix)), letters: g.letters}
 	for y := 0; y < g.h; y++ {
 		y0, y1 := max(0, y-r), min(g.h, y+r+1)
 		for x := 0; x < g.w; x++ {
@@ -95,7 +95,7 @@ func withFlatLight(g grayImg, best reading) reading {
 	r := readGray(f, thr, primary, frameCut{})
 	r.offset(win.Min)
 	r = dropFlatTail(r, best)
-	if len(r.glyphs) == 0 || spelled(r) == spelled(best) || flatGhosts(r, best) || lostEdge(f, win, thr[primary], r, best) {
+	if len(r.glyphs) == 0 || spelled(r) == spelled(best) || dashesLose(r, best) || flatGhosts(r, best) || lostEdge(f, win, thr[primary], r, best) {
 		return best
 	}
 	if r.score > best.score || len(best.glyphs) == 0 {

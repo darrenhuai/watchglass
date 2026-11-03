@@ -47,3 +47,17 @@ func (e Engines) For(name string) (Engine, error) {
 	}
 	return nil, fmt.Errorf("engine %q is not one of tesseract, sevenseg, rapidocr", name)
 }
+
+// ForWatch is For with a watch's letters setting (config.Watch.Letters):
+// the seven-segment decoder with its letter table on when letters is set.
+// The other engines read letters anyway and come back as they are.
+func (e Engines) ForWatch(name string, letters bool) (Engine, error) {
+	eng, err := e.For(name)
+	if err != nil {
+		return nil, err
+	}
+	if s, ok := eng.(*SevenSeg); ok && letters != s.Letters {
+		return s.WithLetters(letters), nil
+	}
+	return eng, nil
+}
