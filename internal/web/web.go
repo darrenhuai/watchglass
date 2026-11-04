@@ -326,8 +326,8 @@ type indexRow struct {
 	AlertsFailing  string
 	AlertsRetrying string
 	// Moved is the position warning (drift.go) when the picture around
-	// the box has moved or can't be found: the row marker's title.
-	Moved string
+	// the box has moved or can't be found: the row marker.
+	Moved *driftMark
 }
 
 // agoText says how long ago something was, in the same words as app.js's

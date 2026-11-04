@@ -31,21 +31,27 @@ func openDrift(db *sql.DB) error {
 // driftMeta is a drift.Saved without its pixels, as the meta column
 // holds it.
 type driftMeta struct {
-	Key    string    `json:"key"`
-	FrameW int       `json:"frame_w"`
-	FrameH int       `json:"frame_h"`
-	Box    [4]int    `json:"box"`
-	Area   [4]int    `json:"area"`
-	Scale  int       `json:"scale"`
-	W      int       `json:"w"`
-	H      int       `json:"h"`
-	BaseX  float64   `json:"base_x"`
-	BaseY  float64   `json:"base_y"`
-	State  string    `json:"state"`
-	DX     float64   `json:"dx"`
-	DY     float64   `json:"dy"`
-	Since  time.Time `json:"since"`
-	Shake  float64   `json:"shake"`
+	Key    string  `json:"key"`
+	FrameW int     `json:"frame_w"`
+	FrameH int     `json:"frame_h"`
+	Box    [4]int  `json:"box"`
+	Area   [4]int  `json:"area"`
+	Scale  int     `json:"scale"`
+	W      int     `json:"w"`
+	H      int     `json:"h"`
+	BaseX  float64 `json:"base_x"`
+	BaseY  float64 `json:"base_y"`
+	// MeanX, MeanY: drift.Saved's finer "not moved"; absent in rows
+	// saved before it was kept.
+	MeanX float64   `json:"mean_x,omitzero"`
+	MeanY float64   `json:"mean_y,omitzero"`
+	State string    `json:"state"`
+	DX    float64   `json:"dx"`
+	DY    float64   `json:"dy"`
+	Since time.Time `json:"since"`
+	Shake float64   `json:"shake"`
+	// MovedSince: lost after a move (drift.Saved).
+	MovedSince time.Time `json:"moved_since,omitzero"`
 }
 
 func rect4(r image.Rectangle) [4]int  { return [4]int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} }
@@ -61,8 +67,8 @@ func (s *Store) SaveDrift(watch string, sv drift.Saved) error {
 		return err
 	}
 	m := driftMeta{Key: sv.Key, FrameW: sv.Ref.FrameW, FrameH: sv.Ref.FrameH, Box: rect4(sv.Ref.Box), Area: rect4(sv.Ref.Area),
-		Scale: sv.Ref.Scale, W: sv.Ref.W, H: sv.Ref.H, BaseX: sv.BaseX, BaseY: sv.BaseY,
-		State: string(sv.State), DX: sv.DX, DY: sv.DY, Since: sv.Since, Shake: sv.Shake}
+		Scale: sv.Ref.Scale, W: sv.Ref.W, H: sv.Ref.H, BaseX: sv.BaseX, BaseY: sv.BaseY, MeanX: sv.MeanX, MeanY: sv.MeanY,
+		State: string(sv.State), DX: sv.DX, DY: sv.DY, Since: sv.Since, Shake: sv.Shake, MovedSince: sv.MovedSince}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -89,7 +95,7 @@ func (s *Store) LoadDrift(watch string) (drift.Saved, bool, error) {
 	if err := json.Unmarshal([]byte(meta), &m); err != nil {
 		return drift.Saved{}, false, err
 	}
-	return drift.Saved{Key: m.Key, BaseX: m.BaseX, BaseY: m.BaseY, State: drift.State(m.State), DX: m.DX, DY: m.DY, Since: m.Since, Shake: m.Shake,
+	return drift.Saved{Key: m.Key, BaseX: m.BaseX, BaseY: m.BaseY, MeanX: m.MeanX, MeanY: m.MeanY, State: drift.State(m.State), DX: m.DX, DY: m.DY, Since: m.Since, Shake: m.Shake, MovedSince: m.MovedSince,
 		Ref: drift.Reference{FrameW: m.FrameW, FrameH: m.FrameH, Box: unrect(m.Box), Area: unrect(m.Area),
 			Scale: m.Scale, W: m.W, H: m.H, Gray: gray}}, true, nil
 }

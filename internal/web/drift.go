@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -54,13 +55,26 @@ func (s *Server) driftFor(r *http.Request, name string) *driftView {
 	return nil
 }
 
-// driftWarning is the dashboard row's marker title, or "".
-func (s *Server) driftWarning(r *http.Request, name string) string {
-	if d := s.driftFor(r, name); d != nil && d.Warn() {
-		return d.Sentence()
+// driftMark is the dashboard row's marker: its label and, as its
+// title, the sentence the Live panel shows.
+type driftMark struct{ Label, Title string }
+
+// driftWarning is the dashboard row's marker, or nil.
+func (s *Server) driftWarning(r *http.Request, name string) *driftMark {
+	d := s.driftFor(r, name)
+	if d == nil || !d.Warn() {
+		return nil
 	}
-	return ""
+	label := "camera moved"
+	if d.State == drift.Lost {
+		label = "not in view"
+	}
+	return &driftMark{Label: label, Title: d.Sentence()}
 }
+
+// sameMove is how far, in pixels, the offset a page showed may be from
+// the one the check has now for "Move the box with it" to go ahead.
+const sameMove = 2
 
 // moveBox moves the watch's box by the offset its position check
 // measured, saves the config (comments kept, as every save), restarts the
@@ -73,19 +87,28 @@ func (s *Server) moveBox(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The status is read under applyMu, so a Save that lands at the same
+	// moment either comes first (a new box: the check is learning again,
+	// and nothing is moved) or after the move.
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	st, ok := s.sup.Drift.Status(name)
 	if !ok || st.State != drift.Moved {
 		s.setFlash(w, r, "drift-gone", name, "")
 		http.Redirect(w, r, watchURL(s.base(r), name, ""), http.StatusSeeOther)
 		return
 	}
-	if r.FormValue("dx") != strconv.Itoa(st.DX) || r.FormValue("dy") != strconv.Itoa(st.DY) {
+	// The check keeps refining the offset while the picture stays moved,
+	// so it can be a pixel or two off what the page showed: that is the
+	// same move, measured better, and the box moves by the better one.
+	// Further than that, the picture moved again.
+	fdx, errX := strconv.Atoi(r.FormValue("dx"))
+	fdy, errY := strconv.Atoi(r.FormValue("dy"))
+	if errX != nil || errY != nil || math.Hypot(float64(fdx-st.DX), float64(fdy-st.DY)) > sameMove {
 		s.setFlash(w, r, "drift-changed", name, "")
 		http.Redirect(w, r, watchURL(s.base(r), name, ""), http.StatusSeeOther)
 		return
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
 	var moved config.Region
 	err := s.mutateConfig(func(c *config.Config) error {
 		for i := range c.Watches {

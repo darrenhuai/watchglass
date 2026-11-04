@@ -200,6 +200,43 @@ func TestCoveredLensOnASevenSegWatchIsReported(t *testing.T) {
 	}
 }
 
+// Moved, then the lens covered long enough to be lost, then uncovered
+// with the picture still moved the same way: one "camera moved" alert
+// and one "box not in view" alert, not a second "camera moved" for the
+// move already reported.
+func TestMovedCoveredUncoveredSendsOneMoveAlert(t *testing.T) {
+	w := clockWatch(true)
+	n := &fakeNotifier{}
+	r, err := New(w, &fakeSource{imgs: []image.Image{clockView(t, 0, 0)}}, &fakeOCR{texts: []string{"9:17"}}, n, nil, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	board := drift.NewBoard()
+	r.Drift = board.Tracker(w, nil, t.Logf)
+	at := time.Date(2026, 10, 28, 14, 0, 0, 0, time.Local)
+	observe(r, clockView(t, 0, 0), &at, 12)
+	observe(r, clockView(t, 10, 4), &at, 10)
+	for i := 0; i < 70; i++ {
+		at = at.Add(5 * time.Second)
+		r.observeDrift(context.Background(), covered(int64(i)), at, trigger.Event{})
+	}
+	if st, _ := board.Status("clock"); st.State != drift.Lost {
+		t.Fatalf("covered: %+v, want lost", st)
+	}
+	observe(r, clockView(t, 10, 4), &at, 20)
+	if st, _ := board.Status("clock"); st.State != drift.Moved || st.DX != 10 || st.DY != 4 {
+		t.Errorf("uncovered: %+v, want still moved 10, 4", st)
+	}
+	var moved, lost int
+	for _, s := range n.sent {
+		moved += strings.Count(s, "(camera moved)")
+		lost += strings.Count(s, "(box not in view)")
+	}
+	if moved != 1 || lost != 1 {
+		t.Errorf("sent %d camera-moved and %d not-in-view alerts, want 1 and 1: %q", moved, lost, n.sent)
+	}
+}
+
 // A sevenseg watch whose box sits half off the digits reads "1?:?4": not
 // a reading to take the reference by.
 func TestPartialSevenSegReadingsDontTakeAReference(t *testing.T) {

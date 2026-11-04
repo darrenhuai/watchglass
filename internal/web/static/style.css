@@ -2062,7 +2062,7 @@ fieldset > .field-error { margin-top: var(--space-2); }
   cursor: pointer;
 }
 .link-button:hover { color: var(--accent); text-decoration-color: var(--accent-dim); }
-#live.is-offline #live-status, #live.is-offline #live-strip { opacity: 0.5; transition: opacity var(--dur-fast) var(--ease-out); }
+#live.is-offline #live-drift, #live.is-offline #live-status, #live.is-offline #live-strip { opacity: 0.5; transition: opacity var(--dur-fast) var(--ease-out); }
 /* The watch was deleted underneath the page (app.js retire): the frame
    and its region no longer mean anything, and Test/Edit region/Save are
    disabled. */
