@@ -22,6 +22,10 @@ tests say which box on it they use and why.
 | clock-cyan-2339.jpg | A VFD clock showing 23:39, its unlit segments a faint blue. A 595x268 crop (from pixel 4,27 of the 1023px wide version), JPEG quality 93. | [Flickr](https://www.flickr.com/photos/98552965@N05/22465713579) | josbert.lonnee | [Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/) |
 | oven-mw-2400.jpg | A microwave's clock showing 24:00, its unlit segments showing and a fleck of glare past it. A 152x79 crop (from pixel 188,40 of the 499px wide original), JPEG quality 93. | [Flickr](https://www.flickr.com/photos/98652633@N00/4276946369) | tillwe | [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/) |
 | clock-led-154516.jpg | A station's LED clock showing 15:45:16. A 980x220 crop (from pixel 188,235 of the 1280px wide version), JPEG quality 93. | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:LED_digital_clock_of_MRT_Banqiao_Station_20160205.jpg) | Solomon203 | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| oven-end-vfd.jpg | An oven's VFD panel showing End: the glow runs the E into the n, which stands in the lower half of the row. A 503x308 crop (from pixel 209,138 of the 1024px wide version), JPEG quality 85. | [Flickr](https://www.flickr.com/photos/44124483743@N01/5500859092) | brownpau | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) |
+| odo-jeep.jpg | A Jeep's odometer showing 091308, a VFD. A 314x95 crop (from pixel 438,675 of the 1280px wide version), JPEG quality 90. | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Jeep_Odometer.jpg) | Sav127 | [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) |
+| therm-vaillant-225.jpg | A room thermostat's LCD showing 22.5 with a degree sign a sliver after the 5. A 238x162 crop (from pixel 396,286 of the 1000px wide version), JPEG quality 90. | [Flickr](https://www.flickr.com/photos/34107995@N00/441970348) | www.trek.today | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) |
+| clock-vcr-1234.jpg | A VCR's VFD clock showing 12:34 in italic digits, with its small labels. A 409x193 crop (from pixel 362,192 of the 1280px wide version), JPEG quality 90. | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Vacuum_fluorescent_1.jpg) | Atlant (assumed from the copyright claim; no machine-readable author) | [CC BY 2.5](https://creativecommons.org/licenses/by/2.5/) |
 
 The crops are changes to the originals, and the CC BY-SA ones are shared
 under the same licence as their originals.
@@ -33,6 +37,7 @@ meters are where round 6 found the decoder missing digit cells (see
 `sevenseg_cells_test.go`); the thermometers, the atomix clock, the kettle
 meter and the second Aclara crop are its reflective-LCD and small-digit
 cases, the VFD clock and the microwave its ghost-segment cases, and the
-station clock a box that cuts its leading 1 (see `sevenseg_lcd_test.go`).
+station clock a box that cuts its leading 1 (see `sevenseg_lcd_test.go`),
+and the oven's End, the Jeep odometer and the VCR clock are the letters cases (see `sevenseg_letters_test.go`: the oven reads End; the Jeep through Binarize and the VCR in a shrunk box must never read a letter, nor must the VW odometer's pale 6; the thermostat's 22.5 must read the same with letters on, its degree sign kept apart from the 5).
 Some of these reads sit near a threshold, so a crop saved again at
 another JPEG quality can read differently: keep the files as they are.

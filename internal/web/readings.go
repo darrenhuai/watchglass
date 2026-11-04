@@ -41,6 +41,11 @@ type readingView struct {
 	// it beside a healthy green LED.
 	Skipped bool
 	Matched bool
+	// Lettered, set by viewReadingFor: a seven-segment reading with a
+	// letter in it (a watch with letters on read a fault code or a word).
+	// A numeric watch skips it like a '?' reading (Skipped), and the page
+	// says a letter was read rather than that a digit wasn't.
+	Lettered bool
 }
 
 // matchedNote is what Test and Live say under a '?' reading the watch's
@@ -52,18 +57,20 @@ const matchedNote = "The pattern matches the ? itself, so the watch acts on this
 // watch's '?' reading; blankSkippedNote the same for a blank reading, and
 // Live's hint on it.
 const (
-	skippedNote      = "A digit wasn't read for sure, so the watch skips this reading and keeps its last state."
-	blankSkippedNote = "Nothing was read, so the watch skips this reading and keeps its last state."
+	skippedNote       = "A digit wasn't read for sure, so the watch skips this reading and keeps its last state."
+	blankSkippedNote  = "Nothing was read, so the watch skips this reading and keeps its last state."
+	letterSkippedNote = "A letter was read, so this is a code or a word, not a number. The watch skips this reading and keeps its last state."
 )
 
 // viewReadingFor is viewReading for a watch with trigger trig: it also
-// says what the running watch does with a '?' or blank reading (Skipped,
-// Matched), judged by trigger.CheckRead as the runner judges it. unsure
-// says a '?' is a digit the decoder wasn't sure of (ocr.HasUnsureDigit),
-// which the watch skips whatever its pattern says.
+// says what the running watch does with a '?', blank or lettered reading
+// (Skipped, Matched, Lettered), judged by trigger.CheckRead as the runner
+// judges it. unsure says a '?' is a digit the decoder wasn't sure of
+// (ocr.HasUnsureDigit), which the watch skips whatever its pattern says.
 func viewReadingFor(trig config.Trigger, engine, reading string, unsure bool) readingView {
 	v := viewReading(engine, reading)
-	if !v.Partial && !v.Unreadable && reading != "" {
+	v.Lettered = engine == "sevenseg" && hasLetter(reading)
+	if !v.Partial && !v.Unreadable && reading != "" && !v.Lettered {
 		return v
 	}
 	cond, err := trigger.CheckRead(trig, engine, reading, unsure)
@@ -71,8 +78,15 @@ func viewReadingFor(trig config.Trigger, engine, reading string, unsure bool) re
 		return v
 	}
 	v.Skipped = cond.Skipped
-	v.Matched = reading != "" && trig.Type == "ocr_match" && cond.Met
+	// Matched is about a '?' the pattern catches; a letter the pattern
+	// matches (E4) is plain text and needs no note.
+	v.Matched = strings.Contains(reading, "?") && trig.Type == "ocr_match" && cond.Met
 	return v
+}
+
+// hasLetter reports whether a seven-segment reading holds a letter.
+func hasLetter(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' })
 }
 
 // viewReading splits reading for display. Only the sevenseg engine's '?'
@@ -85,10 +99,12 @@ func viewReading(engine, reading string) readingView {
 	if engine != "sevenseg" || !strings.Contains(reading, "?") {
 		return readingView{Runs: []readingRun{{Text: reading}}}
 	}
-	// The decoder's alphabet is digits, '-', '.', ':' and '?'; with no digit
-	// read at all ("?", "?.?", "-?") it is unreadable rather than partial.
+	// The decoder's alphabet is digits, '-', '.', ':' and '?', and with a
+	// watch's letters on the letters of fault codes; with no digit or
+	// letter read at all ("?", "?.?", "-?") it is unreadable rather than
+	// partial.
 	v := readingView{Partial: true}
-	if !strings.ContainsAny(reading, "0123456789") {
+	if !strings.ContainsAny(reading, "0123456789") && !hasLetter(reading) {
 		v = readingView{Unreadable: true}
 	}
 	for len(reading) > 0 {

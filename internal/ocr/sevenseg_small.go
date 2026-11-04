@@ -105,7 +105,7 @@ func withSmallDigits(g grayImg, best reading) reading {
 		return best
 	}
 	r := readCrop(enlarge(g.sub(win), k))
-	if len(r.glyphs) == 0 {
+	if len(r.glyphs) == 0 || dashesLose(r, best) {
 		return best
 	}
 	if r.score > best.score || (h < tinyDigitH && r.score >= best.score) {
@@ -119,7 +119,7 @@ func enlarge(g grayImg, k int) grayImg {
 	if k < 2 {
 		return g
 	}
-	out := grayImg{w: g.w * k, h: g.h * k, pix: make([]uint8, g.w*k*g.h*k)}
+	out := grayImg{w: g.w * k, h: g.h * k, pix: make([]uint8, g.w*k*g.h*k), letters: g.letters}
 	at := func(x, y int) float64 {
 		x = max(0, min(g.w-1, x))
 		y = max(0, min(g.h-1, y))

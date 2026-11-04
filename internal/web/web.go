@@ -165,6 +165,7 @@ func New(cfgPath string, cfg *config.Config, sup *supervisor.Supervisor, reg *st
 		"matchedNote":      func() string { return matchedNote },
 		"skippedNote":      func() string { return skippedNote },
 		"blankSkippedNote": func() string { return blankSkippedNote },
+		"letterNote":       func() string { return letterSkippedNote },
 		"pct":              confidencePct,
 		"lowConf":          func(c float64) bool { return c < lowConfidence },
 		"unsureDigit":      func() int { return ocr.UnsureDigit },
@@ -1579,7 +1580,14 @@ func (s *Server) testCrop(w http.ResponseWriter, r *http.Request, wc config.Watc
 	if res.Engine == "" {
 		res.Engine = "tesseract"
 	}
-	engine, err := s.engines.For(engName)
+	// Letters as the form has it (a checkbox: sent only when ticked, so a
+	// form that sends engine and no letters has it off); a request
+	// without the engine field reads with the saved setting.
+	letters := wc.Letters
+	if _, ok := r.Form["engine"]; ok {
+		letters = r.FormValue("letters") == "on"
+	}
+	engine, err := s.engines.ForWatch(engName, letters)
 	switch {
 	case errors.Is(err, ocr.ErrNoTesseract):
 		res.Note = "tesseract isn't installed, so this shows the crop only. Install it (" + ocr.TesseractInstall() + ") and restart watchglass to read text, or for a digit display try Engine: sevenseg."
@@ -1835,11 +1843,23 @@ func parseWatchForm(base config.Watch, r *http.Request) (config.Watch, []fieldEr
 	if w.Engine == "tesseract" && base.Engine != "tesseract" {
 		w.Engine = ""
 	}
+	// Letters is the seven-segment decoder's letter table: a checkbox the
+	// form sends only when ticked, and only shown for that engine, so it
+	// is kept for sevenseg alone (config.Validate refuses it elsewhere). A
+	// client that omits engine keeps the saved value, as above.
+	if _, ok := r.Form["engine"]; ok {
+		w.Letters = w.Engine == "sevenseg" && r.FormValue("letters") == "on"
+	} else {
+		w.Letters = base.Letters
+	}
 	w.TLSInsecure = formTLSInsecure(r, base.TLSInsecure)
 	// An empty numeric field means 0 (Validate applies the defaults), as
 	// before; an unparseable one keeps base's value alongside its error.
 	trig, trigErrs := triggerFromForm(r, base.Trigger)
 	errs = append(errs, trigErrs...)
+	if trig.Type == "pixel_change" {
+		w.Letters = false // pixel_change reads nothing, so letters would do nothing
+	}
 	if v := strings.TrimSpace(r.FormValue("interval")); v == "" {
 		fail("interval", "Enter an interval. "+durationPhrase["interval"])
 	} else if d, err := time.ParseDuration(v); err != nil {

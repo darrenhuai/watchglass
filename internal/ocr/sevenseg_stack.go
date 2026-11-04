@@ -100,7 +100,7 @@ func trialRead(m bitmap, c blob, stroke int) (ch byte, conf float64) {
 		k.y1 += reach
 	}
 	minRun := max(1, int(math.Round(probeMinRunFrac*float64(k.y1-k.y0+1))))
-	ch, conf, _, blank := classify(m, k, stroke, minRun)
+	ch, conf, _, _, blank := classify(m, k, stroke, minRun)
 	if blank {
 		return '?', 0
 	}

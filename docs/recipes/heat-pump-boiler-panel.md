@@ -70,7 +70,7 @@ Why it's set up this way:
 
 ## A seven-segment display
 
-Many boilers show the water temperature on a two-digit LED display and the fault code on the same digits. The built-in `sevenseg` decoder reads the digits, and reads a letter it can't decode as `?`, so `E4` comes back as `?4`. Samples: [boiler-seven-segment-temp.jpg](samples/boiler-seven-segment-temp.jpg) (52) and [boiler-seven-segment-fault.jpg](samples/boiler-seven-segment-fault.jpg) (E4).
+Many boilers show the water temperature on a two-digit LED display and the fault code on the same digits. The built-in `sevenseg` decoder reads the digits, and with `letters: true` the letters a seven-segment display can draw, so `E4` comes back as `E4`. Samples: [boiler-seven-segment-temp.jpg](samples/boiler-seven-segment-temp.jpg) (52) and [boiler-seven-segment-fault.jpg](samples/boiler-seven-segment-fault.jpg) (E4).
 
 ```yaml
 watches:
@@ -79,10 +79,11 @@ watches:
     interval: 30s
     region: {x: 0.3875, y: 0.3111, w: 0.225, h: 0.3111}
     engine: sevenseg
+    letters: true
     trigger:
       type: numeric
-      # One to three digits and nothing else. A reading with a "?" in it,
-      # like "?4" for fault E4, is skipped and never counts as 4 °C.
+      # One to three digits and nothing else. A reading with a letter or
+      # a "?" in it, like "E4", is skipped and never counts as 4 °C.
       pattern: "^([0-9]{1,3})$"
       op: lt
       threshold: 40
@@ -98,10 +99,11 @@ watches:
     interval: 30s
     region: {x: 0.3875, y: 0.3111, w: 0.225, h: 0.3111}
     engine: sevenseg
+    letters: true
     trigger:
       type: ocr_match
-      # A letter, then digits: the shape of E4, F28, A1 on this kind of display.
-      pattern: "^\\?[0-9]+$"
+      # E or F, then digits: the shape of E4, F28 on this kind of display.
+      pattern: "^[EF][0-9]+$"
       confirm: 3
       cooldown: 1h
     notify:
@@ -109,15 +111,17 @@ watches:
 ```
 
 <!-- sample-check: boiler-temp samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
-<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg skipped reads=?4 -->
+<!-- sample-check: boiler-temp samples/boiler-seven-segment-fault.jpg skipped reads=E4 -->
 <!-- sample-check: boiler-fault samples/boiler-seven-segment-temp.jpg not-met reads=52 -->
-<!-- sample-check: boiler-fault samples/boiler-seven-segment-fault.jpg met reads=?4 -->
+<!-- sample-check: boiler-fault samples/boiler-seven-segment-fault.jpg met reads=E4 -->
 
-On the sample frames, `boiler-temp` reads `52`, and on the E4 frame it skips `?4`: a `numeric` watch ignores every reading with a `?` in it, so a fault code never counts as a temperature. `boiler-fault` matches `?4`. An `ocr_match` pattern sees the `?` as text, so Test this region checks the pattern against the reading as it was read, `?` included, just as the running watch does:
+On the sample frames, `boiler-temp` reads `52`, and on the E4 frame it skips `E4`: a `numeric` watch ignores every reading with a letter in it, the way it ignores one with a `?`, so a fault code never counts as a temperature. `boiler-fault` matches `E4`. Test this region checks the pattern against the reading as it was read, just as the running watch does:
 
-![Test this region on the E4 frame: the crop of the two blue digits, Read ?4 with the E at 30% confidence, and the verdict Condition met: the text as read, ? included, matches the pattern](img/boiler-fault-test.png)
+![Test this region on the E4 frame: the crop of the two blue digits, Read E4 with the E and the 4 each at 100% confidence, and the verdict Condition met: the text matches the pattern](img/boiler-fault-test.png)
 
-A `?` also shows up when a digit is caught half-lit or behind a reflection, which is why the fault watch wants three readings in a row. When the decoder saw a digit there but wasn't sure of it (the chip on Test this region shows the digit), the watch skips the reading rather than take it for a code. A reading the pattern doesn't match that has a `?` in it, like a bare `?`, is skipped, and once the code has shown it takes six temperature readings in a row (twice `confirm`) to clear the watch, so a few half-read frames don't send the same alert again. The alert tells you a code is showing; the photo attached to the ntfy push tells you which. A fault code that shares its digits with the temperature needs this `ocr_match` watch: `E4` reads `?4`, which an `ocr_changed` watch on the same box takes for `54` read with a digit missing, not for a change.
+Why `letters: true` and not a pattern that matches `?`: a `?` also shows up when a digit is caught half-lit, behind a reflection or under a hand, so `^\?[0-9]+$` would take a hand over the display for a fault. With letters on, a glyph that spells a letter reads as that letter and a half-lit digit still reads `?`, which the fault pattern doesn't match. A letter read below 40% confidence reads `?` too, and the watch skips such a reading rather than take it for a code. It is far less often fooled, not never: something that hides just the right-hand bars of an 8, a 6 or a 0 leaves an `E`. So the fault watch still wants three readings in a row, and once the code has shown it takes six temperature readings in a row (twice `confirm`) to clear the watch, so a few half-read frames don't send the same alert again. The alert tells you a code is showing; the photo attached to the ntfy push tells you which. A fault code that shares its digits with the temperature needs this `ocr_match` watch rather than an `ocr_changed` one, which would also fire on every change of temperature. Without `letters`, every letter reads `?` (`E4` as `?4`) and the pattern to use is `^\?[0-9]+$`, with the hand-over-the-display cost above.
+
+The pattern takes codes that start with `E` or `F`, like the sample's. Other boilers use other letters (`H1`, `A1`): add the ones yours shows to the class, as in `^[EFHA][0-9]+$`, or take any capital letter with `^[A-Z][0-9]+$`.
 
 ## Mounting the camera
 

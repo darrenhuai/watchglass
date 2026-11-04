@@ -41,10 +41,12 @@
   <span class="readout-label">Latest reading</span>
   {{with $r.Placeholder}}<strong class="readout-value reading-none">{{.}}</strong>{{else}}<strong class="readout-value mono{{if $latest.Fired}} fired{{end}}">{{template "readingText" $r}}</strong>{{end}}{{if $latest.Fired}}<span class="tag tag-fired">fired{{with $.FiredTag}} · {{.}}{{end}}</span>{{end}}
   <time class="readout-ts mono" datetime="{{isoTime $latest.TS}}">{{$latest.TS.Format "15:04:05"}}</time>
-  {{/* What the watch does with a '?' or a blank (viewReadingFor): a pattern
-       that matches a '?' is working as written; a numeric watch skips both. */}}
+  {{/* What the watch does with a '?', a blank or a letter (viewReadingFor):
+       a pattern that matches a '?' is working as written; a numeric watch
+       skips all three. */}}
   {{if $r.Matched}}<p class="readout-hint">{{matchedNote}}</p>
   {{else if and $r.Placeholder $r.Skipped}}<p class="readout-hint">{{blankSkippedNote}}</p>
+  {{else if and $r.Lettered $r.Skipped}}<p class="readout-hint">{{letterNote}}</p>
   {{else if $r.Unreadable}}<p class="readout-hint">The seven-segment decoder couldn't read any digit{{if $r.Skipped}}, so the watch skips this reading and keeps its last state{{end}}. Tighten the region around the digits or adjust Binarize.</p>
   {{else if $r.Partial}}<p class="readout-hint"><span class="digit-unknown" aria-hidden="true">?</span><span class="sr-only">A question mark</span> marks a digit the seven-segment decoder couldn't read or wasn't sure of{{if $r.Skipped}}, so the watch skips this reading and keeps its last state{{end}}. Tighten the region around the digits or adjust Binarize.</p>{{end}}
   {{/* Confirm progress (confirmProgress in livefeed.go): the reading meets

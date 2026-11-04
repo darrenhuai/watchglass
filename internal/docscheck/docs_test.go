@@ -400,10 +400,14 @@ func TestRecipeSamples(t *testing.T) {
 					if !ok {
 						t.Fatalf("no watch %q in a yaml block of %s", name, f.rel)
 					}
-					engineFor := func(name string) ocr.Engine {
+					// The watch's own engine reads with its letters setting, and so
+					// does a gate that uses the same engine (the supervisor hands the
+					// gate the watch's engine then); a gate on another engine reads
+					// without letters.
+					engineFor := func(name string, letters bool) ocr.Engine {
 						switch name {
 						case "sevenseg":
-							return ocr.NewSevenSeg()
+							return ocr.NewSevenSeg().WithLetters(letters)
 						case "", "tesseract":
 							if tess == nil {
 								t.Skip("tesseract isn't installed")
@@ -426,7 +430,7 @@ func TestRecipeSamples(t *testing.T) {
 						t.Fatalf("engine %q", name)
 						return nil
 					}
-					eng := engineFor(w.Engine)
+					eng := engineFor(w.Engine, w.Letters)
 					fh, err := os.Open(filepath.Join(root, filepath.FromSlash(path.Join(path.Dir(f.rel), img))))
 					if err != nil {
 						t.Fatal(err)
@@ -465,7 +469,7 @@ func TestRecipeSamples(t *testing.T) {
 					// frame a skip whatever the value box says.
 					gate := ""
 					if w.Gate != nil {
-						g, err := runner.ReadGate(ctx, frame, w, engineFor(w.GateEngine()), regexp.MustCompile(w.Gate.Pattern))
+						g, err := runner.ReadGate(ctx, frame, w, engineFor(w.GateEngine(), w.Letters && sameEngine(w.GateEngine(), w.Engine)), regexp.MustCompile(w.Gate.Pattern))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -517,4 +521,16 @@ func TestDocsQuoteTheUnsureDigitFloor(t *testing.T) {
 			}
 		}
 	}
+}
+
+// sameEngine says whether two engine names are the same engine, the
+// way the supervisor decides a gate shares its watch's engine.
+func sameEngine(a, b string) bool {
+	norm := func(s string) string {
+		if s == "" {
+			return "tesseract"
+		}
+		return s
+	}
+	return norm(a) == norm(b)
 }

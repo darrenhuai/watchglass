@@ -116,7 +116,10 @@ func withSpan(g grayImg, best reading, span image.Rectangle, digits []glyph, h, 
 			small = small && float64(gl.ink.Dy()) < spanSmallFrac*float64(h)
 			if gl.digit() {
 				dh := float64(gl.ink.Dy())
-				if dh > spanHeightRatio*float64(h) || float64(h) > spanHeightRatio*dh || gl.ch == '-' {
+				// A letter read in the span (the housing's corner, a
+				// unit) never joins the reading: letters are read in
+				// the row, where the box leaves them whole.
+				if dh > spanHeightRatio*float64(h) || float64(h) > spanHeightRatio*dh || gl.ch == '-' || gl.letter() {
 					ok = false
 				}
 				inks = append(inks, gl.ink)

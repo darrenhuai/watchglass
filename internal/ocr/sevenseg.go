@@ -21,10 +21,18 @@ import (
 // Recognize returns the digits joined ("23.5", "-8.0", "12:34");
 // RecognizeWords adds one Word per glyph, its Conf saying how far every
 // segment sat from the on/off decision. A glyph whose bars make no digit
-// reads as '?'.
-type SevenSeg struct{}
+// reads as '?', unless Letters is on and they spell one of the letters a
+// fault code uses (letterPatterns): then it reads as that letter.
+type SevenSeg struct {
+	// Letters turns the letter table on (a watch's letters: true). Off,
+	// every cell reads as it always did: a digit, '-' or '?'.
+	Letters bool
+}
 
 func NewSevenSeg() *SevenSeg { return &SevenSeg{} }
+
+// WithLetters is a decoder like s with the letter table on or off.
+func (s *SevenSeg) WithLetters(on bool) *SevenSeg { return &SevenSeg{Letters: on} }
 
 func (s *SevenSeg) Recognize(ctx context.Context, img image.Image) (string, error) {
 	text, _, err := s.RecognizeWords(ctx, img)
@@ -73,9 +81,18 @@ func HasUnsureDigit(text string, words []Word) bool {
 	return false
 }
 
-// unsure reports whether the glyph is a digit read below UnsureDigit that
-// may be another digit (alt), which the text gives as '?'.
+// unsure reports whether the glyph is a digit or letter read below
+// UnsureDigit that may be another glyph (alt), which the text gives as
+// '?'. The same line for both: a 6 whose top bar is half lit may be a b,
+// and a b whose top is half lit may be a 6, so neither is read.
 func (g glyph) unsure() bool {
+	if g.letter() {
+		// A letter is read only above the line, whatever flipping its
+		// weakest segment would spell: a digit with a bar missed looks
+		// like a letter more often than a letter looks like a digit (the
+		// tenths of a thermometer, half lit, read a c).
+		return g.conf < UnsureDigit
+	}
 	return g.numeral() && g.conf < UnsureDigit && g.alt != 0 && g.alt != g.ch
 }
 
@@ -83,6 +100,7 @@ func (g glyph) unsure() bool {
 // of the crop, with no glyphs when nothing is lit or nothing reads.
 func (s *SevenSeg) read(img image.Image) reading {
 	g0 := toGray(img)
+	g0.letters = s.Letters
 	g := enlargeSmall(g0)
 	best := readCrop(g)
 	if g.h == g0.h {
@@ -109,7 +127,7 @@ func readCrop(g grayImg) reading {
 	if win, cut := findWindow(g, thr); cut != (frameCut{}) {
 		gw := g.sub(win)
 		if thr, primary, ok := thresholdLevels(gw); ok {
-			if r := readGray(gw, thr, primary, cut); len(r.glyphs) > 0 && (r.score >= best.score || len(best.glyphs) == 0) {
+			if r := readGray(gw, thr, primary, cut); len(r.glyphs) > 0 && !dashesLose(r, best) && (r.score >= best.score || len(best.glyphs) == 0) {
 				r.offset(win.Min)
 				best = r
 			}
@@ -407,6 +425,9 @@ const (
 type grayImg struct {
 	w, h int
 	pix  []uint8
+	// letters: read with the letter table on (SevenSeg.Letters). Carried
+	// by every crop cut or made from this one, into its bitmaps.
+	letters bool
 }
 
 func toGray(img image.Image) grayImg {
@@ -519,6 +540,9 @@ func otsuRange(hist *[256]int, lo, hi int) (thr int, mLo, mHi float64, ok bool) 
 type bitmap struct {
 	w, h int
 	on   []bool
+	// letters: the crop's (grayImg.letters); classify reads the letter
+	// table when it is set.
+	letters bool
 }
 
 func (m *bitmap) at(x, y int) bool {
@@ -536,6 +560,11 @@ type work struct {
 	counts []int
 	shifts []int
 	runs   []int
+	// erased is what eraseBlob took out of the bitmap being read (a strip
+	// of housing, a rim, frame debris), in its coordinates; readAt clears
+	// it for each bitmap. A letter standing against one reads '?' (see
+	// besideBand).
+	erased []image.Rectangle
 }
 
 var workPool sync.Pool
@@ -601,6 +630,25 @@ type reading struct {
 	bars []image.Rectangle
 	// dark is the polarity read: dark digits on a light ground.
 	dark bool
+	// dashes: a row of nothing but dashes, laid out from the dashes
+	// themselves (dashRow). Such a reading never beats one that spells a
+	// digit or a letter (see dashesLose): a threshold that erodes the
+	// digits to their top bars reads them as dashes.
+	dashes bool
+}
+
+// dashesLose reports whether reading r, a row of dashes, gives way to
+// other, which spells a digit or a letter.
+func dashesLose(r, other reading) bool {
+	if !r.dashes {
+		return false
+	}
+	for _, gl := range other.glyphs {
+		if gl.numeral() || gl.letter() {
+			return true
+		}
+	}
+	return false
 }
 
 type glyph struct {
@@ -615,6 +663,9 @@ type glyph struct {
 	// table spells two ways, may have alt equal to ch: not ambiguous.
 	// Set by classify; see unsure.
 	alt byte
+	// bits is the lit-segment set classify read the cell as (0 for a
+	// separator): what lettersAgree compares across thresholds.
+	bits uint8
 	// ink is the glyph's own ink (its cluster, or its dot or dots), in the
 	// crop's coordinates once readAt and read have mapped it back (toCrop).
 	ink image.Rectangle
@@ -627,6 +678,13 @@ func (g glyph) digit() bool { return g.ch != '.' && g.ch != ':' }
 // numeral reports whether the glyph is one of 0-9.
 func (g glyph) numeral() bool { return g.ch >= '0' && g.ch <= '9' }
 
+// letter reports whether the glyph is a letter (letterPatterns).
+func (g glyph) letter() bool { return isLetter(g.ch) }
+
+// isLetter reports whether ch is a letter of the decoder's alphabet: with
+// the letter table on, the only letters a reading holds.
+func isLetter(ch byte) bool { return ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' }
+
 // read decides the polarity and the threshold. Polarity is settled at
 // Otsu's own split by reading both ways and keeping the better score: the
 // wrong way round the background is one blob with digit-shaped holes,
@@ -635,11 +693,16 @@ func (g glyph) numeral() bool { return g.ch >= '0' && g.ch <= '9' }
 func (d *decoder) read() reading {
 	best, bestBright := reading{score: math.Inf(-1)}, true
 	for _, bright := range []bool{true, false} {
-		if r := d.readAt(d.primary, bright); r.score > best.score {
+		if r := d.readAt(d.primary, bright); !dashesLose(r, best) && (r.score > best.score || dashesLose(best, r)) {
 			best, bestBright = r, bright
 		}
 	}
 	if len(d.thr) == 1 {
+		if d.g.letters {
+			// One level: no second opinion for b, y or U (see
+			// toplessConfirmed).
+			best = toplessConfirmed(best, []reading{best})
+		}
 		return best
 	}
 	polarities := []bool{bestBright}
@@ -648,7 +711,7 @@ func (d *decoder) read() reading {
 	}
 	best.score = math.Inf(-1)
 	for _, bright := range polarities {
-		if r := d.readLevels(bright); r.score > best.score {
+		if r := d.readLevels(bright); !dashesLose(r, best) && (r.score > best.score || dashesLose(best, r)) {
 			best = r
 		}
 	}
@@ -673,8 +736,71 @@ func (d *decoder) readLevels(bright bool) reading {
 		levels = append(levels, r)
 		cur = pick(cur, r)
 	}
+	if d.g.letters {
+		cur = toplessConfirmed(cur, levels)
+	}
 	return withMissedPoint(cur, levels)
 }
+
+// toplessConfirmed turns a b, y or U into '?' unless the reading holds
+// another letter, or, for y and U, a second threshold level reads the
+// same letter there. Those three are a 6, a 9 and a 0 without the top
+// bar, the bar a glancing light or a reflection most often leaves too
+// faint for a threshold: an odometer's 1056 read 105b at the one level
+// that read anything, and a gauge's 309 through Binarize 160 read 30y. A
+// letter beside another letter is a code (bE, Prob); alone with digits a
+// y or U needs the second level to see the top bar unlit too. A b is only
+// read beside another letter (wordB), so one left alone is a 6 whose
+// letter fell away at the threshold that won, and reads '?'. A crop with
+// one level (Binarize output, a flat two-tone image) has no second
+// opinion, so there they read '?' unless another letter stands in the
+// row.
+func toplessConfirmed(cur reading, levels []reading) reading {
+	other := false
+	for _, g := range cur.glyphs {
+		if g.letter() && !topless(g.ch) {
+			other = true
+		}
+	}
+	if other {
+		return cur
+	}
+	copied := false
+	for i, g := range cur.glyphs {
+		if !topless(g.ch) {
+			continue
+		}
+		if g.ch != 'b' && seenAtLevels(g, levels) >= 2 {
+			continue
+		}
+		if !copied {
+			cur.glyphs = append([]glyph(nil), cur.glyphs...)
+			copied = true
+		}
+		cur.glyphs[i].ch, cur.glyphs[i].conf, cur.glyphs[i].alt = '?', unsureConf, 0
+		cur.score -= 100 + g.conf
+	}
+	return cur
+}
+
+// seenAtLevels counts the levels whose reading holds glyph g's letter
+// where g stands.
+func seenAtLevels(g glyph, levels []reading) int {
+	seen := 0
+	for _, l := range levels {
+		for _, o := range l.glyphs {
+			if o.ch == g.ch && overlapX(o, g) {
+				seen++
+				break
+			}
+		}
+	}
+	return seen
+}
+
+// topless reports whether ch is a letter that is a digit without its top
+// bar: b (6), y (9) or U (0).
+func topless(ch byte) bool { return ch == 'b' || ch == 'y' || ch == 'U' }
 
 // withMissedPoint adds the decimal point another threshold saw to a
 // reading that has none. On a small, blurred display the point is the
@@ -735,10 +861,53 @@ func withMissedPoint(cur reading, levels []reading) reading {
 // costs confidence there. Ties go to the tight reading, which keeps ghost
 // decimal points out.
 func pick(loose, tight reading) reading {
-	if ghostEvidence(loose, tight) || tight.score >= loose.score {
+	switch {
+	case dashesLose(tight, loose):
+		return loose
+	case dashesLose(loose, tight):
 		return tight
 	}
-	return loose
+	if ghostEvidence(loose, tight) || tight.score >= loose.score {
+		return lettersAgree(tight, loose)
+	}
+	return lettersAgree(loose, tight)
+}
+
+// lettersAgree is r with every letter the other threshold's reading
+// reads as a digit, or as a '?' with more bars lit than the letter has,
+// turned into '?': a letter is only read when it holds across the
+// thresholds. A digit with bars too faint for one threshold spells a
+// letter there (a 0 whose right bars the loose threshold lost spelled L)
+// and shows those bars at another; a letter that is there reads the same
+// at both, or as a '?' with bars eroded (fewer lit), which is not
+// evidence against it, as it isn't against a digit (ghostEvidence). A
+// glyph the other threshold has nothing for doesn't count either.
+func lettersAgree(r, other reading) reading {
+	copied := false
+	for i, g := range r.glyphs {
+		if !g.letter() {
+			continue
+		}
+		for _, o := range other.glyphs {
+			// An 8 at the other threshold is every segment lit: an
+			// LCD's unlit segments showing, or glow, at the loose one
+			// (ghostEvidence), which every letter is a subset of.
+			// A '?' as wide as the letter with more bars lit; not a bar
+			// of the letter the tight threshold broke off, whose narrow
+			// cell lights every zone.
+			more := o.ch == '?' && o.bits&g.bits == g.bits && o.bits != g.bits && 5*o.ink.Dx() >= 3*g.ink.Dx()
+			if overlapX(o, g) && (o.numeral() && o.ch != '8' || more) {
+				if !copied {
+					r.glyphs = append([]glyph(nil), r.glyphs...)
+					copied = true
+				}
+				r.glyphs[i].ch, r.glyphs[i].conf, r.glyphs[i].alt = '?', unsureConf, 0
+				r.score -= 100 + g.conf
+				break
+			}
+		}
+	}
+	return r
 }
 
 // ghostEvidence reports whether the loose threshold lit segments that are
@@ -797,8 +966,9 @@ func (d *decoder) readAt(level int, bright bool) reading {
 	}
 	m := binarize(d.g, d.thr[level], bright, d.wk.bufs[0])
 	m = denoise(m, d.wk.bufs[1])
+	d.wk.erased = d.wk.erased[:0]
 	blobs := dropFrameDebris(m, components(m, d.wk), d.cut, d.wk)
-	blobs = dropBezels(m, blobs)
+	blobs = dropBezels(m, blobs, d.wk)
 	blobs = dropRims(m, blobs, d.wk)
 	blobs = dropEdgeStrips(m, blobs, d.wk)
 	s, first := d.shear[p], !d.sheared[p]
@@ -820,6 +990,11 @@ func (d *decoder) readAt(level int, bright bool) reading {
 	r.dark = !bright
 	if s != 0 {
 		r.toCrop(s, d.g.w, d.g.h)
+	}
+	if d.g.letters {
+		// In the crop's own coordinates: deshear moved the rows, so a
+		// glyph on the crop's edge may stand clear of the bitmap's.
+		lettersOffEdges(&r, d.g.w, d.g.h)
 	}
 	d.cache[level][p] = &r
 	return r
@@ -993,7 +1168,7 @@ func findWindow(g grayImg, thr []int) (win image.Rectangle, cut frameCut) {
 
 // sub is the part of g inside r, copied.
 func (g grayImg) sub(r image.Rectangle) grayImg {
-	out := grayImg{w: r.Dx(), h: r.Dy(), pix: make([]uint8, r.Dx()*r.Dy())}
+	out := grayImg{w: r.Dx(), h: r.Dy(), pix: make([]uint8, r.Dx()*r.Dy()), letters: g.letters}
 	for y := 0; y < out.h; y++ {
 		copy(out.pix[y*out.w:(y+1)*out.w], g.pix[(r.Min.Y+y)*g.w+r.Min.X:])
 	}
@@ -1062,7 +1237,7 @@ func dropFrameDebris(m bitmap, blobs []blob, cut frameCut, wk *work) []blob {
 }
 
 func binarize(g grayImg, thr int, bright bool, dst []bool) bitmap {
-	m := bitmap{w: g.w, h: g.h, on: dst[:len(g.pix)]}
+	m := bitmap{w: g.w, h: g.h, on: dst[:len(g.pix)], letters: g.letters}
 	for i, v := range g.pix {
 		m.on[i] = (int(v) > thr) == bright
 	}
@@ -1073,7 +1248,7 @@ func binarize(g grayImg, thr int, bright bool, dst []bool) bitmap {
 // that made it through the threshold, which would otherwise seed stray
 // blobs. A one-pixel stroke keeps its two along-stroke neighbours.
 func denoise(m bitmap, dst []bool) bitmap {
-	out := bitmap{w: m.w, h: m.h, on: dst[:len(m.on)]}
+	out := bitmap{w: m.w, h: m.h, on: dst[:len(m.on)], letters: m.letters}
 	for y := 0; y < m.h; y++ {
 		for x := 0; x < m.w; x++ {
 			if !m.on[y*m.w+x] {
@@ -1161,6 +1336,7 @@ func eraseBlob(m bitmap, b blob, wk *work) {
 	if !m.on[b.seed] {
 		return
 	}
+	wk.erased = append(wk.erased, b.rect())
 	stack := append(wk.stack[:0], b.seed)
 	m.on[b.seed] = false
 	for len(stack) > 0 {
@@ -1184,7 +1360,8 @@ func eraseBlob(m bitmap, b blob, wk *work) {
 }
 
 // erase clears a blob's bounding box.
-func erase(m bitmap, b blob) {
+func erase(m bitmap, b blob, wk *work) {
+	wk.erased = append(wk.erased, b.rect())
 	for y := b.y0; y <= b.y1; y++ {
 		clear(m.on[y*m.w+b.x0 : y*m.w+b.x1+1])
 	}
@@ -1197,7 +1374,7 @@ func erase(m bitmap, b blob) {
 // line a few pixels in from the edge with nothing between it and the edge
 // counts too: the bevel of a window, a little way inside the housing that
 // findWindow cut away.
-func dropBezels(m bitmap, blobs []blob) []blob {
+func dropBezels(m bitmap, blobs []blob, wk *work) []blob {
 	thinX := max(2, int(bezelThinFrac*float64(m.w)))
 	thinY := max(2, int(bezelThinFrac*float64(m.h)))
 	nearX := max(0, int(bezelNearFrac*float64(m.w)))
@@ -1219,7 +1396,7 @@ func dropBezels(m bitmap, blobs []blob) []blob {
 		onX := edgeX && b.w() <= thinX && float64(b.h()) >= bezelLongFrac*float64(m.h)
 		onY := edgeY && b.h() <= thinY && float64(b.w()) >= bezelLongFrac*float64(m.w)
 		if onX || onY {
-			erase(m, b)
+			erase(m, b, wk)
 			continue
 		}
 		kept = append(kept, b)
@@ -1282,7 +1459,7 @@ func dropRims(m bitmap, blobs []blob, wk *work) []blob {
 		// stays, and splitBlobs decides whether it is one.
 		bottom := b.y1 >= m.h-1-limit && blank(b.x0, b.x1, b.y0-2, b.y0-1) && (float64(b.w()) > dotW || !feetCut)
 		if flat && (top || bottom) {
-			erase(m, b)
+			erase(m, b, wk)
 			continue
 		}
 		kept = append(kept, b)
@@ -1293,11 +1470,11 @@ func dropRims(m bitmap, blobs []blob, wk *work) []blob {
 // dropLines removes any blob far wider than the row is tall and only a
 // fraction of it high: a line across the crop, which is never a bar and
 // would otherwise cluster every digit it overlaps into one glyph.
-func dropLines(m bitmap, blobs []blob, inkH int) []blob {
+func dropLines(m bitmap, blobs []blob, inkH int, wk *work) []blob {
 	kept := blobs[:0]
 	for _, b := range blobs {
 		if float64(b.w()) > lineWideFrac*float64(inkH) && float64(b.h()) < lineThinFrac*float64(inkH) {
-			erase(m, b)
+			erase(m, b, wk)
 			continue
 		}
 		kept = append(kept, b)
@@ -1423,7 +1600,7 @@ func deshear(m bitmap, s float64, wk *work) bitmap {
 		minS, maxS = min(minS, shifts[y]), max(maxS, shifts[y])
 	}
 	w := m.w + maxS - minS
-	out := bitmap{w: w, h: m.h, on: wk.bufs[2][:w*m.h]}
+	out := bitmap{w: w, h: m.h, on: wk.bufs[2][:w*m.h], letters: m.letters}
 	clear(out.on)
 	for y := 0; y < m.h; y++ {
 		off := y*w + shifts[y] - minS
@@ -1446,7 +1623,7 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 	if inkBot < inkTop {
 		return reading{}
 	}
-	blobs = dropLines(m, blobs, inkBot-inkTop+1)
+	blobs = dropLines(m, blobs, inkBot-inkTop+1, wk)
 	inkTop, inkBot = rowExtent(blobs, minBlobArea)
 	if inkBot < inkTop {
 		return reading{}
@@ -1459,7 +1636,7 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 	}
 	inkH := inkBot - inkTop + 1
 
-	bars, points, colons, leaning := splitBlobs(blobs, inkTop, inkH, minArea, m.h)
+	bars, points, colons, leaning := splitBlobs(blobs, inkTop, inkH, minArea, m.h, m.letters)
 	if len(bars) == 0 {
 		return reading{}
 	}
@@ -1477,10 +1654,11 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 	}
 	points = append(points, blurredPoints(cells, inkH)...)
 	points, cutPoints := pointsOnRow(points, cells, stroke, rowH, m.h)
-	r := readCells(m, cells, stroke, rowH)
+	r := readCells(m, cells, stroke, rowH, wk.erased)
 	if len(r.glyphs) == 0 {
 		return reading{} // a point or colon with no digit is not a reading
 	}
+	r.dashes = m.letters && dashesOnly(m, clusters)
 	for _, k := range cells {
 		switch {
 		case k.absorbed:
@@ -1518,8 +1696,20 @@ func decodeBitmap(m bitmap, blobs []blob, wk *work) reading {
 		r.glyphs = append(r.glyphs, separator(':', c, rowH))
 	}
 	sort.SliceStable(r.glyphs, func(i, j int) bool { return r.glyphs[i].x < r.glyphs[j].x })
-	dropLoneColons(&r)
+	dropLoneColons(&r, m.letters && cutColon(colons, m.w))
 	return r
+}
+
+// cutColon reports whether a colon's marks touch the box's right edge:
+// two slivers of a glyph the box cut through, stacked like a colon's dots
+// (the d of a washer's End with the box drawn short).
+func cutColon(colons []blob, cropW int) bool {
+	for _, c := range colons {
+		if c.x1 >= cropW-1 {
+			return true
+		}
+	}
+	return false
 }
 
 // cutPoint reports whether a point is what the bottom of the box left of
@@ -1646,7 +1836,7 @@ func pointsOnRow(points []blob, cells []cell, stroke int, rowH float64, cropH in
 // different: on a small, blurred display a leading "1" breaks into two
 // dots just like one, and dropping it would read 1400 as a confident
 // 400. It stays, as a '?'.
-func dropLoneColons(r *reading) {
+func dropLoneColons(r *reading, cut bool) {
 	kept := r.glyphs[:0]
 	for i, g := range r.glyphs {
 		if g.ch == ':' {
@@ -1657,7 +1847,9 @@ func dropLoneColons(r *reading) {
 			for _, o := range r.glyphs[i+1:] {
 				right = right || o.digit()
 			}
-			if !left && right {
+			if (!left && right) || (left && !right && cut) {
+				// Before every digit, or (cut) on the box's right edge
+				// after them: a glyph the box cut, not a colon.
 				g.ch, g.conf = '?', unsureConf
 				r.score -= 100
 			} else if !left || !right {
@@ -1698,7 +1890,7 @@ func rowExtent(blobs []blob, minArea int) (top, bot int) {
 // between them, where the digits round a colon have their facing sides
 // reaching past the gap. A point cut by the bottom of the box is as wide
 // as a point and flatter.
-func splitBlobs(blobs []blob, inkTop, inkH, minArea, cropH int) (bars, points, colons []blob, leaning bool) {
+func splitBlobs(blobs []blob, inkTop, inkH, minArea, cropH int, letters bool) (bars, points, colons []blob, leaning bool) {
 	fInk := float64(inkH)
 	baseline := float64(inkTop) + dotBaselineFrac*fInk
 	join := max(1, int(math.Round(barJoinFrac*fInk)))
@@ -1721,7 +1913,10 @@ func splitBlobs(blobs []blob, inkTop, inkH, minArea, cropH int) (bars, points, c
 		// like it below or above; alone it goes back to the bars.
 		open := !solid && float64(b.area) >= colonOpenFill*float64(b.w()*b.h()) &&
 			((small && squarish) || colonDot) && long <= colonDotAspect*short
-		if (solid && ((small && squarish) || cut || colonDot)) || open {
+		if letters && !small && flatMark(b) && !cut {
+			// The foot of an L is no point (see sevenseg_letters.go).
+			bars = append(bars, b)
+		} else if (solid && ((small && squarish) || cut || colonDot)) || open {
 			marks = append(marks, b)
 			big = append(big, colonDot)
 			loose = append(loose, open)
@@ -2001,6 +2196,13 @@ func clusterBars(m bitmap, bars []blob, inkH int) []blob {
 		}
 		return false
 	}
+	// barUnder reports whether ink stands in b's columns three quarters of
+	// the way down the cluster before it: the lower bar of a digit's side,
+	// under the upper one.
+	barUnder := func(b blob) bool {
+		c := clusters[len(clusters)-1]
+		return lit(b.x0, b.x1, c.y0+3*c.h()/4)
+	}
 	// above reports whether b is a small mark standing clear above every
 	// bar of the cluster that ends a sliver before it, while the cluster
 	// has its own bars at b's rows further left: the degree sign over the
@@ -2013,6 +2215,13 @@ func clusterBars(m bitmap, bars []blob, inkH int) []blob {
 		if float64(b.h()) > aboveMarkFrac*float64(inkH) {
 			return false
 		}
+		if m.letters && b.h() >= 2*b.w() && barUnder(b) {
+			// An upright bar is no mark: the upper-right bar of a U, which
+			// stands level with its upper-left one and over its bottom bar,
+			// with its lower-right bar under it. A piece of a degree sign
+			// after a digit has nothing under it ("22.5°" read 22.?).
+			return false
+		}
 		level := false
 		for _, e := range last {
 			if e.x1+join >= b.x0 && e.y0 <= b.y1+join {
@@ -2022,9 +2231,34 @@ func clusterBars(m bitmap, bars []blob, inkH int) []blob {
 		}
 		return level
 	}
+	// tooWide reports whether b, a sliver after the cluster, is a
+	// lower-case letter's first bar that would make the cluster wider than
+	// any one glyph is: with the letter table on, the n of End a sliver
+	// after the E, where a VFD's glow fills the gap between the two (End
+	// read '?'). Such a bar stands in the lower half of the row with
+	// nothing over it. A digit's bar a sliver after the rest of it has a
+	// bar over it or reaches the top: the right bars of a 4, which in a row
+	// of 4s and 1s (no bar across the top or bottom, so the ink is shorter
+	// than the digit) measure wider than glyphMaxWideFrac of the ink.
+	tooWide := func(b blob) bool {
+		c := clusters[len(clusters)-1]
+		if !m.letters || b.x0 <= c.x1 || float64(max(b.x1, c.x1)-c.x0+1) <= glyphMaxWideFrac*float64(inkH) {
+			return false
+		}
+		if float64(b.y0-c.y0) < lowerTopFrac*float64(inkH) {
+			return false
+		}
+		over := 0 // rows over b, from the cluster's top, lit in b's columns
+		for y := c.y0; y < b.y0; y++ {
+			if lit(b.x0, b.x1, y) {
+				over++
+			}
+		}
+		return over <= join
+	}
 	for _, b := range bars {
 		n := len(clusters)
-		if n > 0 && (b.x0 <= clusters[n-1].x1 || (b.x0 <= clusters[n-1].x1+join && !facing(b) && !above(b))) {
+		if n > 0 && (b.x0 <= clusters[n-1].x1 || (b.x0 <= clusters[n-1].x1+join && !facing(b) && !above(b) && !tooWide(b))) {
 			clusters[n-1] = clusters[n-1].merge(b)
 			last = append(last, b)
 		} else {
@@ -2186,6 +2420,9 @@ func splitAttachedDots(m bitmap, clusters []blob, stroke, inkH int) (_, points [
 		if float64(d.area) < dotSolidFrac*float64(d.w()*d.h()) {
 			continue
 		}
+		if m.letters && flatMark(d) {
+			continue // the foot of an L (see sevenseg_letters.go)
+		}
 		points = append(points, d)
 		clusters[i].x1 = xTop
 	}
@@ -2211,6 +2448,7 @@ type cell struct {
 	small      bool    // a small digit after the point or a clock's minutes (see smallAfterPoint)
 	absorbed   bool    // a piece of such a small digit, merged into its cell
 	unread     bool    // a small digit with another one in pieces merged in: read as '?'
+	lower      bool    // a lower-case letter, probed over the row's height (see lowerCase)
 }
 
 // layoutCells turns clusters into cells. A glyph's ink only reaches the top
@@ -2228,14 +2466,34 @@ func layoutCells(m bitmap, clusters, points, colons, promoted []blob, stroke, in
 	rowY0, rowY1 := math.MaxInt, math.MinInt
 	maxWide := 0
 	full := fullDigits(clusters, fInk)
+	// With the letter table on: a row of nothing but dashes is laid out
+	// from the dashes (dashRow), and a cluster in the lower half of a row
+	// with a full-size glyph and no clock colon is a lower-case letter
+	// (see sevenseg_letters.go).
+	dashes := m.letters && dashesOnly(m, clusters)
+	lowerOK := m.letters && full && !clockColon(colons, clusters, fInk)
+	prevLower := math.MinInt // the right edge of the last lower-case letter
 	for _, c := range clusters {
 		k := cell{c: c, centre: c.cx(), y0: c.y0, y1: c.y1, sizeRef: fInk}
+		if dashes {
+			k.fromRow = true
+			cells = append(cells, k)
+			continue
+		}
 		if full {
 			k.sizeRef = sizeRef(m, c, fInk, stroke, reach)
 		}
 		k.wide = float64(c.w()) >= wideCellFrac*k.sizeRef
 		k.tall = float64(c.h()) >= tallCellFrac*fInk
-		if !k.tall {
+		if lowerOK && lowerCase(c, clusters, marks, inkTop, inkH, prevLower) {
+			// Judged at the row's size, like the capital letters: its own
+			// height is half the row, which would make an o as wide as a
+			// digit look like two run together.
+			k.lower, k.fromRow, k.tall = true, true, false
+			k.sizeRef = fInk
+			k.wide = float64(c.w()) >= wideCellFrac*fInk
+			prevLower = c.x1
+		} else if !k.tall {
 			k.fromRow = true
 			squarish := 2*c.w() <= 3*c.h() && 2*c.h() <= 3*c.w()
 			k.degree = squarish && c.cy() < float64(inkTop)+degreeTopFrac*fInk
@@ -2278,6 +2536,9 @@ func layoutCells(m bitmap, clusters, points, colons, promoted []blob, stroke, in
 		cells = append(cells, k)
 	}
 	smallAfterPoint(m, cells, points, colons, promoted, stroke, reach, inkTop, fInk)
+	if dashes {
+		rowY0, rowY1 = dashRow(cells)
+	}
 	if rowY0 == math.MaxInt {
 		return nil, 0
 	}
@@ -2290,6 +2551,8 @@ func layoutCells(m bitmap, clusters, points, colons, promoted []blob, stroke, in
 			k.y0, k.y1 = rowY0, rowY1
 		}
 		switch {
+		case k.lower:
+			k.x0, k.x1 = k.c.x0, k.c.x1
 		case k.wide:
 			k.x0, k.x1 = k.c.x0, k.c.x1
 			// A "7" or "3" has no bars down its left side, so its ink
@@ -2382,7 +2645,7 @@ func layoutCells(m bitmap, clusters, points, colons, promoted []blob, stroke, in
 	// digit's bars a second time.
 	for i := range cells {
 		k := &cells[i]
-		if k.tall || k.degree || k.fragment {
+		if k.tall || k.degree || k.fragment || k.lower {
 			continue
 		}
 		for _, o := range cells {
@@ -2541,8 +2804,9 @@ func barAcross(m bitmap, c blob, y0, y1 int) bool {
 	return total > 0 && lit*2 >= total
 }
 
-// readCells classifies every cell and scores the reading.
-func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
+// readCells classifies every cell and scores the reading. erased is what
+// was taken out of the bitmap before clustering (work.erased).
+func readCells(m bitmap, cells []cell, stroke int, rowH float64, erased []image.Rectangle) reading {
 	minRun := max(1, int(math.Round(probeMinRunFrac*rowH)))
 	// The narrowest full-width digit: one cell far wider than it is two
 	// glyphs the glow ran together, which can spell a digit too. A digit
@@ -2567,6 +2831,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 		}
 	}
 	var r reading
+	var sixes []int // 6s drawn without the top bar, which spell b (wordB)
 	for _, k := range cells {
 		if k.degree || k.fragment {
 			continue
@@ -2575,6 +2840,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			ch    byte
 			conf  float64
 			alt   byte
+			bits  uint8
 			blank bool
 		)
 		if nb, ok := sticksOut(k, cells); k.wide && k.tall && ok {
@@ -2596,7 +2862,7 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			// A bar that only looks like a "1": the edge of the frame or
 			// the housing, a reflection, a speck. Not read as a digit.
 			ch, conf = '?', unsureConf
-		} else if float64(k.x1-k.x0+1) > cellMaxAspect*rowH || (k.wide && wide > 1 && !math.IsInf(narrowest, 1) && cellAspect(k) >= runTogetherFrac*narrowest) {
+		} else if float64(k.x1-k.x0+1) > cellMaxAspect*rowH || (k.wide && !k.lower && wide > 1 && !math.IsInf(narrowest, 1) && cellAspect(k) >= runTogetherFrac*narrowest) {
 			// Wider than the row is tall: digits run together, or the
 			// frame round the display, whose ring of edges spells "0".
 			// Or far wider than the other digits: on a small display a
@@ -2609,13 +2875,31 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 			// box drawn close round it read a confident 8.
 			ch, conf = '?', unsureConf
 		} else {
-			ch, conf, alt, blank = classify(m, k, stroke, minRun)
+			ch, conf, alt, bits, blank = classify(m, k, stroke, minRun)
+			letterFits := func() bool {
+				return !k.small && (k.lower || k.tall && float64(k.c.h()) >= letterTallFrac*rowH) && !onEdge(m, k.c) && !besideBand(m, k, cells, max(stroke, int(bandReachFrac*rowH)), erased)
+			}
+			if isLetter(ch) && !letterFits() {
+				// A smaller digit after the point or a colon is a digit
+				// by construction (the tenths of 23.5, half lit, spelled
+				// c); a capital letter stands as tall as a digit, so a
+				// shorter cell that spells one is a piece of something (a
+				// clock's 4 cut by the box spelled L over half the row); a
+				// glyph on the box's edge is one the box cut through (a 6
+				// cut on the right spells E); one standing against a band
+				// of housing or a rim may have lost a bar to it (see
+				// besideBand).
+				ch, conf, alt = '?', unsureConf, 0
+			}
 			if !blank && ch != '?' && strayInk(k, cells) {
 				// Ink over or under the cell that no probe reaches: a
 				// bar the clustering left out of its digit (a thin "7"
 				// whose top bar stands a wide gap above its side bars
 				// spells "1" without it), or a mark on the glass.
 				ch, conf, alt = '?', unsureConf, 0
+			}
+			if m.letters && ch == '6' && bits == bBits && letterFits() {
+				sixes = append(sixes, len(r.glyphs))
 			}
 		}
 		if blank && k.small {
@@ -2627,14 +2911,76 @@ func readCells(m bitmap, cells []cell, stroke int, rowH float64) reading {
 		if blank {
 			continue
 		}
-		r.glyphs = append(r.glyphs, glyph{ch: ch, conf: conf, alt: alt, x0: k.x0, x1: k.x1, x: k.centre, ink: k.c.rect()})
+		r.glyphs = append(r.glyphs, glyph{ch: ch, conf: conf, alt: alt, bits: bits, x0: k.x0, x1: k.x1, x: k.centre, ink: k.c.rect()})
 		if ch == '?' {
 			r.score -= 100
 		} else {
 			r.score += conf
 		}
 	}
+	if m.letters {
+		wordB(&r, sixes)
+		lettersApart(&r, cells, stroke)
+		lowerBesideCapitals(&r, cells)
+	}
 	return r
+}
+
+// wordB turns the 6s at sixes, each spelled cdefg (a 6 drawn without its
+// top bar, bBits), into b when another letter stands in the row, one that
+// is no digit missing its top bar (see topless): bE, Prob, bAt. Beside
+// digits alone the digit wins, as it does wherever a letter and a digit
+// share their bars: a display that draws its 6 that way, or a 6 whose top
+// bar a glancing light left too faint, reads 6 as it does with the table
+// off.
+func wordB(r *reading, sixes []int) {
+	if len(sixes) == 0 {
+		return
+	}
+	for _, g := range r.glyphs {
+		if g.letter() && !topless(g.ch) {
+			for _, i := range sixes {
+				r.glyphs[i].ch = 'b'
+			}
+			return
+		}
+	}
+}
+
+// lettersApart turns a letter into '?' when a piece of ink that spelled
+// nothing stands within a stroke of it, at its rows: a cell read as '?' or
+// a fragment the layout left out. The two are one glyph that came apart (a
+// 0 whose right bars a Binarize level thinned read C beside a '?' sliver),
+// or a letter run into a mess of digits (a C on a merged '?' of three
+// digits). A letter beside a digit or another letter keeps its reading.
+func lettersApart(r *reading, cells []cell, stroke int) {
+	var pieces []image.Rectangle
+	for _, k := range cells {
+		if k.fragment && !k.degree {
+			pieces = append(pieces, k.c.rect())
+		}
+	}
+	for _, g := range r.glyphs {
+		if g.ch == '?' && g.digit() {
+			pieces = append(pieces, g.ink)
+		}
+	}
+	for i, g := range r.glyphs {
+		if !g.letter() {
+			continue
+		}
+		for _, p := range pieces {
+			if p.Min.Y >= g.ink.Max.Y || p.Max.Y <= g.ink.Min.Y {
+				continue
+			}
+			gap := max(p.Min.X-g.ink.Max.X, g.ink.Min.X-p.Max.X)
+			if gap <= stroke {
+				r.glyphs[i].ch, r.glyphs[i].conf, r.glyphs[i].alt = '?', unsureConf, 0
+				r.score -= 100 + g.conf
+				break
+			}
+		}
+	}
 }
 
 // groundCell reports whether cluster c is the ground of the display seen
@@ -2807,16 +3153,38 @@ var zones = [7]zone{
 
 // patterns maps a lit-segment set (bit 6 = a ... bit 0 = g) to its glyph.
 // 6, 7 and 9 have two spellings in the wild.
-var patterns = func() map[uint8]byte {
+var patterns = segTable([]segGlyph{
+	{"abcdef", '0'}, {"bc", '1'}, {"abdeg", '2'}, {"abcdg", '3'}, {"bcfg", '4'},
+	{"acdfg", '5'}, {"acdefg", '6'}, {"cdefg", '6'}, {"abc", '7'}, {"abcf", '7'},
+	{"abcdefg", '8'}, {"abcdfg", '9'}, {"abcfg", '9'}, {"g", '-'},
+})
+
+// letterPatterns is the letter table (SevenSeg.Letters): the letters a
+// seven-segment fault code or status word is spelled with, in the case the
+// displays draw them. A letter whose bars are a digit's (O and 0, S and 5,
+// I and 1, Z and 2, g and 9, B and 8) is not in it: the digit wins. b is
+// the one letter that shares its bars with a digit's second spelling, the
+// 6 drawn without its top bar; that reads 6, and b only beside another
+// letter (wordB). The lower-case
+// letters c, n, o, r and u stand in the lower half of the row (see
+// lowerCase); docs/configuration.md lists the table.
+var letterPatterns = segTable([]segGlyph{
+	{"abcefg", 'A'}, {"cdefg", 'b'}, {"adef", 'C'}, {"deg", 'c'}, {"bcdeg", 'd'},
+	{"adefg", 'E'}, {"aefg", 'F'}, {"bcefg", 'H'}, {"cefg", 'h'}, {"bcde", 'J'},
+	{"def", 'L'}, {"ceg", 'n'}, {"cdeg", 'o'}, {"abefg", 'P'}, {"eg", 'r'},
+	{"defg", 't'}, {"bcdef", 'U'}, {"cde", 'u'}, {"bcdfg", 'y'},
+})
+
+// segGlyph is one entry of a segment table: the lit bars, a-g, and the
+// glyph they spell.
+type segGlyph struct {
+	segs string
+	ch   byte
+}
+
+func segTable(entries []segGlyph) map[uint8]byte {
 	p := map[uint8]byte{}
-	for _, e := range []struct {
-		segs string
-		ch   byte
-	}{
-		{"abcdef", '0'}, {"bc", '1'}, {"abdeg", '2'}, {"abcdg", '3'}, {"bcfg", '4'},
-		{"acdfg", '5'}, {"acdefg", '6'}, {"cdefg", '6'}, {"abc", '7'}, {"abcf", '7'},
-		{"abcdefg", '8'}, {"abcdfg", '9'}, {"abcfg", '9'}, {"g", '-'},
-	} {
+	for _, e := range entries {
 		var bits uint8
 		for _, s := range e.segs {
 			bits |= 1 << uint(6-(s-'a'))
@@ -2824,7 +3192,7 @@ var patterns = func() map[uint8]byte {
 		p[bits] = e.ch
 	}
 	return p
-}()
+}
 
 // classify probes one cell. Each zone's fill is the share of its probes
 // that cross a lit run; a zone is on above an adaptive threshold (half the
@@ -2835,10 +3203,10 @@ var patterns = func() map[uint8]byte {
 // either side; a lit hole or a pattern that spells no digit is '?', capped
 // low. alt is the digit the closest zone read the other way would spell
 // (glyph.alt), 0 when none.
-func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, alt byte, blank bool) {
+func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, alt byte, bits uint8, blank bool) {
 	W, H := k.x1-k.x0+1, k.y1-k.y0+1
 	if W <= 0 || H <= 0 {
-		return 0, 0, 0, true
+		return 0, 0, 0, 0, true
 	}
 	in := math.Min((float64(stroke)+holePad*float64(W))/float64(W), 0.5-holeMinFrac/2)
 	holes := [2]zone{
@@ -2858,10 +3226,9 @@ func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, alt 
 		maxFill = math.Max(maxFill, fill[i])
 	}
 	if maxFill == 0 {
-		return 0, 0, 0, true
+		return 0, 0, 0, 0, true
 	}
 	thr := math.Max(onFloor, onHalf*maxFill)
-	var bits uint8
 	margin, nearest := 1.0, -1
 	for i := 0; i < 7; i++ {
 		if fill[i] >= thr {
@@ -2872,15 +3239,43 @@ func classify(m bitmap, k cell, stroke, minRun int) (ch byte, conf float64, alt 
 		}
 	}
 	conf = math.Round(1000*math.Min(1, margin)) / 10
-	ch, ok := patterns[bits]
+	ch, ok := glyphFor(bits, m.letters)
 	if !ok || fill[7] >= holeLit || fill[8] >= holeLit {
-		return '?', math.Min(conf, unsureConf), 0, false
+		return '?', math.Min(conf, unsureConf), 0, bits, false
 	}
 	if nearest >= 0 {
+		// The digit it may be instead; a letter it may be instead doesn't
+		// count against a digit (an exact 4 at 33% stays a 4), and a
+		// letter is judged by its confidence alone (unsure).
 		alt = patterns[bits^(1<<uint(6-nearest))]
 	}
-	return ch, conf, alt, false
+	return ch, conf, alt, bits, false
 }
+
+// glyphFor is the glyph a lit-segment set spells: a digit (patterns), or
+// with the letter table on a letter (letterPatterns). The digit is looked
+// up first, so cdefg spells the topless 6; readCells makes it a b only
+// beside another letter (wordB).
+func glyphFor(bits uint8, letters bool) (byte, bool) {
+	if ch, ok := patterns[bits]; ok {
+		return ch, true
+	}
+	if letters {
+		ch, ok := letterPatterns[bits]
+		return ch, ok
+	}
+	return 0, false
+}
+
+// bBits is the b's lit-segment set, cdefg: a 6 drawn without its top bar.
+var bBits = func() uint8 {
+	for bits, ch := range letterPatterns {
+		if ch == 'b' {
+			return bits
+		}
+	}
+	return 0
+}()
 
 // zoneFill is the share of a zone's probes that cross a lit run.
 //

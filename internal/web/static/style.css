@@ -729,6 +729,9 @@ select.needs-engine option { color: var(--text); }
   border-style: dashed; /* --border-control keeps the 3:1 edge */
   box-shadow: none;
 }
+/* Letters steps back the same way: pixel_change reads no letters. */
+#row-letters.is-unused .checkbox,
+#row-letters.is-unused .field-hint { color: var(--text-faint); }
 /* The one note under the Engine select (engineNoteFor in formview.go,
    kept live by app.js). In its warn state it leads with an amber dot,
    the shape .form-error uses for red, so the state isn't colour alone. */

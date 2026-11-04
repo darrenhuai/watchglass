@@ -178,7 +178,12 @@ type Watch struct {
 	// no external binary, or "rapidocr" for printed text tesseract
 	// struggles with (needs a Python with the rapidocr package).
 	// pixel_change watches never read it.
-	Engine  string   `yaml:"engine,omitempty"`
+	Engine string `yaml:"engine,omitempty"`
+	// Letters, for a sevenseg watch, reads the letters seven-segment fault
+	// codes and status words are spelled with (E4, End, Err) instead of
+	// '?'. Off by default: a cell that spells no digit reads '?'. Only a
+	// sevenseg watch may set it.
+	Letters bool     `yaml:"letters,omitempty"`
 	Trigger Trigger  `yaml:"trigger"`
 	Notify  []string `yaml:"notify"`
 	// TLSInsecure accepts the camera's HTTPS certificate without checking
@@ -512,6 +517,11 @@ func (c *Config) Validate() error {
 		// switched later, and "" stays "" so the default is never written.
 		if !validEngines[w.Engine] {
 			return fmt.Errorf("watch %q: unknown engine %q (expected tesseract, sevenseg or rapidocr)", w.Name, w.Engine)
+		}
+		// Like unit on a non-numeric watch: set on another engine it would
+		// be silently ignored, which reads as "set but not working".
+		if w.Letters && w.Engine != "sevenseg" {
+			return fmt.Errorf("watch %q: letters only applies to engine sevenseg", w.Name)
 		}
 		if nonFinite(w.Trigger.Threshold) {
 			return fmt.Errorf("watch %q: trigger threshold must be finite", w.Name)

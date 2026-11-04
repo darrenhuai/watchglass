@@ -20,9 +20,12 @@ var segs = map[rune]string{
 	'0': "abcdef", '1': "bc", '2': "abdeg", '3': "abcdg", '4': "bcfg",
 	'5': "acdfg", '6': "acdefg", '7': "abc", '8': "abcdefg", '9': "abcdfg",
 	'-': "g",
-	// Letters a display spells with the same bars; the decoder must answer
-	// '?' for them, never a digit.
-	'H': "bcefg", 'E': "adefg",
+	// Letters a display spells with the same bars (letterPatterns, plus
+	// O and S, which share their bars with 0 and 5); with the letter table
+	// off the decoder must answer '?' for them, never a digit.
+	'A': "abcefg", 'b': "cdefg", 'C': "adef", 'c': "deg", 'd': "bcdeg", 'E': "adefg", 'F': "aefg",
+	'H': "bcefg", 'h': "cefg", 'J': "bcde", 'L': "def", 'n': "ceg", 'o': "cdeg", 'P': "abefg",
+	'r': "eg", 't': "defg", 'U': "bcdef", 'u': "cde", 'y': "bcdfg", 'O': "abcdef", 'S': "acdfg",
 }
 
 // renderOpts drives the synthetic display renderer below. Every knob is
