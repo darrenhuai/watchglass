@@ -113,6 +113,14 @@ func TestTestRouteReportsGate(t *testing.T) {
 	if !strings.Contains(body, `<strong class="gate-state">Gate not read.</strong>`) || !strings.Contains(body, "Gate pattern isn&#39;t a valid regular expression") {
 		t.Errorf("a bad gate pattern:\n%s", body)
 	}
+	// A gate box that rounds to no pixel of the frame isn't a gate that
+	// read nothing: Test says it is too small, as it does for the value box.
+	form = gatedForm(`^1\.?8\.?0$`)
+	regionForm(form, "g", config.Region{X: 0.5, Y: 0.5, W: 0.0001, H: 0.0001})
+	_, body = postForm(t, s.Handler(), "/watch/meter/test", form)
+	if !strings.Contains(body, `<strong class="gate-state">Gate not read.</strong>`) || !strings.Contains(body, "smaller than one pixel") || strings.Contains(body, "The gate box read nothing") {
+		t.Errorf("a gate box smaller than a pixel:\n%s", body)
+	}
 }
 
 // V2.3/V2.5: Save writes the gate into the file with its comments kept,

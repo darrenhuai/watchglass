@@ -149,7 +149,7 @@ watches:
     region: {x: 0.31, y: 0.35, w: 0.56, h: 0.22}
     gate:
       region: {x: 0.15, y: 0.35, w: 0.15, h: 0.12}
-      pattern: '^1\.8\.0$'
+      pattern: '^1\.?8\.?0$'
     unit: kWh
     device_class: energy
     max_rise: 5
@@ -162,7 +162,7 @@ Every poll reads the gate first, from the same frame as the value. When the gate
 
 - Nothing is published to Home Assistant, settled or recorded in the history. The history has no row for a skipped poll, so `history.csv` holds only the gated phase's readings. The one exception is the watch's health in Home Assistant: a skipped poll still shows it online, so a gate that has never opened doesn't leave that sensor unknown.
 - It counts toward neither side of `confirm` or the leave rule: three readings above a threshold with other phases in between are still three in a row.
-- It isn't a failed poll. The camera answered and the gate was read, so a gate that never opens doesn't take the watch down, the same as a blank display. Instead the Live panel says how long the gate has been closed and the last code it read (a blank frame between phases doesn't count), and once it has been closed for `health_after` polls and 5 minutes it says so plainly ("Gate closed for 12 min (last saw '2.8.0')"), the watch list tags it, and the log says it once. The watch list also says "gate closed" beside **No readings yet** for a watch whose gate hasn't opened since it started, which is what a gate box off the code or a pattern that never matches looks like.
+- It isn't a failed poll. The camera answered and the gate was read, so a gate that never opens doesn't take the watch down, the same as a blank display. Instead the Live panel says how long the gate has been closed and the last code it read (a blank frame between phases doesn't count, nor the `?` the seven-segment decoder reads on one), and once it has been closed for `health_after` polls and 5 minutes it says so plainly ("Gate closed for 12 min (last saw '2.8.0')"), the watch list tags it, and the log says it once. The watch list also says "gate closed" beside **No readings yet** for a watch whose gate hasn't opened since it started, which is what a gate box off the code or a pattern that never matches looks like.
 - A long closed spell is treated like a long blank one. Once nothing has been read for 15 minutes (or twice the slowest poll interval, if that is longer), the watch forgets what it had settled on, so a condition that still holds when the gate opens again is reported again, subject to `cooldown`. The normal cycle, with the phase you want every few seconds to a minute, never gets near that.
 
 A gate that the engine fails to read is a failed read, like a value it fails to read.
@@ -172,8 +172,8 @@ A gate that the engine fails to read is a failed read, like a value it fails to 
 | Field | Default | Meaning |
 |---|---|---|
 | `region` | required | The box around the code, as fractions of the frame like `region`. |
-| `pattern` | required | A regular expression the gate's reading must match. Anchor it with `^` and `$` when one code is part of another (`2` and `12`). A seven-segment digit the decoder wasn't sure of never opens the gate. |
-| `engine` | the watch's | How the code is read, when it is printed differently from the value. |
+| `pattern` | required | A regular expression the gate's reading must match. Anchor it with `^` and `$` when one code is part of another (`2` and `12`). The seven-segment decoder can miss a small dot and read `1.8.0` as `1.80` or `180`, so make the dots optional: `'^1\.?8\.?0$'`. A seven-segment digit the decoder wasn't sure of never opens the gate. |
+| `engine` | the watch's | How the code is read, when it is printed differently from the value. Every poll reads the gate, so a slow engine makes every poll slow: rapidocr starts Python for each read and takes seconds, long enough to miss a phase that shows for a few seconds. Use `sevenseg` or `tesseract` when either reads the code. |
 | `preprocess` | the watch's | The code's own preprocessing, written like `preprocess`. |
 
 Pick a short `interval`: the watch only sees the phase you want when a poll lands on it. With phases a few seconds long, poll every 1 or 2 seconds. `max_interval` works on a gated watch, but a skipped poll counts as a change and puts it back on `interval`: a gated watch only backs off while the gate stays open on the same value, so polls that slowed down can't fall out of step with the cycle and miss the phase for minutes. In practice a display that keeps cycling polls at `interval`. On the watch page, tick **Use a gate**, draw the gate box (it is dashed and blue; **Value box** and **Gate box** under the image, or a click inside a box, pick which one you are moving; a drag always draws the one picked), and press **Test this region**: it reads both boxes from one frame and says whether the gate was open. Changing the gate starts the watch fresh, like changing its region. The [cycling meter recipe](recipes/meter-cycling-obis.md) has a tested example.

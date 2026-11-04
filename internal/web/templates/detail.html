@@ -307,9 +307,9 @@
         </div>
         <div class="field-row{{if .Form.Err "gate_pattern"}} field-invalid{{end}}" id="row-gate-pattern"{{if not .Watch.Gate}} hidden{{end}}>
           <label for="f-gate-pattern">Gate pattern</label>
-          <input id="f-gate-pattern" name="gate_pattern" class="mono" value="{{with .Watch.Gate}}{{.Pattern}}{{end}}" placeholder="e.g. ^1\.8\.0$" spellcheck="false" autocapitalize="off"{{with .Form.Err "gate_pattern"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "gate_pattern"}}err-gate-pattern {{end}}gate-pattern-help">
+          <input id="f-gate-pattern" name="gate_pattern" class="mono" value="{{with .Watch.Gate}}{{.Pattern}}{{end}}" placeholder="e.g. ^1\.?8\.?0$" spellcheck="false" autocapitalize="off"{{with .Form.Err "gate_pattern"}} aria-invalid="true"{{end}} aria-describedby="{{with .Form.Err "gate_pattern"}}err-gate-pattern {{end}}gate-pattern-help">
           {{with .Form.Err "gate_pattern"}}<p id="err-gate-pattern" class="field-error">{{.}}</p>{{end}}
-          <p id="gate-pattern-help" class="field-hint">What the code box reads when the value you want is showing. Use ^ and $ when one code is part of another, like 2 and 12.</p>
+          <p id="gate-pattern-help" class="field-hint">What the code box reads when the value you want is showing. Use ^ and $ when one code is part of another, like 2 and 12. A seven-segment display's small dots are often missed: \.? is a dot that may be missing.</p>
         </div>
         <div class="field-row{{if .Form.Err "gate_engine"}} field-invalid{{end}}" id="row-gate-engine"{{if not .Watch.Gate}} hidden{{end}}>
           <label for="f-gate-engine">Gate engine</label>

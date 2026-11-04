@@ -351,6 +351,70 @@ func TestGateRemembersTheLastCodeAcrossBlankFrames(t *testing.T) {
 	}
 }
 
+// V2.2: the seven-segment decoder reads a blank frame as "?", not as
+// nothing. That isn't a code either: across a sevenseg gate's blank frames
+// Live and the log still name the last code the gate read.
+func TestGateSevenSegBlankIsNotACode(t *testing.T) {
+	g := newGateRig(t, nil)
+	w := gatedWatch(config.Trigger{Type: "value", Confirm: 1}, `^1\.8\.0$`)
+	r := g.start(w)
+	g.show(r, "1.8.0", "7")
+	first := g.clock.Now()
+	for g.clock.Now().Sub(first) < GateLongAfter+10*time.Second {
+		g.show(r, "2.8.0", "9")
+		for _, blank := range []string{"?", "? ?", "?.?", ""} {
+			g.show(r, blank, "?")
+			if st := r.Gate(); st.Saw != "2.8.0" {
+				t.Fatalf("after a blank frame read as %q, Gate().Saw = %q, want 2.8.0", blank, st.Saw)
+			}
+		}
+	}
+	if !g.logs.has(`it last read "2.8.0"`) {
+		t.Errorf("the long-closed log line doesn't name the code: %q", g.logs.lines)
+	}
+	g.show(r, "1.8.0", "7")
+	g.show(r, "?", "?")
+	if st := r.Gate(); st.Saw != "" {
+		t.Errorf("a closed run of '?' frames after the gate opened saw %q, want nothing", st.Saw)
+	}
+}
+
+func TestGateSawSomething(t *testing.T) {
+	for text, want := range map[string]bool{
+		"": false, "  ": false, "?": false, "? ?": false, "?.?": false, "--": false,
+		"2.8.0": true, "1.80": true, "?:80": true, "EAL": true, "2": true,
+	} {
+		if got := gateSawSomething(text); got != want {
+			t.Errorf("gateSawSomething(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+// V2.2: "long" takes both health_after polls in a row and GateLongAfter.
+// On a slow watch, GateLongAfter can pass in fewer closed polls than
+// health_after: the gate isn't long yet, as a slow watch isn't down after
+// one failed poll that took five minutes to come.
+func TestGateLongNeedsHealthAfterPolls(t *testing.T) {
+	g := newGateRig(t, nil)
+	w := gatedWatch(config.Trigger{Type: "value", Confirm: 1}, `^1\.8\.0$`)
+	w.HealthAfter = 3
+	r := g.start(w)
+	g.show(r, "1.8.0", "7")
+	g.show(r, "2.8.0", "9")
+	g.clock.Add(GateLongAfter + time.Minute)
+	g.show(r, "2.8.0", "9")
+	if st := r.Gate(); st.ClosedPolls != 2 || st.Long {
+		t.Fatalf("after 2 closed polls over %v, Gate() = %+v, want not long (health_after 3)", GateLongAfter+time.Minute, st)
+	}
+	if g.logs.has("the gate hasn't opened for") {
+		t.Errorf("logged a long-closed gate after 2 of 3 polls: %q", g.logs.lines)
+	}
+	g.show(r, "2.8.0", "9")
+	if st := r.Gate(); st.ClosedPolls != 3 || !st.Long {
+		t.Fatalf("after 3 closed polls, Gate() = %+v, want long", st)
+	}
+}
+
 // A gate the engine can't read is a failed read, as a value it can't read
 // is: it counts toward health.
 func TestGateReadFailureCountsTowardHealth(t *testing.T) {
