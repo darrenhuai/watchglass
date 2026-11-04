@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,12 @@ func TestMovedWarningOnLiveAndDashboard(t *testing.T) {
 			t.Errorf("live fragment lacks %q; body:\n%s", want, body)
 		}
 	}
+	// The warning is its own block, ahead of .live-status: app.js swaps
+	// .live-status on every reading, and the buttons lost their focus.
+	warn, liveDrift, status := strings.Index(body, `class="drift-warn"`), strings.Index(body, `<div class="live-drift">`), strings.Index(body, `<div class="live-status"`)
+	if liveDrift < 0 || !(liveDrift < warn && warn < status) {
+		t.Errorf("the warning isn't in .live-drift ahead of .live-status (at %d, %d, %d); body:\n%s", liveDrift, warn, status, body)
+	}
 	_, body = get(t, s.Handler(), "/")
 	if !strings.Contains(body, `title="The picture around this box moved about 16 px right and 8 px up since 14:02. Readings may be wrong until the box is moved.">camera moved</span>`) {
 		t.Errorf("dashboard lacks the moved marker; body:\n%s", body)
@@ -95,6 +102,21 @@ func TestMovedWarningOnLiveAndDashboard(t *testing.T) {
 	_, body = get(t, s.Handler(), "/watch/clock/live")
 	if !strings.Contains(body, "hasn't been in view since") || strings.Contains(body, "move-box") || !strings.Contains(body, "The new picture is fine") {
 		t.Errorf("lost: live fragment; body:\n%s", body)
+	}
+	// A covered lens isn't a moved camera on the dashboard either.
+	_, body = get(t, s.Handler(), "/")
+	if !strings.Contains(body, `title="The picture around this box hasn&#39;t been in view since 14:02. Is the camera covered or pointed elsewhere? Readings may be wrong until it is back.">not in view</span>`) || strings.Contains(body, "camera moved") {
+		t.Errorf("lost: dashboard marker; body:\n%s", body)
+	}
+
+	// Too plain to go by: a note on Live, no warning, no marker.
+	s.sup.Drift.Set("clock", drift.Status{State: drift.Unusable})
+	_, body = get(t, s.Handler(), "/watch/clock/live")
+	if !strings.Contains(body, `<p class="drift-note">watchglass can't tell from the area around this box whether the camera moves: it is too plain, or changes too much.</p>`) || strings.Contains(body, "drift-warn") {
+		t.Errorf("unusable: live fragment; body:\n%s", body)
+	}
+	if _, body = get(t, s.Handler(), "/"); strings.Contains(body, "drift-mark") {
+		t.Errorf("unusable: dashboard has a marker; body:\n%s", body)
 	}
 
 	s.sup.Drift.Set("clock", drift.Status{State: drift.Steady})
@@ -134,6 +156,69 @@ func TestMoveTheBoxWithItShiftsTheRegionAndKeepsComments(t *testing.T) {
 	_, page := getWithCookies(t, s.Handler(), "/watch/clock", resp.Cookies())
 	if !strings.Contains(page, "Moved the box 16 px right and 8 px up, saved it to config.yaml and restarted the watch.") {
 		t.Errorf("no confirmation on the page:\n%s", page)
+	}
+}
+
+// The check refines the offset while the picture stays moved: a page
+// that showed 15, -8 when the check now says 16, -8 is the same move, and
+// the box moves by the check's unrounded offset.
+func TestMoveTheBoxUsesTheRefinedOffset(t *testing.T) {
+	s, _ := newMoveServer(t)
+	st := movedStatus
+	st.FX, st.FY = 16.4, -7.7
+	s.sup.Drift.Set("clock", st)
+	resp, body := postForm(t, s.Handler(), "/watch/clock/move-box", url.Values{"dx": {"15"}, "dy": {"-8"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status = %d; body: %s", resp.StatusCode, body)
+	}
+	// 0.35 + 16.4/640 and 0.4 - 7.7/480, to 4 places.
+	if w, _ := s.findWatch("clock"); w.Region != (config.Region{X: 0.3756, Y: 0.384, W: 0.34, H: 0.15}) {
+		t.Errorf("region = %+v", w.Region)
+	}
+}
+
+// "Move the box with it" pressed while a Save is being applied: it waits
+// for the Save, then reads the check's status, which the Save's restart
+// set to learning (a new box), and moves nothing. It used to read the
+// status before waiting, and then moved the Save's new box by the old
+// box's offset.
+func TestMoveTheBoxWaitsForASaveInProgress(t *testing.T) {
+	s, cfgPath := newMoveServer(t)
+	before, _ := os.ReadFile(cfgPath)
+	s.sup.Drift.Set("clock", movedStatus)
+	s.applyMu.Lock() // a Save being applied
+	done := make(chan *http.Response, 1)
+	go func() {
+		resp, _ := postForm(t, s.Handler(), "/watch/clock/move-box", url.Values{"dx": {"16"}, "dy": {"-8"}})
+		done <- resp
+	}()
+	// Wait for the request to be waiting on the Save: its goroutine is
+	// in moveBox, blocked on a mutex.
+	blocked := false
+	for deadline := time.Now().Add(10 * time.Second); !blocked && time.Now().Before(deadline); {
+		runtime.Gosched()
+		buf := make([]byte, 1<<20)
+		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(g, "(*Server).moveBox") && strings.Contains(g, "sync.Mutex.Lock") {
+				blocked = true
+			}
+		}
+	}
+	// The Save restarted the watch with a new box: its check is learning.
+	s.sup.Drift.Set("clock", drift.Status{State: drift.Learning})
+	s.applyMu.Unlock()
+	if !blocked {
+		t.Fatal("move-box never waited for the Save")
+	}
+	resp := <-done
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if after, _ := os.ReadFile(cfgPath); string(after) != string(before) {
+		t.Errorf("the box was moved by an offset from before the Save:\n%s", after)
+	}
+	if _, page := getWithCookies(t, s.Handler(), "/watch/clock", resp.Cookies()); strings.Contains(page, "Moved the box") {
+		t.Errorf("the page says the box was moved")
 	}
 }
 
@@ -230,5 +315,18 @@ func TestMoveAlertDeliveryLineSaysItIsAboutTheCamera(t *testing.T) {
 	s.reg.SetDelivery("printer", state.Delivery{TS: t0, Kind: "moved", OK: true, Tries: 1})
 	if _, live = get(t, h, "/watch/printer/live"); !strings.Contains(live, `Last alert (camera moved or covered) sent at `+at+`.`) {
 		t.Errorf("sent: live:\n%s", live)
+	}
+}
+
+// A deleted watch leaves nothing on the board: a new watch of the same
+// name doesn't start with its warning.
+func TestDeleteForgetsThePosition(t *testing.T) {
+	s, _ := newMoveServer(t)
+	s.sup.Drift.Set("clock", movedStatus)
+	if resp, body := postForm(t, s.Handler(), "/watch/clock/delete", url.Values{}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("delete: %d %s", resp.StatusCode, body)
+	}
+	if st, ok := s.sup.Drift.Status("clock"); ok {
+		t.Errorf("board still has %+v for the deleted watch", st)
 	}
 }

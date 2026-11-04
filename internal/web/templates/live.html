@@ -1,7 +1,7 @@
-{{/* Two top-level blocks on purpose: app.js's poll swaps .live-status in
-     only when its markup changed, and reconciles .strip frame by frame
-     (data-key), so a scrolled or focused filmstrip keeps its place and its
-     images. Nothing here is a live region: app.js announces real changes
+{{/* Three top-level blocks on purpose: app.js's poll swaps .live-drift
+     and .live-status in, each only when its own markup changed, and
+     reconciles .strip frame by frame (data-key), so a scrolled or focused
+     filmstrip keeps its place and its images. Nothing here is a live region: app.js announces real changes
      (a state change, a new fire) through #live-announce in detail.html,
      never a timestamp that moved. data-state/data-summary/data-hint/data-message keep
      the page header's status pill and error line in step without a reload;
@@ -11,18 +11,15 @@
      pass can fail too), so the no-readings badge doesn't guess a cause.
      data-delivery (deliveryView.State) lets app.js announce an alert that
      didn't get through. */}}
-<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}" data-delivery="{{.Delivery.State}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
-{{if eq .Status.State "error"}}
-{{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale: last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
-{{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
-{{else if eq .Status.State "stopped"}}
-<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}}. The readings below are from before it stopped{{end}}</p>
-{{end}}
 {{/* The position check (internal/drift, web/drift.go): the picture around
      the box moved, or can't be found. The two actions are plain forms
      (the cross-origin check covers them like every POST); the offset
      goes with "Move the box with it" so a box is never moved by an
-     offset the page didn't show. */}}
+     offset the page didn't show. Its own top-level block, apart from
+     .live-status: app.js swaps .live-status whenever the readout changes
+     (every reading), and a button inside it lost its focus each time.
+     This block changes only when the check says something new. */}}
+<div class="live-drift">
 {{with .Drift}}{{if .Warn}}<div class="drift-warn">
   <p class="drift-text">{{if eq .State "moved"}}The picture around this box moved about {{.Offset}} since <time class="mono" datetime="{{isoTime .Since}}">{{.Since.Format "15:04"}}</time>. Readings may be wrong until the box is moved.{{else}}The picture around this box hasn't been in view since <time class="mono" datetime="{{isoTime .Since}}">{{.Since.Format "15:04"}}</time>. Is the camera covered or pointed elsewhere? Readings may be wrong until it is back.{{end}}</p>
   <div class="drift-actions">
@@ -32,6 +29,14 @@
 </div>
 {{else}}<p class="drift-note">watchglass can't tell from the area around this box whether the camera moves: it is too plain, or changes too much.</p>
 {{end}}{{end}}
+</div>
+<div class="live-status" data-state="{{.Status.State}}" data-summary="{{shortErr .Status.Message}}" data-hint="{{errHint .Status.Message}}" data-message="{{.Status.Message}}" data-delivery="{{.Delivery.State}}"{{if .Recent}}{{with index .Recent 0}} data-fired="{{.Fired}}" data-ts="{{.TS.UnixNano}}"{{end}}{{end}}>
+{{if eq .Status.State "error"}}
+{{if .Recent}}{{$ts := (index .Recent 0).TS}}<p class="stale-badge">Stale: last good reading <time class="mono" datetime="{{isoTime $ts}}">{{$ts.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>
+{{else}}<p class="stale-badge">Failing since <time class="mono" datetime="{{isoTime .Status.Since}}">{{.Status.Since.Format "15:04:05"}}</time><span class="stale-age" aria-hidden="true"></span></p>{{end}}
+{{else if eq .Status.State "stopped"}}
+<p class="stale-badge stale-badge-stopped"><span class="led led-stopped" aria-hidden="true"></span>Not polling{{if .Recent}}. The readings below are from before it stopped{{end}}</p>
+{{end}}
 {{if .Recent}}
 {{$latest := index .Recent 0}}{{$r := readingFor .Trigger .Engine $latest.Reading $latest.Unsure}}
 <div class="readout">

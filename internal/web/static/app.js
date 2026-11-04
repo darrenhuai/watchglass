@@ -1338,13 +1338,15 @@
     });
   }
 
-  // The Live panel. The /live fragment is two blocks (see live.html):
-  // .live-status (the stale/stopped badge + latest readout) and .strip (the
-  // filmstrip). The status is swapped in only when its markup changed; the
-  // strip is reconciled frame by frame (syncStrip), so a user scrolled back
-  // through older crops, or focused on the strip, keeps their place. The
-  // fragment's data-state also drives the header's status pill, so a watch
-  // that stops or errors underneath an open page is reflected there too.
+  // The Live panel. The /live fragment is three blocks (see live.html):
+  // .live-drift (the camera-moved warning and its buttons), .live-status
+  // (the stale/stopped badge + latest readout) and .strip (the
+  // filmstrip). The first two are swapped in only when their markup
+  // changed; the strip is reconciled frame by frame (syncStrip), so a user
+  // scrolled back through older crops, or focused on the strip, keeps
+  // their place. The fragment's data-state also drives the header's
+  // status pill, so a watch that stops or errors underneath an open page
+  // is reflected there too.
   //
   // Neither container is a live region: the readout's timestamp changes on
   // every reading, and an aria-atomic region re-read the whole panel each
@@ -1359,6 +1361,7 @@
   // 200 that isn't the fragment (a proxy's login page) is an expired
   // session. None of those is ever inserted as markup.
   var liveStatus = document.getElementById("live-status");
+  var liveDrift = document.getElementById("live-drift");
   var liveStrip = document.getElementById("live-strip");
   var livePanel = document.getElementById("live");
   var liveNotice = document.getElementById("live-notice");
@@ -1659,10 +1662,31 @@
       if (lastStatus !== null) tick(prev, fire);
       lastStatus = statusHTML;
     }
+    // The position warning and its two buttons: swapped only when the
+    // check says something new, so a focused button keeps its focus
+    // while the readout ticks. The check also refines the offset while
+    // the picture stays moved, which rewrites the block now and then: a
+    // focused button gets its focus back on the same form's button.
+    var drift = tpl.content.querySelector(".live-drift");
+    var driftHTML = drift ? drift.innerHTML : "";
+    if (liveDrift && driftHTML !== lastDrift) {
+      var focused = document.activeElement;
+      var focusForm = focused && liveDrift.contains(focused) && focused.form ? focused.form.getAttribute("action") : null;
+      if (drift) localizeTimes(drift);
+      liveDrift.innerHTML = drift ? drift.innerHTML : "";
+      lastDrift = driftHTML;
+      if (focusForm !== null) {
+        var forms = liveDrift.querySelectorAll("form");
+        for (var fi = 0; fi < forms.length; fi++) {
+          var btn = forms[fi].getAttribute("action") === focusForm ? forms[fi].querySelector("button") : null;
+          if (btn) { btn.focus(); break; }
+        }
+      }
+    }
     syncStrip(tpl.content.querySelector(".strip"));
     updateStatus(ds.state, ds.summary, ds.message, ds.hint);
   }
-  var lastStatus = null;
+  var lastStatus = null, lastDrift = null;
   var liveURL = base + "/watch/" + encodeURIComponent(name) + "/live";
   function schedulePoll() {
     clearTimeout(liveTimer);

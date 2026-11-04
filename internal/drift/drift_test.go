@@ -793,3 +793,178 @@ func TestCoveredLensWithAStrayReadingIsStillLost(t *testing.T) {
 		t.Fatalf("news = %+v, want lost since %v", f.news, coveredAt)
 	}
 }
+
+// A camera that shakes by a pixel each way between frames (the H2
+// verifier's live camera): the move is reported close to the truth, and
+// "Move the box with it" a minute later moves the box to within a pixel
+// and a half of it. The offset used to be the median of the four checks
+// that reported it, less the median of five settle checks, rounded: 12 to
+// 15% of reports were more than 2 px off, the box was moved by that, and
+// the new reference made the error the new rest position.
+func TestShakingCameraOffsetIsAccurate(t *testing.T) {
+	region := config.Region{X: 0.4, Y: 0.3, W: 0.2, H: 0.3}
+	moves := [][2]float64{{10, 3}, {-7, -19}, {-7, 7}, {20, -5}}
+	over2, n, sum := 0, 0, 0.0
+	for seed := int64(1); seed <= 200; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		tr := NewBoard().Tracker(config.Watch{Name: "c", Region: region}, nil, func(string, ...any) {})
+		tr.ref = &Reference{FrameW: 800, FrameH: 450, W: 10, H: 10, Scale: 1}
+		at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+		var news []Change
+		check := func(x, y float64) {
+			at = at.Add(checkEvery)
+			r := Result{DX: x + float64(rng.Intn(3)-1) + rng.NormFloat64()*0.2, DY: y + float64(rng.Intn(3)-1) + rng.NormFloat64()*0.2,
+				Score: 0.9, Local: 0.9, Found: true}
+			if ch, ok := tr.judge(r, at); ok {
+				news = append(news, ch)
+			}
+		}
+		for i := 0; i < 40; i++ {
+			check(0, 0)
+		}
+		mv := moves[seed%int64(len(moves))]
+		for i := 0; i < window+12; i++ {
+			check(mv[0], mv[1])
+		}
+		if len(news) != 1 || news[0].State != Moved {
+			t.Fatalf("seed %d, moved %v: news %+v", seed, mv, news)
+		}
+		n++
+		if e := math.Hypot(float64(news[0].Status.DX)-mv[0], float64(news[0].Status.DY)-mv[1]); e > 2 {
+			over2++
+		}
+		box := Shifted(region, tr.Status())
+		ax, ay := (box.X-region.X)*800, (box.Y-region.Y)*450
+		e := math.Hypot(ax-mv[0], ay-mv[1])
+		sum += e
+		if e > 1.5 {
+			t.Errorf("seed %d, moved %v: the box would move %.2f, %.2f, %.2f px off", seed, mv, ax, ay, e)
+		}
+	}
+	if over2 > n/50 {
+		t.Errorf("%d of %d reports more than 2 px off", over2, n)
+	}
+	if m := sum / float64(n); m > 0.6 {
+		t.Errorf("the box would move %.2f px off on average", m)
+	}
+}
+
+// Ten checks measured on one of T2's shaking emulated cameras (heat-pump
+// fault, checks 65 to 74 of calib/t2_v4.csv), which never moved. Whether
+// the picture moved is decided from the median of the five settle
+// checks, the rule T2's 316,272 checks were run through with no false
+// move. Deciding it from the finer mean instead, the window here came
+// out at 4.50 px with a 4.5 px threshold: a false move.
+func TestShakyStartIsNotAMove(t *testing.T) {
+	checks := [][2]float64{{-1.13, 1.56}, {-3.10, 2.19}, {-1.57, 2.40}, {0.46, -1.47}, {-4.55, 0.15},
+		{-1.96, -2.84}, {-1.43, -3.42}, {-1.07, -1.91}, {-0.74, -2.72}, {-2.16, -2.08},
+		{0.78, 0.03}, {0.09, -0.88}, {0.04, 0.77}, {-3.56, 1.43}, {-0.52, 0.18}}
+	tr := NewBoard().Tracker(config.Watch{Name: "t2", Region: config.Region{X: 0.4, Y: 0.3, W: 0.2, H: 0.3}}, nil, func(string, ...any) {})
+	tr.ref = &Reference{FrameW: 800, FrameH: 450, W: 10, H: 10, Scale: 1}
+	at := time.Date(2026, 10, 21, 22, 36, 0, 0, time.UTC)
+	for i, c := range checks {
+		at = at.Add(6 * time.Second)
+		if ch, ok := tr.judge(Result{DX: c[0], DY: c[1], Score: 0.95, Local: 0.95, Found: true}, at); ok {
+			t.Fatalf("check %d: %+v", i, ch)
+		}
+	}
+	if st := tr.Status(); st.State != Steady {
+		t.Errorf("status %+v, want steady", st)
+	}
+}
+
+// A small move on a camera that shakes: the check just before the move
+// caught the picture at the edge of its shake, toward where it then went,
+// so it is within agree pixels of the first checks after the move, and
+// the window that reports the move takes it in. It used to count in the
+// move's offset and its time: a report a check early and short of the
+// move (the re-verifier's 5 px moves on the clock photo: 2.24 px off in
+// 2 runs of 97, and that number is the one the alert keeps).
+func TestFirstReportLeavesOutTheCheckBeforeTheMove(t *testing.T) {
+	tr := NewBoard().Tracker(config.Watch{Name: "c", Region: config.Region{X: 0.4, Y: 0.3, W: 0.2, H: 0.3}}, nil, func(string, ...any) {})
+	tr.ref = &Reference{FrameW: 800, FrameH: 450, W: 10, H: 10, Scale: 1}
+	at := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	var news []Change
+	check := func(x, y float64) time.Time {
+		at = at.Add(checkEvery)
+		if ch, ok := tr.judge(Result{DX: x, DY: y, Score: 0.9, Local: 0.9, Found: true}, at); ok {
+			news = append(news, ch)
+		}
+		return at
+	}
+	// Settling with the shake to the left: the median is -1, 0. Then
+	// steady checks at 0, 0 bring "not moved" for the offset to -1/3, 0.
+	for _, c := range [][2]float64{{-1, 0}, {-1, 1}, {-1, -1}, {-1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}} {
+		check(c[0], c[1])
+	}
+	if st := tr.Status(); st.State != Steady || math.Abs(tr.baseX+1.0/3) > 1e-9 || tr.baseY != 0 {
+		t.Fatalf("settled: %+v, base %.3f,%.3f; want steady, base -0.333,0", st, tr.baseX, tr.baseY)
+	}
+	check(1.1, 1) // before the move, shaken right and down
+	movedAt := check(4, 1)
+	check(4, 0)
+	if len(news) != 0 {
+		t.Fatalf("reported before four checks: %+v", news)
+	}
+	check(4, 1)
+	if len(news) != 1 || news[0].State != Moved {
+		t.Fatalf("want the move reported on its third check, with the one before it in the window: %+v", news)
+	}
+	st := news[0].Status
+	wantX, wantY := 4+1.0/3, 2.0/3 // the mean of the three checks after the move, from -1/3, 0
+	if !st.Since.Equal(movedAt) || math.Abs(st.FX-wantX) > 0.01 || math.Abs(st.FY-wantY) > 0.01 || st.DX != 4 || st.DY != 1 {
+		t.Errorf("report %+v; want moved %.2f,%.2f (4,1) since %v", st, wantX, wantY, movedAt.Format("15:04:05"))
+	}
+}
+
+// Moved, then the lens covered until the picture is lost, then uncovered
+// with the picture still moved: that is the move already reported, not a
+// new one, with or without a restart while it was covered. The warning
+// comes back with its first time at once. It used to go steady on the
+// first check back in view, log "is back", and report the move again
+// four checks later: a second move alert.
+func TestMovedCoveredUncoveredIsOneMove(t *testing.T) {
+	photo := sony(t)
+	for _, restart := range []bool{false, true} {
+		store := &memStore{}
+		f, _ := settled(t, sonyWatch(), store, func(s int64) image.Image { return camera(view(photo, 0, 0), plain, 3, s) })
+		for i := 0; i < window+4; i++ {
+			f.poll(camera(view(photo, 8, -3), plain, 3, int64(300+i)), ReadBad)
+		}
+		if len(f.news) != 1 || f.news[0].State != Moved {
+			t.Fatalf("moved: news %+v", f.news)
+		}
+		since := f.news[0].Status.Since
+		for i := 0; i < int(lostAfter/f.every)+2; i++ {
+			f.poll(dark(int64(i)), ReadBad)
+		}
+		if len(f.news) != 2 || f.news[1].State != Lost {
+			t.Fatalf("covered: news %+v", f.news)
+		}
+		if restart {
+			tr := NewBoard().Tracker(sonyWatch(), store, t.Logf)
+			if st := tr.Status(); st.State != Lost {
+				t.Fatalf("restarted while covered: %+v, want lost", st)
+			}
+			f = &feed{t: t, tr: tr, at: f.at.Add(time.Minute), every: checkEvery}
+		}
+		f.news = nil
+		f.poll(camera(view(photo, 8, -3), plain, 3, 500), ReadBad)
+		if st := f.tr.Status(); st.State != Moved || st.DX != 8 || st.DY != -3 || !st.Since.Equal(since) {
+			t.Errorf("restart %v: back in view, still moved: %+v, want moved 8,-3 since %v", restart, st, since)
+		}
+		for i := 1; i < window+6; i++ {
+			f.poll(camera(view(photo, 8, -3), plain, 3, int64(500+i)), ReadBad)
+		}
+		if st := f.tr.Status(); len(f.news) != 0 || st.State != Moved || !st.Since.Equal(since) {
+			t.Errorf("restart %v: uncovered: %+v, news %+v; want the same move and no news", restart, st, f.news)
+		}
+		// And when it is back where it was, the warning goes.
+		for i := 0; i < window+1; i++ {
+			f.poll(camera(view(photo, 0, 0), plain, 3, int64(600+i)), ReadClean)
+		}
+		if st := f.tr.Status(); st.State != Steady || len(f.news) != 0 {
+			t.Errorf("restart %v: moved back: %+v, news %+v", restart, st, f.news)
+		}
+	}
+}

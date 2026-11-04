@@ -119,7 +119,7 @@
     <div id="test-result" aria-live="polite" aria-atomic="true"></div>
     <section class="live-section" aria-labelledby="live-heading">
       <h2 id="live-heading">Live</h2>
-      {{/* #live-status and #live-strip are redrawn by app.js's poll and are
+      {{/* #live-drift, #live-status and #live-strip are redrawn by app.js's poll and are
            deliberately not live regions (a new timestamp every tick would be
            read out forever); app.js says what really changed in
            #live-announce. #live-notice is the poll's own trouble (watchglass
@@ -127,6 +127,7 @@
            apart from the fragment so it never resets it. */}}
       <div id="live" class="panel live-panel">
         <p id="live-notice" class="live-notice" hidden></p>
+        <div id="live-drift"></div>
         <div id="live-status"><p class="muted">Loading…</p></div>
         <div id="live-strip"></div>
       </div>
